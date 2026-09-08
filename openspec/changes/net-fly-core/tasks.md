@@ -20,10 +20,11 @@
 
 - [ ] 2.1 `frames.ts`：netfly1 zod strict schema（AUTH{keys[]}/AUTH_OK{groups[],
       rejected?,refresh?}/AUTH_ERR/REQ{headers?}/REQ_BODY/RESP_META/RESP_CHUNK/
-      RESP_END/ERROR/ABORT/PING）+ 稳定错误码常量；未知字段 protocol_error；
-      凭据类头（authorization/proxy-authorization/cookie/host/content-type）拒绝；
-      path 形态校验（单 / 开头、无 scheme、非 // /\ 开头）；method 枚举
-      （forbidden_method 与 protocol_error 的边界）
+      RESP_END/ERROR/ABORT/PING）+ 稳定错误码常量（key_invalid/key_revoked 仅入
+      rejected 载荷，不入 ERROR 帧码集）；未知字段 protocol_error；凭据类头
+      （authorization/proxy-authorization/cookie/host/content-type）拒绝；path
+      形态校验（单 / 开头、无 scheme、非 // /\ 开头、无 `.`/`..` 段）；method
+      枚举（forbidden_method 与 protocol_error 的边界）
 - [ ] 2.2 `codec.ts`：magic+type+u16BE jsonLen+json+body 编解码；整帧 ≤1MiB 断言、
       正文分片默认 256KiB、path ≤4KiB、headers ≤32 项/键 1KiB/值 8KiB、头 ≤16KiB
 - [ ] 2.3 `mux.ts`：request-id 生成（不复用）、Map<id,Ctx> 解复用、未知/已终结 id
@@ -40,10 +41,12 @@
       密钥 issue（原文一次性展示）/revoke；serviceId 随机 8B z32；regex 保存期
       静态危险检查；defaultPort 规则（<1024 强制显式）
 - [ ] 3.2 `auth.ts`：多密钥 AUTH 逐钥校验（哈希常数时间）→ AUTH_OK 分组视图 +
-      rejected；未授权帧计数断连（32 帧 / 3 次 AUTH 失败）；撤钥 → refresh 剔除或
-      断会话；limits 结构 {maxConcurrency?, dailyRequests?}
+      rejected；全无效 → AUTH_ERR 即断（单次即断，无失败计数）；未授权帧（含
+      方向违规）静默计数断连（32 帧，未 AUTH 检查先于方向检查）；撤钥 → refresh
+      剔除或断会话；limits 结构 {maxConcurrency?, dailyRequests?}
 - [ ] 3.3 `rewrite.ts` + `upstream.ts`：服务定位（unknown_service 统一响应）、
-      URL 拼接 + origin 断言（防 //host 与 .. 逃逸，零上游请求）、重写链（host/
+      URL 拼接 + 双重断言（origin 一致 + 规范化后基础路径前缀，防 //host 与 ..
+      逃逸，零上游请求）、首字节等待期提供方侧空闲计时挂起、重写链（host/
       前缀/headerSet $env 每请求解析、空=未设置=省略）、headers 透传（凭据类已
       协议层拒绝）、fetch 转发 + 流式分片下发 + 首字节 PING(30s) + ABORT→
       AbortController + 超时族（连接 10s/首字节 600s/停滞 120s）

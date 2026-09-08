@@ -30,15 +30,24 @@ MUST 记录并忽略，不得终止连接或影响其它请求。
 ### Requirement: 帧方向与未知标识符
 
 帧方向 SHALL 固定：使用方→提供方仅 AUTH/REQ/REQ_BODY/ABORT；提供方→使用方仅
-AUTH_OK/AUTH_ERR/RESP_META/RESP_CHUNK/RESP_END/ERROR/PING。反向出现的帧以 ERROR
-（code `protocol_error`）回敬并丢弃（若可定位 `id`）。携带**未知 request-id 或已
-终结 request-id** 的任何帧 MUST 静默丢弃（不回帧、不放大流量）；request-id 一经
-分配 MUST NOT 复用（16 字节随机空间，复用零收益、徒增竞态）。
+AUTH_OK/AUTH_ERR/RESP_META/RESP_CHUNK/RESP_END/ERROR/PING（ERROR 帧仅提供方发出；
+使用方侧的一切终结均为本地动作：关闭本地连接、清理在途状态、（适用时）发送
+ABORT）。方向违规的处理按侧不同：提供方侧以 ERROR（code `protocol_error`）回敬
+并丢弃（若可定位 `id`）；使用方侧静默丢弃并计数。**检查顺序**：未 AUTH 检查先于
+方向检查（未授权连接上除 AUTH 外一切帧——含方向违规——一律静默丢弃计数）。携带
+**未知 request-id 或已终结 request-id** 的任何帧 MUST 静默丢弃（不回帧、不放大
+流量）；request-id 一经分配 MUST NOT 复用（16 字节随机空间，复用零收益、徒增
+竞态）。
 
 #### Scenario: 方向反转被拒
 
 - **WHEN** 提供方收到使用方发来的 RESP_META 帧
 - **THEN** 回送 `protocol_error` ERROR 帧并丢弃；连接与其它请求不受影响
+
+#### Scenario: 使用方侧反向帧静默处理
+
+- **WHEN** 使用方收到提供方发来的 REQ 帧
+- **THEN** 帧被静默丢弃计数（使用方不回 ERROR 帧），连接继续服务其它请求
 
 #### Scenario: 已终结 id 的迟到帧
 
@@ -51,9 +60,10 @@ AUTH_OK/AUTH_ERR/RESP_META/RESP_CHUNK/RESP_END/ERROR/PING。反向出现的帧�
 含 `v`、`keys`（该使用方持有的此提供方全部分组密钥数组，≥1）。提供者 SHALL 逐一
 校验并回送 AUTH_OK：`alias`（提供者别名）、`groups`（每枚有效密钥对应
 `{keyId, group, limits, services:[{serviceId,name,match,defaultPort}]}`）、可选
-`rejected`（`{code: key_invalid|key_revoked}` 数组）。全部密钥无效回送 AUTH_ERR
-（`code: key_all_invalid`）并断开。未完成 AUTH 的连接上，除 AUTH 外的任何帧
-SHALL 静默丢弃并计数，累计超过 32 帧或 AUTH 失败累计 3 次 MUST 断开连接。
+`rejected`（`{code: key_invalid|key_revoked}` 数组——这两个码仅存在于 rejected
+载荷，不是 ERROR 帧码）。**全部**密钥无效回送 AUTH_ERR（`code: key_all_invalid`）
+并立即断开（单次即断，不做失败计数重试）。未完成 AUTH 的连接上，除 AUTH 外的任何
+帧 SHALL 静默丢弃并计数，累计超过 32 帧 MUST 断开连接。
 AUTH_OK 之后任一在用密钥被撤销时：若仍有其它有效密钥，提供者 SHALL 推送目录
 刷新（见「目录同步」）并仅剔除被撤销项；若全部失效 MUST 断开会话。重复 AUTH 以
 最后一次为准（密钥集合变更 = 重授权）。密钥仅经 fabric 加密通道呈现，MUST NOT
@@ -101,10 +111,10 @@ z-base-32 编码）。同连接上多个在途请求的帧按 request-id 解复�
 请求 SHALL 以 REQ 帧开始：JSON 头含 `v`、`id`、`serviceId`、`method`（枚举
 GET/HEAD/POST/PUT/PATCH/DELETE；越界值按 `forbidden_method` 拒绝、非法类型按
 `protocol_error`）、`path`（以单个 `/` 开头、不含 scheme、不以 `//` 或 `/\`
-开头；含查询串）、可选 `headers`（透传白名单对象：键为小写规范化 HTTP 头名，
-MUST NOT 含 `authorization`、`proxy-authorization`、`cookie`、`host`、
-`content-type`——凭据类由发送方剥离、提供方再校验拒绝）、`contentType?`、
-`bodyLen`。正文 ≤ 单帧分片上限时内联于 REQ 帧，否则以 0 个或多个 REQ_BODY 续帧
+开头、不含 `.`/`..` 路径段；含查询串）、可选 `headers`（透传白名单对象：键为
+小写规范化 HTTP 头名，MUST NOT 含 `authorization`、`proxy-authorization`、
+`cookie`、`host`、`content-type`——凭据类由发送方剥离、提供方再校验拒绝）、
+`contentType?`、`bodyLen`。正文 ≤ 单帧分片上限时内联于 REQ 帧，否则以 0 个或多个 REQ_BODY 续帧
 承载（`id`、`seq` 从 0 递增、`end` 布尔）。发送方 MUST 使所有帧 ≤ 会话层 1 MiB
 帧上限；正文分片上限默认 256 KiB（远小于帧上限，规避同连接队头阻塞；可配置，
 MUST ≤ 960 KiB）。接收方 MUST 按 seq 顺序重组，`end` 前序号缺断时回送 ERROR
@@ -141,7 +151,8 @@ MUST ≤ 960 KiB）。接收方 MUST 按 seq 顺序重组，`end` 前序号缺�
 完整响应而缓冲。**首字节等待期**（上游未响应时）提供者 SHALL 每 30s 发 PING 帧
 （`{id}`）维持请求活度。发送方对同一 `id` 的在途未终结分片施加队列上限（默认
 64 帧，防本地 send 并发堆积；**不构成对端背压**——见接收缓冲）。使用方按 seq
-保序还原字节流。
+保序还原字节流；检测到 RESP_CHUNK 序号缺断时 SHALL 以 `protocol_seq` 语义终结
+该请求（本地动作）并重建该提供者连接（毒化策略，与 REQ_BODY 缺断同规）。
 
 #### Scenario: SSE 逐块还原
 
@@ -153,10 +164,10 @@ MUST ≤ 960 KiB）。接收方 MUST 按 seq 顺序重组，`end` 前序号缺�
 - **WHEN** 上游返回单次 1.5 KiB JSON
 - **THEN** 使用方收齐分片与 RESP_END 后，向本地客户端返回 status、contentType 与完整正文
 
-#### Scenario: 深度推理长等待
+#### Scenario: 首字节等待期心跳
 
-- **WHEN** 上游 3 分钟未返回首字节
-- **THEN** 使用方每 30s 收到该 id 的 PING，请求不因空闲超时被误杀
+- **WHEN** 上游 90 秒未返回首字节
+- **THEN** 使用方已收到该 id 的 ≥3 次 PING（30s 节奏），请求保持活跃
 
 ### Requirement: 接收侧缓冲上限（背压兜底）
 
@@ -174,27 +185,37 @@ fabric 数据面无应用层背压（对端持续接收 QUIC 层流量），因�
 ### Requirement: 空闲超时
 
 请求级空闲超时 SHALL 双端各自执行：任一端在超时窗（默认 300s，可配置）内未收到
-该 `id` 的任何帧（含 PING）即以 ERROR（code `idle_timeout`）终结并清理；提供者
-侧另对上游施加首字节超时（默认 600s，可配置）与流中途停滞超时（默认 120s，可
-配置），超时即中止上游并回送 `idle_timeout`。终结帧（RESP_END / ERROR）之后该
-`id` 不得再出现任何帧。
+该 `id` 的任何帧（含 PING）即终结并清理（提供方以 ERROR code `idle_timeout`
+回送；使用方为本地动作——关闭本地连接、发 ABORT、清理在途）。**首字节等待期
+豁免**：提供方侧对该请求的空闲计时在首字节等待期内挂起——此阶段使用方不发帧，
+活度由提供方自身的 PING 发送节奏与上游首字节超时（默认 600s，可配置）管辖，
+不会在 300s 自杀；使用方侧计时照常（以收到的 PING 为活度信号）。提供者侧另对
+上游施加流中途停滞超时（默认 120s，可配置），超时即中止上游并回送
+`idle_timeout`；上游连接期超时（10s）回送 `upstream_unreachable`。终结帧
+（RESP_END / ERROR）之后该 `id` 不得再出现任何帧。
 
 #### Scenario: 空闲请求被清理
 
 - **WHEN** 某流式请求 300s 无任何帧推进（也无 PING）
 - **THEN** 双端各自以 `idle_timeout` 终结该请求并释放资源
 
+#### Scenario: 深度推理长等待不误杀
+
+- **WHEN** 上游 400 秒未返回首字节（> 300s 空闲窗、< 600s 首字节超时）
+- **THEN** 使用方因持续收到 PING 不误杀；提供方侧空闲计时挂起不自杀；至 600s 提供方中止上游并回送 `idle_timeout`
+
 ### Requirement: 中止与错误语义
 
 使用方本地客户端断开或接收缓冲达限时，网关 SHALL 发 ABORT 帧（`id`）；提供者
 收到后 MUST 中止上游请求并停止分片，回送 ERROR（code `aborted`）作终结。提供者
 侧失败（上游不可达、上游错误、限额触发、协议错误）以 ERROR 帧终结，JSON 头含
-`id`（可得时）、`code`、`message`（脱敏：不含密钥与上游凭据）。错误码集合 SHALL
+`id`（可得时）、`code`、`message`（脱敏：不含密钥与上游凭据）。ERROR 帧错误码集合 SHALL
 稳定：`aborted`、`buffer_overflow`、`idle_timeout`、`unauthorized`、
-`key_invalid`、`key_revoked`、`key_all_invalid`、`unknown_service`、
-`upstream_unreachable`、`upstream_status`、`body_too_large`、`rate_limited`、
-`quota_exceeded`、`forbidden_method`、`forbidden_header`、`protocol_version`、
-`protocol_seq`、`protocol_error`、`internal`。
+`key_all_invalid`、`unknown_service`、`upstream_unreachable`、`upstream_status`、
+`body_too_large`、`rate_limited`、`quota_exceeded`、`forbidden_method`、
+`forbidden_header`、`protocol_version`、`protocol_seq`、`protocol_error`、
+`internal`（`key_invalid`/`key_revoked` 仅作为 AUTH_OK.rejected 载荷码存在，
+不是 ERROR 帧码）。
 
 #### Scenario: 客户端中途断开
 
@@ -228,8 +249,10 @@ fabric 数据面无应用层背压（对端持续接收 QUIC 层流量），因�
 除正文分片上限外，子协议 SHALL 施加结构上限：`path` ≤ 4 KiB、`headers` ≤ 32 项、
 单键 ≤ 1 KiB、单值 ≤ 8 KiB、JSON 头总长 ≤ 16 KiB。超限帧以 ERROR（code
 `protocol_error`）回应（携带对应 `id` 时）并丢弃。REQ 的 `path` 经服务基础路径
-拼接后，产物 origin（scheme/host/port）MUST 与服务 upstream 配置一致，不一致按
-`protocol_error` 拒绝且零上游请求（防 `//host`、`..` 等路径注入逃逸）。
+拼接并规范化后，提供者 SHALL 双重断言：产物 origin（scheme/host/port）MUST 与
+服务 upstream 配置一致，且规范化路径 MUST 仍以服务基础路径为前缀；任一不成立按
+`protocol_error` 拒绝且零上游请求（防 `//host` 逃逸与 `..` 回溯越界——path 含
+`.`/`..` 段已在 schema 层拒绝，此处断言为纵深防御）。
 
 #### Scenario: 超长路径被拒
 
@@ -240,3 +263,8 @@ fabric 数据面无应用层背压（对端持续接收 QUIC 层流量），因�
 
 - **WHEN** REQ 帧携带 path `//evil.example.com/v1/keys`
 - **THEN** 拼接后 origin 断言失败，回送 `protocol_error`，不发生任何上游请求
+
+#### Scenario: 回溯越界被拦
+
+- **WHEN** REQ 帧携带 path `/../../admin`（schema 层拒绝失效时的纵深防御）
+- **THEN** 规范化后基础路径前缀断言失败，回送 `protocol_error`，不发生任何上游请求

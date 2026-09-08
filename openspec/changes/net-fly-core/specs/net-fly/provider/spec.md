@@ -81,8 +81,9 @@ REQ 的 `serviceId` 不在授权视图内时统一回送 `unknown_service`（不
 
 对通过 AUTH 的 REQ，提供者 SHALL：按 `serviceId` 定位服务（未授权/未知 →
 `unknown_service`）；以服务配置构造上游 URL（upstream 基础路径 + 前缀剥离/追加
-后的请求路径，拼接产物 origin MUST 等于 upstream origin，否则 `protocol_error`
-且零上游请求）；转发头集 = REQ.headers（凭据类已在协议层剥离并拒绝）经服务
+后的请求路径，拼接规范化后 origin MUST 等于 upstream origin **且** 路径 MUST
+仍以基础路径为前缀，任一不成立 `protocol_error` 且零上游请求）；转发头集 =
+REQ.headers（凭据类已在协议层剥离并拒绝）经服务
 headerSet/headerRemove 覆盖（`$env:VAR` 解析，空/未设置则该头省略）；Host 头由
 服务配置决定（缺省上游 host，rewrite 可覆盖），MUST NOT 来自帧内。上游 4xx/5xx
 按 `upstream_status` 原样回送 status 与正文；上游不可达/连接期超时（默认 10s）
@@ -98,8 +99,8 @@ SSRF）。
 
 #### Scenario: 帧内不可指定上游
 
-- **WHEN** 恶意使用方在 REQ 帧 path 或 headers 构造 `//evil.com/…`、`Host:` 覆盖等注入
-- **THEN** 拼接 origin 断言 / headers 白名单拒绝（`protocol_error` / `forbidden_header`），零上游请求
+- **WHEN** 恶意使用方在 REQ 帧 path 或 headers 构造 `//evil.com/…`、`/../../admin`、`Host:` 覆盖等注入
+- **THEN** schema 层 `..` 段拒绝 / 拼接 origin 与基础路径前缀断言 / headers 白名单拒绝（`protocol_error` / `forbidden_header`），零上游请求
 
 #### Scenario: 上游错误原样透传
 

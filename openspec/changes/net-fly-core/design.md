@@ -100,7 +100,10 @@ RESP_CHUNK {id,seq}                       PING {id}（首字节等待期每 30s�
 - `headers`：小写规范化键值对象；`authorization`/`proxy-authorization`/`cookie`/
   `host`/`content-type` 由 schema 拒绝（`forbidden_header`）——凭据类双向零过桥。
 - zod strict schema：未知字段一律 `protocol_error`；`path` 必须单个 `/` 开头、
-  无 scheme、非 `//`/`/\` 开头。
+  无 scheme、非 `//`/`/\` 开头、无 `.`/`..` 段；提供方拼接后另做 origin + 基础
+  路径前缀双重断言（纵深防御）。
+- 帧方向：ERROR 帧仅提供方发出；使用方侧方向违规帧静默丢弃计数；未 AUTH 检查
+  先于方向检查；`key_invalid`/`key_revoked` 仅作为 AUTH_OK.rejected 载荷码。
 - 分片 256KiB 依据：接收循环串行（队头阻塞）+ JS 边界三份拷贝（Vec→base64→JSON），
   小分片更稳；可配置 ≤960KiB。
 
@@ -127,15 +130,18 @@ fabric 接收链（msg_task 永续读 → 广播 256 → TSFN 无界）意味着
 ### A6 超时与活度
 
 ```
-首字节等待期   提供者每 30s PING(id)（维持使用方空闲计时）；上游首字节超时 600s（可配）
+首字节等待期   提供者每 30s PING(id)（维持使用方空闲计时）；上游首字节超时 600s（可配）；
+              提供方侧该请求的空闲计时在此阶段挂起（使用方不发帧，活度由 PING 节奏
+              与首字节超时管辖，不会 300s 自杀）
 流中途停滞     无分片 120s（可配）→ 提供者中止上游 → ERROR(idle_timeout)
-请求空闲       双端各 300s（可配）无任何帧（含 PING）→ ERROR(idle_timeout) 清理
+请求空闲       双端各 300s（可配）无任何帧（含 PING）→ 终结清理（提供方发 ERROR 帧，
+              使用方为本地动作）
 上游连接期     10s（可配）→ upstream_unreachable
 重连退避       full jitter 指数：1s → 60s 上限
 ```
 
 深度推理首字节可超 5 分钟——PING 心跳让使用方侧计时以"提供者仍在等"为准，
-避免一刀切误杀。
+提供方侧计时挂起由 600s 首字节超时兜底，两端都不会一刀切误杀。
 
 ### A7 存储（0700 目录 / 0600 文件 / 原子写 tmp+rename）
 
