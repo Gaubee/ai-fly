@@ -1,7 +1,7 @@
 {
   "name": "ai-fly",
   "version": "0.1.0",
-  "description": "ai-fly — peer-to-peer OpenAI-compatible API sharing over OpenDWeb fabric",
+  "description": "ai-fly — peer-to-peer HTTP/WebSocket bridge with AI-ready presets, over OpenDWeb fabric",
   "license": "MIT OR Apache-2.0",
   "private": true,
   "type": "module",
@@ -16,18 +16,23 @@
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:integration": "node --test \"test/integration/*.test.mjs\"",
+    "test:e2e": "node --test \"test/e2e/*.test.mjs\"",
+    "test:all": "vitest run && pnpm test:integration && pnpm test:e2e"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "@jixo/opendweb-client-sdk": "^0.3.2",
     "hono": "^4.13.7",
     "ts-pattern": "^5.9.0",
+    "ws": "^8.21.3",
     "zod": "^4.5.4"
   },
   "devDependencies": {
     "@jixo/opendweb-server-binary": "^0.3.2",
     "@types/node": "^26.5.0",
+    "@types/ws": "^8.18.1",
     "tsdown": "^0.23.0",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
