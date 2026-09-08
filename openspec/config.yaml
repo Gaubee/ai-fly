@@ -1,0 +1,38 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+context: |
+  ai-fly：点对点 OpenAI 兼容 API 共享产品。提供者把自己本地的推理服务
+  （ollama / vllm / LM Studio，或任意 OpenAI 兼容上游）经 fabric 分享给受邀请的朋友/小圈子；
+  消费者在 127.0.0.1 获得一个 OpenAI 兼容端点，显式把 Agent 的 base URL 指过去。
+  组网底座 = OpenDWeb（@jixo/opendweb-client-sdk，napi-rs，darwin-arm64 / win32-x64）：
+  Ed25519 身份、邀请制名册（dweb1. 令牌、issuer-online 兑换）、QUIC 直连 + relay 回退、
+  不透明 envelope 收发（单帧 ≤1MiB）、撤销即断。产品长在 SDK 之上，不改 fabric 内核。
+  Tech stack: TypeScript strict（禁 any/@ts-nocheck）、Node ≥20、hono（@hono/node-server）、
+  zod v4.5+、ts-pattern、vitest、tsdown 构建、pnpm。
+  CLI 约定（与 opendweb 生态一致）：用户面字符串英文且码位 <128；`--opt value` 与
+  `--opt=value` 等价；路径值做 ~ 展开；未知选项退出码 2；秘密经环境变量间接引用，绝不内联。 platform
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
