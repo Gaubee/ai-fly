@@ -4,16 +4,22 @@ schema: spec-driven
 # This is shown to AI when creating artifacts.
 # Add your tech stack, conventions, style guides, domain knowledge, etc.
 context: |
-  ai-fly：点对点 OpenAI 兼容 API 共享产品。提供者把自己本地的推理服务
-  （ollama / vllm / LM Studio，或任意 OpenAI 兼容上游）经 fabric 分享给受邀请的朋友/小圈子；
-  消费者在 127.0.0.1 获得一个 OpenAI 兼容端点，显式把 Agent 的 base URL 指过去。
+  ai-fly：点对点网络桥接产品（HTTP/WS 通用转发，AI 预设层加成）。提供方把任意
+  HTTP/WebSocket 上游（ollama / vllm / LM Studio / 内网网关 / 带 key 的第三方 API）
+  经 fabric 分享给受邀请的小圈子；使用方在 127.0.0.1 得到端口映射（HTTP + WS 升级），
+  把 Agent 的 base URL 或 WS 客户端指过去。代理模式永久取消（DL-9）。
+  凭据两层分离（DL-3）：dweb1. 令牌 = 设备准入（fabric 层，一机一兑）；
+  sk-aifly- 密钥 = 分组访问权（应用层，与设备解耦）；aifly1. 组合链接 = 首访信封。
   组网底座 = OpenDWeb（@jixo/opendweb-client-sdk，napi-rs，darwin-arm64 / win32-x64）：
-  Ed25519 身份、邀请制名册（dweb1. 令牌、issuer-online 兑换）、QUIC 直连 + relay 回退、
-  不透明 envelope 收发（单帧 ≤1MiB）、撤销即断。产品长在 SDK 之上，不改 fabric 内核。
-  Tech stack: TypeScript strict（禁 any/@ts-nocheck）、Node ≥20、hono（@hono/node-server）、
-  zod v4.5+、ts-pattern、vitest、tsdown 构建、pnpm。
+  Ed25519 身份、邀请制名册、QUIC 直连 + relay 回退、不透明 envelope（单帧 ≤1MiB）、
+  撤销即断。产品长在 SDK 之上，不改 fabric 内核。
+  Owner 裁决 DL-1~12（2026-09-09 grilling）见 changes/net-fly-core/proposal.md；
+  net-fly 仅为内部分层标签，bin/npm/UI 品牌统一 ai-fly。
+  Tech stack: TypeScript strict（禁 any/@ts-nocheck）、Node ≥20、hono（@hono/node-server）
+  + ws（WS 中继）、zod v4.5+、ts-pattern、vitest + node --test 双测试入口、tsdown、pnpm。
   CLI 约定（与 opendweb 生态一致）：用户面字符串英文且码位 <128；`--opt value` 与
-  `--opt=value` 等价；路径值做 ~ 展开；未知选项退出码 2；秘密经环境变量间接引用，绝不内联。 platform
+  `--opt=value` 等价；路径值做 ~ 展开；未知选项退出码 2；秘密经环境变量间接引用（$env:VAR，
+  空=未设置=省略），绝不内联。
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
