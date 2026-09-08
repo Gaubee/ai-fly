@@ -6,14 +6,14 @@
 
 ## 1. 仓库脚手架
 
-- [ ] 1.1 package.json（bin `ai-fly`、engines node≥20、type module、private）+
+- [x] 1.1 package.json（bin `ai-fly`、engines node≥20、type module、private）+
       .gitignore + tsconfig strict（禁 any/@ts-nocheck）+ vitest 配置 + tsdown 配置
-- [ ] 1.2 pnpm 安装依赖：@jixo/opendweb-client-sdk、hono、@hono/node-server、
+- [x] 1.2 pnpm 安装依赖：@jixo/opendweb-client-sdk、hono、@hono/node-server、
       zod、ts-pattern；dev：vitest、tsdown、tsx、@types/node、
       @jixo/opendweb-server-binary（e2e 用）
-- [ ] 1.3 `src/cli/args.ts` 通用解析器（`--opt value`/`--opt=value` 等价、`~` 展开、
+- [x] 1.3 `src/cli/args.ts` 通用解析器（`--opt value`/`--opt=value` 等价、`~` 展开、
       布尔 flag、未知选项退出码 2、英文 ASCII 帮助）+ 单测
-- [ ] 1.4 `src/cli/config.ts`（~/.aifly/config.json，0600，flag > env > file > default）
+- [x] 1.4 `src/cli/config.ts`（~/.aifly/config.json，0600，flag > env > file > default）
       + README 骨架 + 初始 commit
 
 ## 2. 帧子协议（wire/）
