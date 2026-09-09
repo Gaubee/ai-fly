@@ -94,4 +94,4 @@
   </div>
 </div>
 
-<ToastViewport {toast} />
+<ToastViewport store={toast} />

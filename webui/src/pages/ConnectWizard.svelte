@@ -5,7 +5,7 @@
      等宽 diff → 确认 writers.apply）。状态机在 stores/connect-wizard。 -->
 <script lang="ts">
   import { onMount } from "svelte";
-  import Card from "$lib/ui/card";
+  import Card, { CardFooter } from "$lib/ui/card";
   import Badge from "$lib/ui/badge";
   import PressButton from "$lib/ui/press-button";
   import Input from "$lib/ui/input";
@@ -131,18 +131,20 @@
         {/if}
       </div>
       {#snippet foot()}
-        <PressButton variant="ghost" onclick={() => resetConnect()}>clear</PressButton>
-        <PressButton
-          variant="fill"
-          loading={connectW.previewBusy}
-          class={connectW.link.trim() === "" ? "pointer-events-none opacity-50" : undefined}
-          onclick={() => void previewLink()}
-        >
-          preview link
-        </PressButton>
-        {#if connectW.preview !== null}
-          <PressButton variant="outline" onclick={previewNext}>continue</PressButton>
-        {/if}
+        <CardFooter label="connect wizard actions">
+          <PressButton variant="ghost" onclick={() => resetConnect()}>clear</PressButton>
+          <PressButton
+            variant="fill"
+            loading={connectW.previewBusy}
+            class={connectW.link.trim() === "" ? "pointer-events-none opacity-50" : undefined}
+            onclick={() => void previewLink()}
+          >
+            preview link
+          </PressButton>
+          {#if connectW.preview !== null}
+            <PressButton variant="outline" onclick={previewNext}>continue</PressButton>
+          {/if}
+        </CardFooter>
       {/snippet}
     </Card>
     <ErrorAlert error={connectW.previewError} />
@@ -243,14 +245,16 @@
         {/if}
       </div>
       {#snippet foot()}
-        <PressButton variant="ghost" onclick={connectBack} class={connectW.applyBusy ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
-        {#if connectW.applied === null}
-          <PressButton variant="fill" loading={connectW.applyBusy} onclick={() => void applyImport()}>
-            import & start
-          </PressButton>
-        {:else}
-          <PressButton variant="fill" onclick={portsNext}>continue</PressButton>
-        {/if}
+        <CardFooter label="connect wizard actions">
+          <PressButton variant="ghost" onclick={connectBack} class={connectW.applyBusy ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
+          {#if connectW.applied === null}
+            <PressButton variant="fill" loading={connectW.applyBusy} onclick={() => void applyImport()}>
+              import & start
+            </PressButton>
+          {:else}
+            <PressButton variant="fill" onclick={portsNext}>continue</PressButton>
+          {/if}
+        </CardFooter>
       {/snippet}
     </Card>
     <ErrorAlert error={connectW.applyError ?? connectW.portError} />
@@ -298,21 +302,23 @@
         {/if}
       </div>
       {#snippet foot()}
-        <PressButton variant="ghost" onclick={connectBack} class={connectW.writerApplyBusy ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
-        {#if connectW.agent === "skip" || connectW.writerDone}
-          <PressButton variant="fill" href="#/dashboard" external={false} onclick={() => finishConnect()}>
-            finish - go to dashboard
-          </PressButton>
-        {:else}
-          <PressButton
-            variant="fill"
-            loading={connectW.writerApplyBusy}
-            class={connectW.writerPreview === null ? "pointer-events-none opacity-50" : undefined}
-            onclick={() => void applyWriter()}
-          >
-            write agent config
-          </PressButton>
-        {/if}
+        <CardFooter label="connect wizard actions">
+          <PressButton variant="ghost" onclick={connectBack} class={connectW.writerApplyBusy ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
+          {#if connectW.agent === "skip" || connectW.writerDone}
+            <PressButton variant="fill" href="#/dashboard" external={false} onclick={() => finishConnect()}>
+              finish - go to dashboard
+            </PressButton>
+          {:else}
+            <PressButton
+              variant="fill"
+              loading={connectW.writerApplyBusy}
+              class={connectW.writerPreview === null ? "pointer-events-none opacity-50" : undefined}
+              onclick={() => void applyWriter()}
+            >
+              write agent config
+            </PressButton>
+          {/if}
+        </CardFooter>
       {/snippet}
     </Card>
     <ErrorAlert error={connectW.writerError} />

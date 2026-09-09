@@ -192,7 +192,7 @@ describe("assembleApp 装配顺序与接线", () => {
     // 产线对照：args 直接是入口绝对路径
     const prod = await assemble();
     expect(mounts[1]?.deps.appLaunch.args).toEqual([expect.stringContaining("main.ts")]);
-    expect(mounts[1]?.deps.appLaunch.args[0]).not.toContain("--import");
+    expect((mounts[1]?.deps.appLaunch.args ?? []).join(" ")).not.toContain("--import");
   });
 
   it("AIFLY_APP_NO_TRAY=1：跳过壳挂载（headless 回归向量），UI 服务仍就绪", async () => {
@@ -262,7 +262,7 @@ describe("路径与图标解析（纯函数）", () => {
     const icons = join(here, "..", "..", "..", "resources", "app-icons");
     const icon = projectAppIcon(icons, "linux");
     expect(icon).not.toBeNull();
-    expect(icon?.map((asset) => asset.platform === "linux" ? asset.size : 0)).toEqual([
+    expect(icon?.map((asset) => (asset.platform === "linux" && asset.format === "png" ? asset.size : 0))).toEqual([
       16, 32, 48, 64, 128, 256, 512,
     ]);
   });

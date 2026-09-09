@@ -55,9 +55,13 @@ describe("buildTrayMenu", () => {
   });
 
   it("结构不变量：id 唯一且为稳定整数", () => {
+    // CreateTrayMenuItem 是含 string/元组的宽联合——按契约收窄：对象且带数字 id。
     const ids = buildTrayMenu(state({}))
-      .items.flatMap((item) => (item.type === "item" || item.type === "check" ? [item.id] : []))
-      .map((id) => Number(id));
+      .items.flatMap((item): number[] =>
+        typeof item === "object" && item !== null && "id" in item && typeof item.id === "number"
+          ? [item.id]
+          : [],
+      );
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toEqual([MENU_OPEN_ID, MENU_PROVIDER_ID, MENU_CONSUMER_ID, MENU_QUIT_ID]);
   });
@@ -73,6 +77,6 @@ describe("menuActionFor", () => {
 
   it("未知 id 返回 null（调用方忽略）", () => {
     expect(menuActionFor(99)).toBeNull();
-    expect(menuActionFor("not-a-known-item")).toBeNull();
+    expect(menuActionFor(0)).toBeNull();
   });
 });

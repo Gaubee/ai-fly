@@ -5,7 +5,7 @@
      - 端口表（服务名/端口/提供者）。
      - 数据全部来自 app store（通知驱动拉取；断线重连全量对账）。 -->
 <script lang="ts">
-  import Card from "$lib/ui/card";
+  import Card, { CardFooter } from "$lib/ui/card";
   import Badge from "$lib/ui/badge";
   import PressButton from "$lib/ui/press-button";
   import Skeleton from "$lib/ui/skeleton";
@@ -184,14 +184,16 @@
           </p>
         </div>
         {#snippet foot()}
-          <PressButton
-            variant="outline"
-            loading={daemonBusy}
-            onclick={() => void toggleDaemon()}
-          >
-            {provider.running ? "stop daemon" : "start daemon"}
-          </PressButton>
-          <PressButton variant="ghost" href="#/share" external={false}>share a service</PressButton>
+          <CardFooter label="provider actions">
+            <PressButton
+              variant="outline"
+              loading={daemonBusy}
+              onclick={() => void toggleDaemon()}
+            >
+              {provider.running ? "stop daemon" : "start daemon"}
+            </PressButton>
+            <PressButton variant="ghost" href="#/share" external={false}>share a service</PressButton>
+          </CardFooter>
         {/snippet}
       {/if}
     </Card>
@@ -254,10 +256,12 @@
           {/if}
         </div>
         {#snippet foot()}
-          <PressButton variant="outline" loading={gatewayBusy} onclick={() => void toggleGateway()}>
-            {consumer.gatewayRunning ? "stop gateway" : "start gateway"}
-          </PressButton>
-          <PressButton variant="ghost" href="#/connect" external={false}>import a link</PressButton>
+          <CardFooter label="consumer actions">
+            <PressButton variant="outline" loading={gatewayBusy} onclick={() => void toggleGateway()}>
+              {consumer.gatewayRunning ? "stop gateway" : "start gateway"}
+            </PressButton>
+            <PressButton variant="ghost" href="#/connect" external={false}>import a link</PressButton>
+          </CardFooter>
         {/snippet}
       {/if}
     </Card>

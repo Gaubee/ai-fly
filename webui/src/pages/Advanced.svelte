@@ -4,7 +4,7 @@
      原文 dialog + revoke 两步确认。状态机在 stores/advanced。 -->
 <script lang="ts">
   import { onMount } from "svelte";
-  import Card from "$lib/ui/card";
+  import Card, { CardFooter } from "$lib/ui/card";
   import Badge from "$lib/ui/badge";
   import PressButton from "$lib/ui/press-button";
   import Input from "$lib/ui/input";
@@ -15,7 +15,7 @@
   import Toggle from "$lib/ui/toggle";
   import ThemeToggle from "$lib/ui/theme-toggle";
   import Tabs, { TabsList, TabsTrigger, TabsContent } from "$lib/ui/tabs";
-  import Dialog from "$lib/ui/dialog";
+  import Dialog, { DialogFooter } from "$lib/ui/dialog";
   import { slide } from "svelte/transition";
   import ErrorAlert from "../components/ErrorAlert.svelte";
   import CopyField from "../components/CopyField.svelte";
@@ -310,10 +310,12 @@
               {/if}
             </div>
             {#snippet foot()}
-              <PressButton variant="ghost" onclick={closeServiceForm} class={serviceForm.busy ? "pointer-events-none opacity-50" : undefined}>cancel</PressButton>
-              <PressButton variant="fill" loading={serviceForm.busy} onclick={() => void submitService()}>
-                {serviceForm.editingName !== "" ? "save changes" : "add service"}
-              </PressButton>
+              <CardFooter label="service form actions">
+                <PressButton variant="ghost" onclick={closeServiceForm} class={serviceForm.busy ? "pointer-events-none opacity-50" : undefined}>cancel</PressButton>
+                <PressButton variant="fill" loading={serviceForm.busy} onclick={() => void submitService()}>
+                  {serviceForm.editingName !== "" ? "save changes" : "add service"}
+                </PressButton>
+              </CardFooter>
             {/snippet}
           </Card>
           <ErrorAlert error={serviceForm.error} />
@@ -437,8 +439,10 @@
               </div>
             </div>
             {#snippet foot()}
-              <PressButton variant="ghost" onclick={() => (groupForm.open = false)} class={groupForm.busy ? "pointer-events-none opacity-50" : undefined}>cancel</PressButton>
-              <PressButton variant="fill" loading={groupForm.busy} onclick={() => void submitGroupAdd()}>add group</PressButton>
+              <CardFooter label="group form actions">
+                <PressButton variant="ghost" onclick={() => (groupForm.open = false)} class={groupForm.busy ? "pointer-events-none opacity-50" : undefined}>cancel</PressButton>
+                <PressButton variant="fill" loading={groupForm.busy} onclick={() => void submitGroupAdd()}>add group</PressButton>
+              </CardFooter>
             {/snippet}
           </Card>
           <ErrorAlert error={groupForm.error} />
@@ -549,9 +553,11 @@
             {/if}
           </div>
           {#snippet foot()}
-            <PressButton variant="fill" loading={relayForm.busy} onclick={() => void saveRelay()}>
-              save relay entries
-            </PressButton>
+            <CardFooter label="relay form actions">
+              <PressButton variant="fill" loading={relayForm.busy} onclick={() => void saveRelay()}>
+                save relay entries
+              </PressButton>
+            </CardFooter>
           {/snippet}
         </Card>
         <ErrorAlert error={relayForm.error} />
@@ -623,7 +629,9 @@
       </p>
     </div>
     {#snippet footer()}
-      <PressButton variant="fill" onclick={() => (keyIssue.result = null)}>done - I saved it</PressButton>
+      <DialogFooter label="key issued">
+        <PressButton variant="fill" onclick={() => (keyIssue.result = null)}>done - I saved it</PressButton>
+      </DialogFooter>
     {/snippet}
   {/if}
 </Dialog>

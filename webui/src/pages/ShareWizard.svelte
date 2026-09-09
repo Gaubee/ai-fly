@@ -5,7 +5,7 @@
      一键复制 + 链接即凭证警示 + TTL）。状态机在 stores/share-wizard。 -->
 <script lang="ts">
   import { onMount } from "svelte";
-  import Card from "$lib/ui/card";
+  import Card, { CardFooter } from "$lib/ui/card";
   import Badge from "$lib/ui/badge";
   import PressButton from "$lib/ui/press-button";
   import Input from "$lib/ui/input";
@@ -258,19 +258,21 @@
         {/if}
       </div>
       {#snippet foot()}
-        <PressButton variant="ghost" onclick={shareBack} class={share.busy !== "" ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
-        <PressButton
-          variant="fill"
-          onclick={() => {
-            if (share.mode === "custom" && !customSourceValid()) {
-              share.error = { code: "INVALID_INPUT", message: "name, https upstream and match domain are required" };
-              return;
-            }
-            namingNext();
-          }}
-        >
-          continue
-        </PressButton>
+        <CardFooter label="share wizard actions">
+          <PressButton variant="ghost" onclick={shareBack} class={share.busy !== "" ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
+          <PressButton
+            variant="fill"
+            onclick={() => {
+              if (share.mode === "custom" && !customSourceValid()) {
+                share.error = { code: "INVALID_INPUT", message: "name, https upstream and match domain are required" };
+                return;
+              }
+              namingNext();
+            }}
+          >
+            continue
+          </PressButton>
+        </CardFooter>
       {/snippet}
     </Card>
     <ErrorAlert error={share.error} />
@@ -315,20 +317,22 @@
           </Alert>
         </div>
         {#snippet foot()}
-          <PressButton variant="ghost" onclick={shareBack} class={share.busy !== "" ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
-          <PressButton
-            variant="fill"
-            loading={share.busy !== ""}
-            onclick={() => void generateShare()}
-          >
-            {share.busy === "service" || share.busy === "group"
-              ? "creating service..."
-              : share.busy === "daemon"
-                ? "starting daemon..."
-                : share.busy === "share"
-                  ? "creating link..."
-                  : "generate share link"}
-          </PressButton>
+          <CardFooter label="share wizard actions">
+            <PressButton variant="ghost" onclick={shareBack} class={share.busy !== "" ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
+            <PressButton
+              variant="fill"
+              loading={share.busy !== ""}
+              onclick={() => void generateShare()}
+            >
+              {share.busy === "service" || share.busy === "group"
+                ? "creating service..."
+                : share.busy === "daemon"
+                  ? "starting daemon..."
+                  : share.busy === "share"
+                    ? "creating link..."
+                    : "generate share link"}
+            </PressButton>
+          </CardFooter>
         {/snippet}
       </Card>
       <ErrorAlert error={share.error} />
@@ -348,16 +352,18 @@
           </Alert>
         </div>
         {#snippet foot()}
-          <PressButton
-            variant="ghost"
-            onclick={() => {
-              resetShare();
-              void loadPresets();
-            }}
-          >
-            share another
-          </PressButton>
-          <PressButton variant="fill" href="#/dashboard" external={false}>go to dashboard</PressButton>
+          <CardFooter label="share wizard actions">
+            <PressButton
+              variant="ghost"
+              onclick={() => {
+                resetShare();
+                void loadPresets();
+              }}
+            >
+              share another
+            </PressButton>
+            <PressButton variant="fill" href="#/dashboard" external={false}>go to dashboard</PressButton>
+          </CardFooter>
         {/snippet}
       </Card>
     {/if}
