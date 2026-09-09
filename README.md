@@ -27,10 +27,13 @@ Agent ──► http://127.0.0.1:11434/…       ollama :11434 (or any HTTP/WS u
 - **Full-disclosure, minus secrets.** Consumers see each service's complete rule
   (upstream, rewrites, domains) on expand; injected credential values render as `●`.
 
-**Status: M1 (engine).** The headless engine lands with the `net-fly-core` change
-(see `openspec/changes/net-fly-core/`). M2 adds the OpenTray shell + Web UI + the
-AI preset library (curated providers + models.dev long tail). Proxy mode is
-permanently out of scope (TLS makes credential injection impossible without MITM).
+**Status: M1 + M2 (engine + product).** The headless engine landed with the
+`net-fly-core` change; `m2-productize` added the OpenTray desktop shell
+(tray + window + one-time token UI), the Web UI (Dashboard / share wizard /
+connect wizard / advanced), the AI preset library (curated providers +
+models.dev long tail), and agent config writers (codex / claude-code /
+cursor / cline / continue). Proxy mode is permanently out of scope (TLS makes
+credential injection impossible without MITM).
 
 ```bash
 # Provider
@@ -57,3 +60,30 @@ pnpm dev         # tsx src/bin.ts
 Node >= 20. License: MIT OR Apache-2.0. The fabric dependency
 `@jixo/opendweb-client-sdk` ships native binaries for darwin-arm64 and win32-x64
 (no Linux yet).
+
+## Manual regression checklist
+
+Desktop-shell behaviors that automated suites do not cover. Run before any
+release build (`pnpm app:dev`, or `pnpm app:build` + `pnpm app:start` for the
+packaged form). Each line is pass/fail; English strings below are exactly what
+the UI shows.
+
+1. **Tray & window** — app starts with a tray icon; the tray menu's primary
+   item toggles the window (Open/Hide); `Quit ai-fly` exits cleanly (tray icon
+   disappears, ports released).
+2. **Token gate** — the UI only loads from the app window. Opening the daemon
+   URL directly shows the guidance page; a reused link token reports
+   "The link token is invalid or was already used."
+3. **Theme toggle** — dark/light switch persists across a window close/reopen.
+4. **Share wizard (3 steps)** — pick a preset (local presets first), name &
+   group, generate link. The final card shows the `aifly1.` link with a copy
+   field and the raw key once.
+5. **Connect wizard (3 steps)** — paste the link from another machine (or the
+   same one with a fresh data dir), confirm ports, pick an agent writer; the
+   preview diff matches the written file.
+6. **Key revoke while connected** — revoke the key on the provider (Advanced >
+   keys); the consumer's dashboard flips its provider row to an error state and
+   requests start failing with `key_revoked` within seconds.
+7. **Restart recovery** — quit and relaunch on both sides: services, groups,
+   keys, imported providers and custom ports all come back; the gateway
+   resumes and serves traffic without re-importing.
