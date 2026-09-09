@@ -1,9 +1,10 @@
 <!-- 应用骨架（B 3.1）：左侧导航（Dashboard / 分享向导 / 接入向导 / 高级设置）
      + theme-toggle + 连接横幅 + hash 路由出口 + ToastViewport。
      空数据首屏由 Dashboard 渲染（两条向导大入口卡，spec「首屏三步可达」）。
-     桌面 overlay 安全区（m3 2.1/2.2）：整壳顶部下移避让原生控件（红绿灯带），
-     左导航另避让左置控件；顶部透明拖拽带仅 overlay 可见时渲染（startOverlay
-     把避让量写 --ot-inset-top / --ot-inset-left，浏览器 dev 归零无假象）。 -->
+     桌面 overlay 安全区（m3 2.1/2.2，Owner 裁决 2026-09-10 修订）：--ot-inset-left
+     只描述左上角控件矩形，必须搭配 --ot-inset-top 消费在 header 上——header 高度
+     ≥ inset-top，padding-inline-start/end = inset-left/right；整列/整行不再摊派。
+     header 同时是拖拽带（pointerdown → startAppRegionDrag）；浏览器 dev 归零无假象。 -->
 <script lang="ts">
   import { onMount } from "svelte";
   import ToastViewport from "$lib/ui/toast";
@@ -35,23 +36,19 @@
   const disconnected = $derived(rpcState.status !== "open");
 </script>
 
-<!-- 顶部拖拽带：overlay 可见（dragEnabled）时渲染；高度取避让量与 28px 的较大值
-     保底可抓；透明、无交互元素，pointerdown 交给原生窗口拖拽（beginWindowDrag）。
-     原生控件由系统绘制在更上层，带不必挖洞；toast（z-[90]）仍在带之上。 -->
-{#if overlay.dragEnabled}
-  <div
-    class="fixed inset-x-0 top-0 z-40 cursor-default"
-    style="height: max(var(--ot-inset-top, 0px), 28px)"
-    aria-hidden="true"
-    onpointerdown={beginWindowDrag}
-  ></div>
-{/if}
+<div class="jx-pure flex h-dvh flex-col bg-background text-foreground">
+  <!-- 标题带 header（仅 overlay 可见时渲染）：高度 ≥ --ot-inset-top（保底 28px 可抓），
+       padding-inline 承接左/右控件矩形（红绿灯 / Windows caption）。整条即拖拽带，
+       内不放交互元素；原生控件由系统绘制于更上层，不必挖洞。 -->
+  {#if overlay.dragEnabled}
+    <header
+      class="flex shrink-0 cursor-default select-none"
+      style="height: max(var(--ot-inset-top, 0px), 28px); padding-inline-start: var(--ot-inset-left, 0px); padding-inline-end: var(--ot-inset-right, 0px)"
+      aria-hidden="true"
+      onpointerdown={beginWindowDrag}
+    ></header>
+  {/if}
 
-<!-- 整壳顶部避让：标题带（红绿灯）高度内不放任何内容；横幅/导航/主区随之整体下移 -->
-<div
-  class="jx-pure flex h-dvh flex-col bg-background text-foreground"
-  style="padding-top: var(--ot-inset-top, 0px)"
->
   <!-- 连接横幅：rpc 通道断开（connecting/reconnecting）时置顶提示。
        横幅内无交互元素，pointerdown 同样可作为拖拽带（桌面 overlay 形态）。 -->
   {#if disconnected}
@@ -68,13 +65,8 @@
   {/if}
 
   <div class="flex min-h-0 flex-1">
-    <!-- 左侧导航：品牌区在左上角，需再避让左置控件（红绿灯右缘）；主区在导航
-         右侧，控件只压左上角，故主区不需要左 inset -->
-    <nav
-      class="flex w-44 shrink-0 flex-col border-r border-border bg-muted/30"
-      style="padding-left: var(--ot-inset-left, 0px)"
-      aria-label="main"
-    >
+    <!-- 左侧导航：控件避让全部由上方 header 承担，导航从 header 下缘开始 -->
+    <nav class="flex w-44 shrink-0 flex-col border-r border-border bg-muted/30" aria-label="main">
       <div class="px-3 py-3">
         <span class="font-nav text-sm tracking-[0.08em]">ai-fly</span>
         <p class="mt-0.5 text-[10px] text-muted-foreground">share services, simply</p>

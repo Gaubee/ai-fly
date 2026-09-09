@@ -14,10 +14,14 @@ export interface OverlayRect {
   height: number;
 }
 
-/** 避让内边距（px）：top = 标题带高度；left = 左置控件（红绿灯）右缘。 */
+/** 避让内边距（px）：top = 标题带高度；left/right = 两侧控件占位（macOS 红绿灯
+ *  在左 → left>0；Windows caption 在右 → right>0）。left/right 只描述标题带这一
+ *  行的矩形区域，消费面是 header 的 padding-inline——不得摊到整列/整行（Owner
+ *  裁决 2026-09-10：「--ot-inset-left 必须搭配 --ot-inset-top」）。 */
 export interface OverlayInsets {
   top: number;
   left: number;
+  right: number;
 }
 
 /** navigator.opentrayWindow.overlay 的结构子集（仅消费面成员）。 */
@@ -43,10 +47,12 @@ export interface OpentrayWindowBridge {
 /** navigator 的结构视图（探测注入 bridge 用；避免引用 DOM 类型）。 */
 export type NavigatorLike = { opentrayWindow?: OpentrayWindowBridge };
 
-/** 根元素 CSS 变量名：顶部避让（整壳 padding-top / 拖拽带高度）。 */
+/** 根元素 CSS 变量名：顶部避让（header 高度）。 */
 export const INSET_TOP_VAR = "--ot-inset-top";
-/** 根元素 CSS 变量名：左侧避让（仅左导航 padding-left）。 */
+/** 根元素 CSS 变量名：标题带左端避让（header padding-inline-start）。 */
 export const INSET_LEFT_VAR = "--ot-inset-left";
+/** 根元素 CSS 变量名：标题带右端避让（header padding-inline-end；Windows caption）。 */
+export const INSET_RIGHT_VAR = "--ot-inset-right";
 
 /** insetTop 保守回退：overlay 可见但 rect.y 度量为 0 时仍保住标题带高度。 */
 export const FALLBACK_INSET_TOP = 28;
@@ -56,13 +62,15 @@ export const FALLBACK_INSET_TOP = 28;
  * 调用前提：overlay 可见（不可见路径直接归零，不走这里）。
  * - top：rect.y 即页面可开始的高度；round 后夹到 ≥0，为 0 时回退保守值 28
  *   （不可预估固定红绿灯宽度，一切以 getTitlebarAreaRect 实测为准）。
- * - left：rect.x 即控件右侧可用区起点（Linux 右置控件/无左置控件时为 0）。
+ * - left：rect.x 即左置控件（红绿灯）右侧可用区起点。
+ * - right：视口宽 − rect 右缘，即右置 caption（Windows）宽度；macOS 全宽 rect 为 0。
  */
-export function insetsFromRect(rect: OverlayRect): OverlayInsets {
+export function insetsFromRect(rect: OverlayRect, viewportWidth: number): OverlayInsets {
   const top = Math.max(0, Math.round(rect.y));
   return {
     top: top > 0 ? top : FALLBACK_INSET_TOP,
     left: Math.max(0, Math.round(rect.x)),
+    right: Math.max(0, Math.round(viewportWidth - rect.x - rect.width)),
   };
 }
 
@@ -71,10 +79,11 @@ export interface CssVarSink {
   setProperty(name: string, value: string, priority?: string): void;
 }
 
-/** 把避让内边距写到根元素 CSS 变量（整壳/导航以 var() 消费）。 */
+/** 把避让内边距写到根元素 CSS 变量（header 以 var() 消费）。 */
 export function applyInsetVars(sink: CssVarSink, insets: OverlayInsets): void {
   sink.setProperty(INSET_TOP_VAR, `${insets.top}px`);
   sink.setProperty(INSET_LEFT_VAR, `${insets.left}px`);
+  sink.setProperty(INSET_RIGHT_VAR, `${insets.right}px`);
 }
 
 /** 反应式状态汇（由 ./overlay.svelte.ts 实现，写入 $state 字段）。 */
@@ -82,16 +91,18 @@ export interface OverlayStateSink {
   update(insets: OverlayInsets, dragEnabled: boolean): void;
 }
 
-/** attachOverlay 的宿主依赖（状态 + CSS 变量写入目标）。 */
+/** attachOverlay 的宿主依赖（状态 + CSS 变量写入目标 + 视口宽度源）。 */
 export interface OverlayHost {
   state: OverlayStateSink;
   cssVars: CssVarSink;
+  /** 视口宽度（innerWidth；geometrychange 时窗口宽度可能已变，每次现读）。 */
+  viewportWidth(): number;
 }
 
 /** 归零写入（bridge 缺席 / overlay 不可见：不残留陈旧避让量）。 */
 function applyZero(host: OverlayHost): void {
-  host.state.update({ top: 0, left: 0 }, false);
-  applyInsetVars(host.cssVars, { top: 0, left: 0 });
+  host.state.update({ top: 0, left: 0, right: 0 }, false);
+  applyInsetVars(host.cssVars, { top: 0, left: 0, right: 0 });
 }
 
 /**
@@ -117,7 +128,7 @@ export async function attachOverlay(
       applyZero(host);
       return;
     }
-    const insets = insetsFromRect(rect);
+    const insets = insetsFromRect(rect, host.viewportWidth());
     host.state.update(insets, true);
     applyInsetVars(host.cssVars, insets);
   };

@@ -8,12 +8,14 @@ import {
   type NavigatorLike,
 } from "./overlay-geometry.ts";
 
-/** 安全区状态（$state：App 壳与拖拽带直接读取）。 */
+/** 安全区状态（$state：App 壳 header 与拖拽带直接读取）。 */
 export const overlay = $state({
   /** 顶部避让（标题带高度 px；overlay 不可见时 0——不造安全区假象）。 */
   insetTop: 0,
-  /** 左侧避让（红绿灯右缘 px；仅 macOS 左置控件非 0）。 */
+  /** 标题带左端避让（红绿灯右缘 px；仅 macOS 左置控件非 0）。 */
   insetLeft: 0,
+  /** 标题带右端避让（Windows caption 宽 px）。 */
+  insetRight: 0,
   /** 拖拽带可用（= overlay 可见；Windows 原生边框 / 纯浏览器 dev 为 false）。 */
   dragEnabled: false,
 });
@@ -28,7 +30,7 @@ function bridgeOf(): OpentrayWindowBridge | undefined {
 
 /**
  * 启动安全区探测（App 挂载时调用一次；幂等，HMR 重挂不重入）。
- * 结果写 $state 与 documentElement CSS 变量（--ot-inset-top / --ot-inset-left）。
+ * 结果写 $state 与 documentElement CSS 变量（--ot-inset-top/left/right）。
  */
 export function startOverlay(): void {
   if (started) return;
@@ -38,10 +40,12 @@ export function startOverlay(): void {
       update: (insets, dragEnabled) => {
         overlay.insetTop = insets.top;
         overlay.insetLeft = insets.left;
+        overlay.insetRight = insets.right;
         overlay.dragEnabled = dragEnabled;
       },
     },
     cssVars: document.documentElement.style,
+    viewportWidth: () => window.innerWidth,
   }).then((stop) => {
     detach = stop;
   });
