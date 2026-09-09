@@ -1,0 +1,367 @@
+/**
+ * scroll-run.css — THE ONE scroll-run law sheet (registry/files/ui/
+ * scroll-run/scroll-run.css, Owner 2026-09-04 — "统一成一套"). Every
+ * scrollable region rides these rules + scroll-run.svelte.ts; the
+ * consumers keep only their own tuning (band-width values, snap, their
+ * ramp audiences) as overrides on top.
+ *
+ * THE CONTRACT (the tabs scroll contract, 2026-09-01, carried through
+ * button-group's acceptance rulings 2026-09-04; round 2 the same day:
+ * the vertical axis, the merged ramp() toggles, the logical chip
+ * edges; round 3: four PHYSICAL glyph slots, in-board centered chips,
+ * chrome-owned ramp magnitudes):
+ *  - THE RUN: the scroller IS the content element (data-jx-scroll-run
+ *    + data-axis 'horizontal' | 'vertical') — hidden scrollbar, smooth
+ *    travel, scroll-padding keeping a focused member clear of the
+ *    veil lanes (inline lane horizontal, block lane vertical);
+ *    position: relative is LOAD-BEARING (the run is the offsetParent
+ *    its members' offsetLeft/offsetTop measure against). NO SNAP by
+ *    default — snap yanks releases to member-flush positions where
+ *    nothing clips and the edge treatments pop off (a consumer opt-in
+ *    adds its own).
+ *  - THE HOST: a one-cell grid wrapper (consumer markup) stacking the
+ *    run (grid-area 1/1), the veil layer (z 1) and the chevron chips
+ *    (z 2) in the same cell — grid + z-index only, never position:*.
+ *    The shared var family (--jx-scroll-*) rides the .jx-scroll-host
+ *    class (custom properties inherit downward only — the overlays
+ *    are the run's siblings).
+ *  - THE CHIPS: FROSTED EDGE CHIPS — inset·1.5 square, IN-BOARD
+ *    (flush against the edge the chip serves, no overhang) and
+ *    CENTERED on the cross axis; translucent white ink
+ *    (theme-independent — the frost carries the adaptation), the
+ *    glyph as the chip's own background layer; a soft 1px-offset
+ *    lift. The edges are LOGICAL (start/end) and the run's data-axis
+ *    places them — inline edges on a horizontal run, block edges on
+ *    a vertical one — while the GLYPHS are four PHYSICAL slots
+ *    (--jx-scroll-chevron-left/right/up/down, the customization
+ *    surface: axis + edge + direction pick the slot; RTL swaps the
+ *    inline pair). Existence keys on the JS-stamped
+ *    data-jx-scroll-state (a direction that cannot travel NEVER
+ *    paints — and a run whose content cannot scroll at all paints
+ *    neither); no verdict — no chrome. A chip with custom CONTENT
+ *    (scroll-chrome.svelte snippet) drops the glyph layer, never the
+ *    frost, the gating or the button law — and the content centers
+ *    in the chip. A chip can be DECLARED disabled (default rendered):
+ *    it does not render AT ALL (scroll-chrome.svelte's conditional) —
+ *    disabled is consumer-declared absence, the verdict stays the
+ *    automatic gate for rendered chips.
+ *  - THE RAMPS: the per-member edge treatments calc from the
+ *    machine's --jx-edge-start/end stamps, consumed SQUARED (a light
+ *    sliver barely treats, a deep clip ramps to full — actions stay
+ *    readable where labels may melt). ONE builder (ramp), THREE
+ *    independent toggles stamped as data-ramp-* presence flags by
+ *    ScrollChrome — a treatment turned off never pays its property:
+ *    blur off is REALLY filter-less (the old slide-is-cheapest law
+ *    survives as ramp({ blur: false })).
+ *  - THE VEILS: the merged veil layer (one grid item, overflow clip)
+ *    holding both edge veils; each ENTERS by scroll-driven translate
+ *    over the outer 15% of travel along the run's axis (the host's
+ *    --jx-scroll-progress is the clock). shadow = the separator INK
+ *    law's contrast bands; progressBlur = the ProgressiveBlur ladder
+ *    (scroll-chrome.svelte; EITHER axis — inline edges start/end on a
+ *    horizontal run, block edges top/bottom on a vertical one, the
+ *    component's grid dialect).
+ *
+ * Everything rides @layer components behind :where() — zero
+ * specificity, consumer utilities always win; the veil gates sit
+ * UNLAYERED (cascade law: the layer's own grid utility beats a
+ * layered display:none).
+ */
+@layer theme, base, components, utilities;
+
+@layer components {
+  /* the run IS the scroller */
+  :where([data-jx-scroll-run][data-axis='horizontal']) {
+    grid-area: 1 / 1;
+    position: relative;
+    overflow-x: auto;
+    scrollbar-width: none;
+    scroll-padding-inline: calc(var(--jx-inset) * 1.5);
+    scroll-behavior: smooth;
+  }
+  :where([data-jx-scroll-run][data-axis='vertical']) {
+    grid-area: 1 / 1;
+    position: relative;
+    overflow-y: auto;
+    scrollbar-width: none;
+    scroll-padding-block: calc(var(--jx-inset) * 1.5);
+    scroll-behavior: smooth;
+  }
+  :where([data-jx-scroll-run])::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* the host's shared var family: FOUR chip glyphs — one per PHYSICAL
+   * direction (left/right/up/down), the four customization slots
+   * (Owner round 3, 2026-09-04: one glyph rotated four ways saves
+   * nothing once customization opens — a consumer swaps any ONE arrow
+   * without touching the other three; the run's data-axis + the
+   * chip's logical edge + the page direction pick which slot paints).
+   * LUCIDE chevron geometry, stroke 2. Plus the chip ink, the glyph
+   * size (14px = the SVG's 24-unit canvas; the ink spans the middle
+   * half, un-clipped in the smaller chip), and the veil width (the
+   * restraint default; consumers override the VALUE, not the name —
+   * tabs rides inset·6) */
+  :where(.jx-scroll-host) {
+    --jx-scroll-chevron-left: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Cpath d='m15 18-6-6 6-6'/%3E%3C/svg%3E");
+    --jx-scroll-chevron-right: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E");
+    --jx-scroll-chevron-up: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Cpath d='m18 15-6-6-6 6'/%3E%3C/svg%3E");
+    --jx-scroll-chevron-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --jx-scroll-chevron-size: 14px;
+    --jx-scroll-chevron-chip: oklab(1 0 0 / 0.8);
+    --jx-scroll-chevron-chip-hover: oklab(1 0 0 / 0.95);
+    --jx-scroll-veil: calc(var(--jx-inset) * 1.5);
+  }
+
+  /* the chips: FROSTED EDGE CHIPS (the Owner's reference law,
+   * variable-ized; round 3: the chips sit IN-BOARD — flush against
+   * the edge they serve, CENTERED on the cross axis, the glyph
+   * centered in the chip; the old half-out tuck retired with it).
+   * Placement is css — everything here rides :where() (zero
+   * specificity), so a consumer re-places a chip with its own rule on
+   * the chip attr (or re-tucks it against the edge). The chip is its
+   * own affordance — the cursor signals it and hover CONFIRMS it
+   * (Owner round 10, the retired-hover era ends); the fade near a
+   * closed boundary rides the host's progress var (axis-normalized by
+   * the machine) */
+  :where([data-jx-scroll-chevron='start']),
+  :where([data-jx-scroll-chevron='end']) {
+    grid-area: 1 / 1;
+    z-index: 2;
+    align-self: center;
+    justify-self: center;
+    inline-size: calc(var(--jx-inset) * 1.5);
+    block-size: calc(var(--jx-inset) * 1.5);
+    border: 0;
+    padding: 0;
+    appearance: none;
+    background-color: var(--jx-scroll-chevron-chip);
+    background-position: center;
+    background-size: var(--jx-scroll-chevron-size);
+    background-repeat: no-repeat;
+    box-shadow: 1px 1px 2px hsl(0 0% 0% / 0.2);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    cursor: pointer;
+    opacity: min(1, calc(var(--jx-scroll-progress, 0) / 0.15));
+    /* only the hover pair transitions — the fade is scroll-driven
+     * (animating opacity here would fight the progress clock) */
+    transition: background-color 120ms ease-out, box-shadow 120ms ease-out;
+  }
+  /* hover CONFIRMS the affordance (Owner round 10): the frost raises
+   * toward opaque — a hair of translucency stays so the backdrop blur
+   * still reads — and the lift deepens; the ink is a host var, the
+   * same swap-the-VALUE law as the resting frost */
+  :where([data-jx-scroll-chevron]:hover) {
+    background-color: var(--jx-scroll-chevron-chip-hover);
+    box-shadow: 2px 2px 6px hsl(0 0% 0% / 0.3);
+  }
+  /* the horizontal placement: each chip flush against its inline edge
+   * (IN-BOARD — the glyph stays fully visible), vertically centered;
+   * the direction glyphs are the left/right slots */
+  :where([data-jx-scroll-chevron='start']) {
+    justify-self: start;
+    background-image: var(--jx-scroll-chevron-left);
+  }
+  :where([data-jx-scroll-chevron='end']) {
+    justify-self: end;
+    background-image: var(--jx-scroll-chevron-right);
+    opacity: min(1, calc((1 - var(--jx-scroll-progress, 0)) / 0.15));
+  }
+  /* RTL physicality: the edges are LOGICAL — inline-start is the
+   * right edge under rtl, so the start chip paints the RIGHT arrow
+   * (and the end chip the left); the block axis never flips */
+  :dir(rtl) :where([data-jx-scroll-chevron='start']) {
+    background-image: var(--jx-scroll-chevron-right);
+  }
+  :dir(rtl) :where([data-jx-scroll-chevron='end']) {
+    background-image: var(--jx-scroll-chevron-left);
+  }
+  /* the vertical placement: the same logical chips flush against the
+   * BLOCK edges — horizontally CENTERED (the round-3 ruling: centered
+   * is the default lane, an override re-places); the direction glyphs
+   * are the up/down slots. The WHOLE compound rides :where() (the
+   * axis funnel included) — a :has() left OUTSIDE :where() would
+   * out-specify the custom-content rule below and paint the default
+   * glyph UNDER snippet content (the double-icon bug, caught live) */
+  :where(.jx-scroll-host:has(> [data-jx-scroll-run][data-axis='vertical'])
+    > [data-jx-scroll-chevron='start']) {
+    align-self: start;
+    justify-self: center;
+    background-image: var(--jx-scroll-chevron-up);
+  }
+  :where(.jx-scroll-host:has(> [data-jx-scroll-run][data-axis='vertical'])
+    > [data-jx-scroll-chevron='end']) {
+    align-self: end;
+    justify-self: center;
+    background-image: var(--jx-scroll-chevron-down);
+  }
+  /* custom chip CONTENT (scroll-chrome.svelte snippet): the glyph
+   * layer retires, the frost + shape + gating + button law stay — and
+   * the content centers in the chip (the glyph layer centers by
+   * background-position; snippet content needs the box law) */
+  :where([data-jx-scroll-chevron][data-jx-scroll-chip-content]) {
+    display: grid;
+    place-items: center;
+    background-image: none;
+  }
+
+  /* the scrollability verdict is the single truth: a direction that
+   * cannot travel NEVER paints its chip, and a run that cannot
+   * scroll at all paints neither */
+  :where(.jx-scroll-host):has(> [data-jx-scroll-run][data-jx-scroll-state='none']) > :where([data-jx-scroll-chevron]),
+  :where(.jx-scroll-host):has(> [data-jx-scroll-run][data-jx-scroll-state='start-closed']) > [data-jx-scroll-chevron='start'],
+  :where(.jx-scroll-host):has(> [data-jx-scroll-run][data-jx-scroll-state='end-closed']) > [data-jx-scroll-chevron='end'] {
+    display: none;
+  }
+  /* pre-hydration: no verdict — and without JS at all — no chip
+   * paints and neither is a click target */
+  :where(.jx-scroll-host):has(> [data-jx-scroll-run]:not([data-jx-scroll-state])) > :where([data-jx-scroll-chevron]) {
+    display: none;
+    pointer-events: none;
+  }
+
+  /* the per-member ramps: the machine's edge stamps, consumed SQUARED
+   * (the eased curve — light clips barely treat, deep clips ramp to
+   * full). ONE effect type ('ramp'), THREE independent toggles — each
+   * property keys its OWN data-ramp-* presence flag (stamped by
+   * ScrollChrome), so a treatment turned off never pays its property:
+   * blur off really is filter-less */
+  :where([data-jx-scroll-run][data-scroll-effect='ramp'][data-ramp-opacity]) > * {
+    opacity: calc(1 - max(var(--jx-edge-start, 0), var(--jx-edge-end, 0)) * max(var(--jx-edge-start, 0), var(--jx-edge-end, 0)));
+  }
+  :where([data-jx-scroll-run][data-scroll-effect='ramp'][data-ramp-blur]) > * {
+    filter: blur(calc(max(var(--jx-edge-start, 0), var(--jx-edge-end, 0)) * max(var(--jx-edge-start, 0), var(--jx-edge-end, 0)) * var(--jx-scroll-edge-blur, 0px)));
+  }
+  :where([data-jx-scroll-run][data-scroll-effect='ramp'][data-ramp-translate]) > * {
+    translate: calc((var(--jx-edge-end, 0) - var(--jx-edge-start, 0)) * max(var(--jx-edge-start, 0), var(--jx-edge-end, 0)) * var(--jx-scroll-edge-slide, 0px)) 0;
+  }
+  /* the vertical ramp translates along the BLOCK axis */
+  :where([data-jx-scroll-run][data-scroll-effect='ramp'][data-ramp-translate][data-axis='vertical']) > * {
+    translate: 0 calc((var(--jx-edge-end, 0) - var(--jx-edge-start, 0)) * max(var(--jx-edge-start, 0), var(--jx-edge-end, 0)) * var(--jx-scroll-edge-slide, 0px));
+  }
+
+  /* the merged veil layer (z 1, under the chips): ONE grid item
+   * clipping both edge veils; overflow: clip is LOAD-BEARING — it
+   * veils ENTER by scroll-driven translate, sliding in from outside
+   * their own edge (start slides in from -100% over the first 15% of
+   * travel, end slides out to +100% over the last 15%) */
+  :where(.jx-scroll-veil-layer) {
+    z-index: 1;
+    overflow: clip;
+  }
+  :where(.jx-scroll-veil-layer) > :where(.jx-scroll-veil)[data-position='start'] {
+    translate: calc((1 - min(1, var(--jx-scroll-progress, 0) / 0.15)) * -100%) 0;
+  }
+  :where(.jx-scroll-veil-layer) > :where(.jx-scroll-veil)[data-position='end'] {
+    translate: calc(max(0, (var(--jx-scroll-progress, 0) - 0.85) / 0.15) * 100%) 0;
+  }
+  /* the vertical veil entrance slides along the BLOCK axis (the
+   * layer is the run's sibling — the axis rides a :has on the host,
+   * the same funnel the verdict gates use). The ladder's block-edge
+   * bands stamp data-position top/bottom (the component's grid
+   * dialect) — they ride the same entrance law as the shadow pair's
+   * start/end */
+  :where(.jx-scroll-host):has(> [data-jx-scroll-run][data-axis='vertical'])
+    > :where(.jx-scroll-veil-layer) > :where(.jx-scroll-veil)[data-position='start'],
+  :where(.jx-scroll-host):has(> [data-jx-scroll-run][data-axis='vertical'])
+    > :where(.jx-scroll-veil-layer) > :where(.jx-scroll-veil)[data-position='top'] {
+    translate: 0 calc((1 - min(1, var(--jx-scroll-progress, 0) / 0.15)) * -100%);
+  }
+  :where(.jx-scroll-host):has(> [data-jx-scroll-run][data-axis='vertical'])
+    > :where(.jx-scroll-veil-layer) > :where(.jx-scroll-veil)[data-position='end'],
+  :where(.jx-scroll-host):has(> [data-jx-scroll-run][data-axis='vertical'])
+    > :where(.jx-scroll-veil-layer) > :where(.jx-scroll-veil)[data-position='bottom'] {
+    translate: 0 calc(max(0, (var(--jx-scroll-progress, 0) - 0.85) / 0.15) * 100%);
+  }
+  /* RTL physicality: the positions are LOGICAL — the entrance signs
+   * flip with the direction on the INLINE axis (the machine's stamps
+   * are already direction-normalized; these are the css halves; the
+   * block axis never flips) */
+  :dir(rtl) :where(.jx-scroll-veil-layer) > :where(.jx-scroll-veil)[data-position='start'] {
+    translate: calc((1 - min(1, var(--jx-scroll-progress, 0) / 0.15)) * 100%) 0;
+  }
+  :dir(rtl) :where(.jx-scroll-veil-layer) > :where(.jx-scroll-veil)[data-position='end'] {
+    translate: calc(max(0, (var(--jx-scroll-progress, 0) - 0.85) / 0.15) * -100%) 0;
+  }
+  /* the SHADOW veil — the separator's INK law as an edge treatment: a
+   * shade veil NEVER adds black; backdrop-filter contrast() subtracts
+   * color toward mid tone (near-white dims, near-black lifts — dark
+   * mode reverses itself, zero color tokens). One band per edge, the
+   * mask ramp shapes it */
+  :where(.jx-scroll-shadow) {
+    width: var(--jx-scroll-veil);
+    backdrop-filter: contrast(0.5);
+    -webkit-backdrop-filter: contrast(0.5);
+  }
+  :where(.jx-scroll-shadow)[data-position='start'] {
+    justify-self: start;
+    mask: linear-gradient(to left, transparent, rgb(0, 0, 0));
+    -webkit-mask-image: linear-gradient(to left, transparent, rgb(0, 0, 0));
+  }
+  :where(.jx-scroll-shadow)[data-position='end'] {
+    justify-self: end;
+    mask: linear-gradient(to right, transparent, rgb(0, 0, 0));
+    -webkit-mask-image: linear-gradient(to right, transparent, rgb(0, 0, 0));
+  }
+  /* the vertical shadow bands: full inline width against the block
+   * edges, the mask ramps re-aimed, the grid placement re-aimed —
+   * justify-self STRETCH is load-bearing (the horizontal rules above
+   * match these bands too and their start/end would collapse the
+   * auto width to 0; the earned (0,2,0) wins order-independently) */
+  :where(.jx-scroll-host):has(> [data-jx-scroll-run][data-axis='vertical'])
+    > :where(.jx-scroll-veil-layer) > :where(.jx-scroll-shadow) {
+    width: auto;
+    height: var(--jx-scroll-veil);
+    justify-self: stretch;
+  }
+  :where(.jx-scroll-host):has(> [data-jx-scroll-run][data-axis='vertical'])
+    > :where(.jx-scroll-veil-layer) > .jx-scroll-shadow[data-position='start'] {
+    align-self: start;
+    mask: linear-gradient(to top, transparent, rgb(0, 0, 0));
+    -webkit-mask-image: linear-gradient(to top, transparent, rgb(0, 0, 0));
+  }
+  :where(.jx-scroll-host):has(> [data-jx-scroll-run][data-axis='vertical'])
+    > :where(.jx-scroll-veil-layer) > .jx-scroll-shadow[data-position='end'] {
+    align-self: end;
+    mask: linear-gradient(to bottom, transparent, rgb(0, 0, 0));
+    -webkit-mask-image: linear-gradient(to bottom, transparent, rgb(0, 0, 0));
+  }
+  :dir(rtl) :where(.jx-scroll-shadow)[data-position='start'] {
+    mask: linear-gradient(to right, transparent, rgb(0, 0, 0));
+    -webkit-mask-image: linear-gradient(to right, transparent, rgb(0, 0, 0));
+  }
+  :dir(rtl) :where(.jx-scroll-shadow)[data-position='end'] {
+    mask: linear-gradient(to left, transparent, rgb(0, 0, 0));
+    -webkit-mask-image: linear-gradient(to left, transparent, rgb(0, 0, 0));
+  }
+}
+
+/* reduced motion (the unification carried it from tabs' sheet): the
+   edge treatments' translate is exactly the motion the preference
+   suppresses; blur + opacity stay (not vestibular). The veil entrance
+   translate dies too — the veils rest in place — but a resting veil
+   only paints where travel can reach: translate:none would park a
+   CLOSED edge's veil in place (the entrance that would have carried
+   it out is suppressed), so the closed edge hides outright (the same
+   display gate the chips use) */
+@media (prefers-reduced-motion: reduce) {
+  :where([data-jx-scroll-run][data-scroll-effect]) > *,
+  :where(.jx-scroll-veil-layer) > :where(.jx-scroll-veil) {
+    translate: none;
+  }
+  :where(.jx-scroll-host):has(> [data-jx-scroll-run][data-jx-scroll-state='start-closed']) > :where(.jx-scroll-veil-layer) > :where([data-position='start']),
+  :where(.jx-scroll-host):has(> [data-jx-scroll-run][data-jx-scroll-state='end-closed']) > :where(.jx-scroll-veil-layer) > :where([data-position='end']) {
+    display: none;
+  }
+}
+
+/* the veil-layer gates are UNLAYERED on purpose (cascade law): the
+   layer's own `grid` utility rides @layer utilities, which BEATS this
+   sheet's @layer components — a layered display:none never wins. A
+   run that cannot scroll shows no veils; no verdict (pre-stamp, or no
+   JS at all) shows none either */
+:where(.jx-scroll-host):has(> [data-jx-scroll-run][data-jx-scroll-state='none']) > :where(.jx-scroll-veil-layer),
+:where(.jx-scroll-host):has(> [data-jx-scroll-run]:not([data-jx-scroll-state])) > :where(.jx-scroll-veil-layer) {
+  display: none;
+}

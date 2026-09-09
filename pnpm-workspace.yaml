@@ -1,4 +1,8 @@
+# 仓库根即引擎包（name: ai-fly 不动），webui 为独立 workspace 成员（A1）。
+packages:
+  - .
+  - webui
 allowBuilds:
-  esbuild: set this to true or false
+  esbuild: true
 onlyBuiltDependencies:
   - esbuild

@@ -1,0 +1,158 @@
+@layer theme, base, components, utilities;
+
+@layer components {
+/* jixoai progressive blur — D1-exempt residue (2026-08-25): the reveal
+ * law only, :where()-wrapped per the css-architecture layer law.
+ * Opacity animates on EACH LAYER, never the sticky root — an
+ * opacity<1 ancestor becomes a backdrop root and the layers would
+ * sample nothing beneath themselves (the classic backdrop-filter
+ * killer). The timeline is the CSS scroll() of the nearest scroller:
+ * top edges ramp in over the first --jx-pblur-ramp of scroll, bottom
+ * edges ramp out over the last (there is content beneath a bottom edge
+ * until the scroller approaches its end). Engines without scroll
+ * timelines keep the authored opacity 0 → data-variant='scroll'
+ * degrades to NO effect (never a wrongly-painted band); the static
+ * variant never touches this law at all. The authored opacity 0 is
+ * gated to BLOCK-axis edges only (B-5, 2026-09-02): the @supports
+ * revival covers just top/bottom — the scroll() timeline has no
+ * inline aim — so an ungated base rule left INLINE bands permanently
+ * invisible; inline edges now degrade to the always-painted static
+ * law instead. The attribute is data-VARIANT on purpose: bare
+ * [data-reveal] belongs to the docs site's entrance system — the
+ * collision once pinned the band ~10px off the clip edge via a
+ * view()-timeline transform. */
+:where(.jx-pblur[data-variant='scroll'][data-position='top']) .jx-pblur-layer,
+:where(.jx-pblur[data-variant='scroll'][data-position='bottom']) .jx-pblur-layer {
+  opacity: 0;
+}
+@supports (animation-timeline: scroll()) {
+  /* THE TIMELINE SEAM (2026-09-05): an OVERLAY band (grid dialect,
+     block edges) sits BESIDE its scroller — a sibling, not a
+     descendant — so scroll(nearest) cannot see it. The consumer
+     bridges: scroll-timeline-name on the scroller, timeline-scope on
+     the common host, and --jx-pblur-scroll-tl (set on the band)
+     retargets the ladder to the named timeline. Unset, the seam
+     falls back to the in-scroller default */
+  :where(.jx-pblur[data-variant='scroll'][data-position='top']) .jx-pblur-layer {
+    animation: jx-pblur-reveal linear both;
+    animation-timeline: var(--jx-pblur-scroll-tl, scroll(nearest block));
+    animation-range: 0px var(--jx-pblur-ramp, 72px);
+  }
+  :where(.jx-pblur[data-variant='scroll'][data-position='bottom']) .jx-pblur-layer {
+    animation: jx-pblur-reveal linear both;
+    animation-timeline: var(--jx-pblur-scroll-tl, scroll(nearest block));
+    animation-range: calc(100% - var(--jx-pblur-ramp, 72px)) 100%;
+  }
+}
+@keyframes jx-pblur-reveal {
+  to {
+    opacity: 1;
+  }
+}
+
+/* the ladder masks (CR-1 P2-1, 2026-09-02): DIRECTION lives here, not
+   in the component's inline strings — the inline style supplies only
+   the stop data (--jx-pblur-s0..s3 + the tail alpha), because css
+   gradients have no logical 'to start' and the component is
+   direction-blind. The four-stop shape: transparent at the band's
+   inboard start, opaque through the layer's rung, then the tail
+   (alpha 0 fades out; alpha 1 holds the peak through the outer lane
+   — the hold dialect). The inline pair flips its physical aim under
+   :dir(rtl); the block pair never mirrors. */
+:where([data-jx-pblur][data-position='top']) .jx-pblur-layer {
+  -webkit-mask-image: linear-gradient(
+    to top,
+    transparent var(--jx-pblur-s0),
+    rgb(0 0 0) var(--jx-pblur-s1),
+    rgb(0 0 0) var(--jx-pblur-s2),
+    rgb(0 0 0 / var(--jx-pblur-tail-a, 0)) var(--jx-pblur-s3)
+  );
+  mask-image: linear-gradient(
+    to top,
+    transparent var(--jx-pblur-s0),
+    rgb(0 0 0) var(--jx-pblur-s1),
+    rgb(0 0 0) var(--jx-pblur-s2),
+    rgb(0 0 0 / var(--jx-pblur-tail-a, 0)) var(--jx-pblur-s3)
+  );
+}
+:where([data-jx-pblur][data-position='bottom']) .jx-pblur-layer {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent var(--jx-pblur-s0),
+    rgb(0 0 0) var(--jx-pblur-s1),
+    rgb(0 0 0) var(--jx-pblur-s2),
+    rgb(0 0 0 / var(--jx-pblur-tail-a, 0)) var(--jx-pblur-s3)
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent var(--jx-pblur-s0),
+    rgb(0 0 0) var(--jx-pblur-s1),
+    rgb(0 0 0) var(--jx-pblur-s2),
+    rgb(0 0 0 / var(--jx-pblur-tail-a, 0)) var(--jx-pblur-s3)
+  );
+}
+:where([data-jx-pblur][data-position='start']) .jx-pblur-layer {
+  -webkit-mask-image: linear-gradient(
+    to left,
+    transparent var(--jx-pblur-s0),
+    rgb(0 0 0) var(--jx-pblur-s1),
+    rgb(0 0 0) var(--jx-pblur-s2),
+    rgb(0 0 0 / var(--jx-pblur-tail-a, 0)) var(--jx-pblur-s3)
+  );
+  mask-image: linear-gradient(
+    to left,
+    transparent var(--jx-pblur-s0),
+    rgb(0 0 0) var(--jx-pblur-s1),
+    rgb(0 0 0) var(--jx-pblur-s2),
+    rgb(0 0 0 / var(--jx-pblur-tail-a, 0)) var(--jx-pblur-s3)
+  );
+}
+:where([data-jx-pblur][data-position='end']) .jx-pblur-layer {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent var(--jx-pblur-s0),
+    rgb(0 0 0) var(--jx-pblur-s1),
+    rgb(0 0 0) var(--jx-pblur-s2),
+    rgb(0 0 0 / var(--jx-pblur-tail-a, 0)) var(--jx-pblur-s3)
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent var(--jx-pblur-s0),
+    rgb(0 0 0) var(--jx-pblur-s1),
+    rgb(0 0 0) var(--jx-pblur-s2),
+    rgb(0 0 0 / var(--jx-pblur-tail-a, 0)) var(--jx-pblur-s3)
+  );
+}
+:dir(rtl) :where([data-jx-pblur][data-position='start']) .jx-pblur-layer {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent var(--jx-pblur-s0),
+    rgb(0 0 0) var(--jx-pblur-s1),
+    rgb(0 0 0) var(--jx-pblur-s2),
+    rgb(0 0 0 / var(--jx-pblur-tail-a, 0)) var(--jx-pblur-s3)
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent var(--jx-pblur-s0),
+    rgb(0 0 0) var(--jx-pblur-s1),
+    rgb(0 0 0) var(--jx-pblur-s2),
+    rgb(0 0 0 / var(--jx-pblur-tail-a, 0)) var(--jx-pblur-s3)
+  );
+}
+:dir(rtl) :where([data-jx-pblur][data-position='end']) .jx-pblur-layer {
+  -webkit-mask-image: linear-gradient(
+    to left,
+    transparent var(--jx-pblur-s0),
+    rgb(0 0 0) var(--jx-pblur-s1),
+    rgb(0 0 0) var(--jx-pblur-s2),
+    rgb(0 0 0 / var(--jx-pblur-tail-a, 0)) var(--jx-pblur-s3)
+  );
+  mask-image: linear-gradient(
+    to left,
+    transparent var(--jx-pblur-s0),
+    rgb(0 0 0) var(--jx-pblur-s1),
+    rgb(0 0 0) var(--jx-pblur-s2),
+    rgb(0 0 0 / var(--jx-pblur-tail-a, 0)) var(--jx-pblur-s3)
+  );
+}
+}

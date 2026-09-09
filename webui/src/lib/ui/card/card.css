@@ -1,0 +1,164 @@
+@layer theme, base, components, utilities;
+
+/* jixoai card css — THE STRUCTURAL SURFACE (Owner, 2026-09-03): the
+ * dialog ruler's structural clone with ONE hard divergence — INTEGER
+ * cell placement, never dialog's NAMED rows. The card is born to live
+ * inside card-grid's SUBGRID, and a wrapped band rents IMPLICIT rows
+ * where line names don't resolve (the 2026-09-03 rev.1 lesson: named
+ * zones collapsed onto one another); integer lines resolve in every
+ * context — standalone (this template) and every rented band.
+ *
+ *   row 1  head zone + the head separator pinned to its bottom edge
+ *   row 2  body zone — THE ONLY SCROLL TRACK (the r14-3 clone)
+ *   row 3  foot zone + the foot separator pinned to its top edge
+ *
+ * THE INLINE RULER (Owner, 2026-09-03 r2: "jx-card-foot-start 这里
+ * 如果要放文字，是要有 padding 的…buttons 在内部使用了 padding…
+ * 升级成 grid+subgrid"): the root owns FIVE named column tracks and
+ * the head/foot zones RENT them via subgrid — the same tenancy law
+ * the card itself obeys inside card-grid, applied to its own inline
+ * axis. Passive content (title rows, foot text) ENTERS at the content
+ * lines and gets the card inset BY TRACK; interactive clusters (the
+ * head actions slot, the footer ButtonGroup) SPAN across the inset
+ * track to ride the card edge flush — their buttons carry the rhythm
+ * internally (dialog's footer buttons: 40px tall, padding 0 12px).
+ * One vertical content axis for the whole card, expressed struct-
+ * ally — never as padding utilities copied per face:
+ *
+ *   [card-inline-start] 0.875rem    the start inset (text axis)
+ *   [card-content-start] auto       the inline-start seat
+ *   [card-fill] minmax(0.625rem,1fr) the flexible middle — its floor
+ *                                    IS the old foot grid's 10px
+ *                                    column-gap, as a track minimum
+ *   [card-content-end] auto         the inline-end seat
+ *   [card-inline-end] 0.875rem      the end inset (text axis)
+ *
+ * The BODY zone does not rent: it spans full-bleed so its scroll
+ * ring keeps dialog's verbatim gutter-compensating cell padding (a
+ * dynamic scrollbar width is invisible to tracks — the ring owns
+ * its inline geometry). Zones keep the INTEGER row placement and
+ * the separators keep EDGE-RIDING their rows (align-self end/start)
+ * — same paint position as the retired borders, zero extra shared
+ * rows for a subgrid landlord to rent. Absent zones never render;
+ * the stamps stay honest (the stamped-attribute painting law).
+ *
+ * THE CROSS-ROW SHARING LAW (measured live, 2026-09-03): tracks are
+ * shared by EVERY row — the end-seat track sizes to its widest
+ * resident across rows (the head actions slot OR the foot cluster),
+ * like a table's last column; a headless-foot cluster still widens
+ * the head row's line 4 (measured: a 115px cluster leaked into the
+ * title face's wrap width). Consequences, by law: content-axis
+ * seats END at card-inline-end (the end INSET line — never at
+ * card-content-end, which the shared column can push outward);
+ * edge-riders SPAN to -1 with justify-self: end (the corner is
+ * theirs regardless of the column's width); the title face stops at
+ * card-content-end (dialog-parity: the title reserves the end
+ * column, like dialog's title reserves its × slot). */
+@layer components {
+  :where([data-jx-card]) {
+    display: grid;
+    grid-template-columns:
+      [card-inline-start] 0.875rem
+      [card-content-start] auto
+      [card-fill] minmax(0.625rem, 1fr)
+      [card-content-end] auto
+      [card-inline-end] 0.875rem;
+    /* THE BODY ROW IS THE ABSORBER (dialog's ruler verbatim: [body]
+       minmax(0,1fr)) — a stretched card (any equal-height context)
+       gives its slack to the BODY, never to the bands: grid's
+       default align-content stretch over all-auto rows would smear
+       it across every band instead (measured: +5.33 per row). An
+       unconstrained card keeps its natural height — the fr row
+       falls back to content. In card-grid the rows are RENTED and
+       this template stands down (the > * subgrid rule overrides) */
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    /* the reversal container lives on the ROOT — never on a tenant:
+       container-type on a subgrid tenant breaks Chromium's rented-
+       track resolution (measured live, 2026-09-03). In-grid cards
+       retire it below; card-grid's 320px floor keeps them above the
+       reversal width anyway */
+    container: jx-card / inline-size;
+  }
+  /* THE TENANCY GUARD: inside card-grid the root IS a subgrid tenant
+     (rows) — a container-type on it broke the rented rows. The
+     container retires exactly there; standalone cards keep it. */
+  :where(.jx-card-grid) > :where([data-jx-card]) {
+    container-type: normal;
+  }
+
+  /* ── the zones: integer rows, full inline span; head/foot rent ── */
+  :where([data-jx-card-head]) {
+    grid-row: 1;
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+    align-items: start;
+  }
+  :where([data-jx-card-sep='head']) {
+    grid-row: 1;
+    grid-column: 1 / -1;
+    align-self: end;
+  }
+  /* THE SCROLL LAW, GRID-TENANT EDITION: the card never scrolls —
+     but unlike dialog (whose ruler never rents foreign rows), the
+     card's body ZONE is a row tenant of card-grid. TWO measured laws
+     (2026-09-03, live on the docs page): (1) a scroll-container ZONE
+     collapses its rented fr row to zero (the engine relays the
+     scrollable min, not the content max) — so the ZONE is a plain
+     track occupant and the CELL is the ring; (2) an explicit
+     min-height: 0 on the zone collapses the row EVEN with a plain
+     cell — the automatic minimum (scrollable descendant ⇒ min
+     contribution already 0) is what keeps the relay honest while
+     still letting a constrained card shrink the zone. Never write
+     min-height: 0 here. max-height: 100% on the cell is inert while
+     the zone is content-sized, and clamps to scroll exactly when a
+     max-height-capped card clamps the zone. The zone spans FULL
+     BLEED (no rental): the scroll ring owns its inline geometry —
+     a dynamic scrollbar width is invisible to tracks */
+  :where([data-jx-card-body]) {
+    grid-row: 2;
+    grid-column: 1 / -1;
+  }
+  :where([data-jx-card-cell]) {
+    max-height: 100%;
+    overflow-y: auto;
+    scrollbar-gutter: stable both-edges;
+  }
+  /* THE DECLARED NON-SCROLLER (the r14-15 clone): scroll={false}
+     asserts the body fits — the scroll authority and the gutter
+     reservation retire TOGETHER (the gutter exists only FOR the
+     scrollbar; mis-declared overflow paints out honestly) */
+  :where([data-jx-card-body][data-jx-scroll='off']) :where([data-jx-card-cell]) {
+    max-height: none;
+    overflow-y: visible;
+    scrollbar-gutter: auto;
+  }
+  :where([data-jx-card-foot]) {
+    grid-row: 3;
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+    align-items: center;
+  }
+  :where([data-jx-card-sep='foot']) {
+    grid-row: 3;
+    grid-column: 1 / -1;
+    align-self: start;
+  }
+
+  /* ── the head seats (the r14 tuning clone, lifted onto the ruler):
+     the content face ENTERS at the content lines — its inline inset
+     is the ruler's inset track, not a utility; it keeps only its
+     block rhythm (py-2.5 in the markup). The action slot SPANS the
+     end inset track to hug the top-right corner flush — the seat
+     dialog's × occupies when Dialog is refactored onto Card */
+  :where(.jx-card-head-content) {
+    grid-column: card-content-start / card-content-end;
+    min-inline-size: 0;
+  }
+  :where(.jx-card-end-action-slot) {
+    grid-column: card-content-end / -1;
+    justify-self: end;
+    align-self: start;
+  }
+}

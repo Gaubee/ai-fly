@@ -1,0 +1,214 @@
+@layer theme, base, components, utilities;
+
+/* jixoai color-picker — native rebase (2026-09-01). The lane paint is
+ * token/arbitrary utilities in the markup; the .jx-field scaffold is
+ * consumed from jx-pure Part A. What remains here:
+ *  - the NATIVE FACE builds keyed on the component hooks (the range.css
+ *    precedent): the appearance-none input[type=color] swatch with its
+ *    engine color-swatch pseudos, and the chromeless input[type=text]
+ *    field inside the shell — @layer components;
+ *  - the anchor-positioned panel (static residue: CSS Anchor
+ *    Positioning + anchor-center have no utilities; the closed-state
+ *    display law, the @supports fallback and the ::backdrop pseudo ride
+ *    along) — @layer components;
+ *  - the SV pad's overlay pseudos and the pointer dots' #000 halo
+ *    (white→transparent / black→transparent / #000 are COLOR-SPACE
+ *    constants, not themeable tokens — the exemption is commented at
+ *    each site) — @layer components;
+ *  - the lane's well state machine (F-1 sweep: resting well, hover
+ *    intensity, focus border + caret) and the reduced-motion kill
+ *    (unlayered carve-out per the Part A precedent). */
+
+@layer components {
+  :where(.jx-color-picker-trigger) {
+    min-block-size: var(--jx-color-lane);
+    gap: var(--jx-gap);
+    padding-block: calc((var(--jx-color-lane) - var(--jx-line)) / 2);
+    padding-inline: var(--jx-inset);
+    font-size: var(--jx-text);
+    line-height: var(--jx-line);
+  }
+
+  /* ---- the native swatch: a REAL input[type=color] riding the COLOR
+     LAW face (the .jx-color-swatch conic well chip: round, --jx-hit
+     sized, the current color filling the well). The Owner's rebase
+     (2026-09-02) RETIRES the H1 ruled divergence — the square
+     hand-authored chip — in favor of the 4th mounting surface: the
+     generated projection below re-anchors laws/color.ts onto the
+     component hook, byte-faithful with every other surface (the range
+     precedent). WebKit/Firefox open the ENGINE picker on click — the
+     native path every input mode gets. */
+
+  /* ---- the native face — GENERATED from laws/color.ts (E-1) ------------- */
+  /* @jixoai/css-laws:begin:color-mount — GENERATED, do not edit (source: packages/css-laws/src/laws) */
+@layer components {
+[data-jx-color-picker-swatch]:not(.no-jx-pure, .no-jx-pure *) {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  width: calc(var(--jx-hit, 2.5rem) - 2px);
+  height: auto;
+  align-self: stretch;
+  flex: none;
+  padding: calc(var(--jx-hit, 2.5rem) / 6);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  corner-shape: round;
+  background: conic-gradient(from 0deg, #ff0000 0deg, #ffff00 60deg, #00ff00 120deg, #00ffff 180deg, #0000ff 240deg, #ff00ff 300deg, #ff0000 360deg);
+  cursor: pointer;
+}
+
+[data-jx-color-picker-swatch]:not(.no-jx-pure, .no-jx-pure *)::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+[data-jx-color-picker-swatch]:not(.no-jx-pure, .no-jx-pure *)::-webkit-color-swatch {
+  border: 2px solid #FFF;
+  border-radius: 50%;
+  corner-shape: round;
+}
+
+[data-jx-color-picker-swatch]:not(.no-jx-pure, .no-jx-pure *)::-moz-color-swatch {
+  border: 0;
+  border-radius: 0;
+}
+}
+/* @jixoai/css-laws:end:color-mount */
+
+  /* ---- the native field: a REAL input[type=text] carrying the value.
+     Chromeless inside the shell (the shell owns the box law — the
+     input.svelte lane law); the density text metrics reach the input
+     explicitly because form controls inherit no font. The caret
+     answers focus in the well's ring hue (the control-lane law). */
+  :where([data-jx-color-picker-field]) {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font-size: var(--jx-text);
+    line-height: var(--jx-line);
+    caret-color: var(--primary);
+    outline: none;
+  }
+
+  :where([data-jx-color-picker-swatch]):disabled,
+  :where([data-jx-color-picker-field]):disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* ---- panel: terminal bezel popover (select.svelte law) ---------------
+     bezel surface on the jx-surface law (arch r3): the panel is the
+     PLATFORM element (no paint); the surface body carries the bezel
+     fill, the flex column, and the ::after shadow layer. */
+  :where(.jx-color-picker-panel) {
+    --jx-surface-acrylic-fill: color-mix(in oklab, var(--terminal) 72%, transparent);
+    --jx-surface-solid-fill: var(--terminal);
+    position: fixed;
+    margin: 0;
+    position-try-fallbacks: flip-block;
+    width: 226px; /* 200px pad + 2×12px padding + 2px border */
+    color: var(--terminal-foreground);
+    /* center on the anchor (the panel is wider than the trigger) */
+    justify-self: anchor-center;
+  }
+  /* display:flex on the panel would defeat the UA sheet's closed-popover
+     hiding — closed panels MUST be display:none or they render at their
+     static position and intercept pointer events (found in smoke test) */
+  :where(.jx-color-picker-panel:not(:popover-open)) {
+    display: none;
+  }
+  /* Engines without CSS Anchor Positioning: authored viewport-center */
+  @supports not (anchor-name: --jx-color-picker-fallback) {
+    :where(.jx-color-picker-panel) {
+      position-anchor: auto !important;
+      inset-area: none !important;
+      inset: 0;
+      margin: auto;
+      width: min(92vw, 226px);
+      height: fit-content;
+    }
+  }
+  /* Popovers get a ::backdrop too; light dismiss must never dim the page. */
+  :where(.jx-color-picker-panel)::backdrop {
+    background: transparent;
+  }
+
+  /* ---- SV pad overlays: color-space constants, not theme tokens -------- */
+  :where(.jx-color-picker-sv)::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to right, #fff, transparent);
+  }
+  :where(.jx-color-picker-sv)::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to top, #000, transparent);
+  }
+
+  /* ---- the pointer dots' #000 halo (E-6, 2026-09-02) --------------------
+     COLOR-SPACE CONSTANT, not a themeable token — the same exemption
+     class as the pad overlays above: the halo must read on EVERY hue
+     the pad/rail can sit on, and #000 is the only constant that does.
+     (Moved out of the editor markup's arbitrary-utility shadow.) */
+  :where([data-jx-color-picker-dot]) {
+    box-shadow: 0 0 0 1px #000;
+  }
+}
+
+/* ---- the state machines (unlayered carve-out) ----------------------- */
+/* F-1 well sweep (2026-09-02): the trigger lane is a FILLABLE control —
+   the well tier (the input-law / control-shell ruling): resting
+   --shadow-well; hover deepens the ink (--shadow-well-hover —
+   intensity, not tier); focus answers in border + caret only (the
+   field's caret-color is set in the components block above). The
+   retired hover lift and focus shadow-kill are gone. */
+:where(.jx-color-picker-trigger) {
+  box-shadow: var(--shadow-well);
+  transition: box-shadow 150ms ease-out, border-color 150ms ease-out;
+}
+:where(.jx-color-picker-trigger:hover:not(:has(input:disabled))) {
+  box-shadow: var(--shadow-well-hover);
+}
+/* the site focus law: inset 1px outline on the ring token — the lane
+   reads as ONE field whichever native control inside holds focus; the
+   border tint answers in kind */
+:where(.jx-color-picker-trigger:has(:focus)) {
+  border-color: var(--ring);
+}
+:where(.jx-color-picker-trigger:focus-within) {
+  outline: 1px solid var(--ring);
+  outline-offset: -1px;
+}
+:where(.jx-color-picker-trigger:has([aria-invalid='true'])) {
+  border-style: dashed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(.jx-color-picker-trigger),
+  :where(.jx-color-picker-chevron) {
+    transition: none;
+  }
+}
+
+/* ---- swatches palette cell states (2026-08-28 pure-register fusion):
+   the aria-selected cell wears an inset 2px ring frame (the ring token
+   reads on any fill); hover and focus-visible share the site's inset
+   1px outline law. Unlayered state-machine carve-out, trigger law. */
+:where(.jx-color-picker-swatches) :where([role='gridcell']:hover) {
+  outline: 1px solid var(--ring);
+  outline-offset: -1px;
+}
+:where(.jx-color-picker-swatches) :where([role='gridcell']:focus-visible) {
+  outline: 1px solid var(--ring);
+  outline-offset: -1px;
+}
+:where(.jx-color-picker-swatches) :where([role='gridcell'][aria-selected='true']) {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}

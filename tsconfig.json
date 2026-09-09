@@ -13,7 +13,8 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
-    "declaration": true
+    "declaration": true,
+    "resolveJsonModule": true
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "presets"]
 }

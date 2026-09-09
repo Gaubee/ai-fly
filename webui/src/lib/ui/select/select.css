@@ -1,0 +1,109 @@
+@layer theme, base, components, utilities;
+
+/* jixoai select — D1-exempt residue (tw4, 2026-08-24): the trigger,
+ * rows and scroll ring paint as token utilities in the markup (the
+ * markup-known states — selected/active/disabled rows, the open chevron
+ * flip — ride conditional utilities); the .jx-field scaffold is
+ * consumed from jx-pure Part A. What remains here:
+ *  - the anchor-positioned panel (static residue: CSS Anchor
+ *    Positioning has no utilities; the @supports fallback and the
+ *    ::backdrop pseudo ride along) — @layer components;
+ *  - the hover/focus/disabled state machines (unlayered carve-out per
+ *    the Part A precedent — they override the component's own utility
+ *    paint);
+ *  - the programmatic-focus list's outline kill and the reduced-motion
+ *    kill. */
+
+@layer components {
+  /* ---- panel: terminal bezel dropdown (language-switcher menu law) --
+     bezel surface on the jx-surface law (arch r3): the panel is the
+     PLATFORM element (no paint); the body ring carries the bezel fill
+     (identity in BOTH variants through the fill props cascading from
+     the panel) and the ::after shadow layer. The scroll ring sits
+     inside the body. */
+  :where(.jx-sel-panel) {
+    --jx-surface-acrylic-fill: color-mix(in oklab, var(--terminal) 72%, transparent);
+    --jx-surface-solid-fill: var(--terminal);
+    position: fixed;
+    margin: 0;
+    position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+    width: anchor-size(width); /* exactly the trigger — the select look */
+    max-width: min(92vw, 30rem);
+    color: var(--terminal-foreground);
+  }
+  /* Engines without CSS Anchor Positioning: authored viewport-center —
+     the popover.svelte fallback visual, never worse. */
+  @supports not (anchor-name: --jx-sel-fallback) {
+    :where(.jx-sel-panel) {
+      position-anchor: auto !important;
+      inset-area: none !important;
+      inset: 0;
+      margin: auto;
+      width: min(92vw, 22rem);
+    }
+  }
+  /* Popovers get a ::backdrop too; light dismiss must never dim the page. */
+  :where(.jx-sel-panel)::backdrop {
+    background: transparent;
+  }
+  /* the trigger chevron = an ICON SLOT (B1, ui-plugin-followup): the
+   * glyph span paints currentColor through a mask on --jx-icon-chevron —
+   * the SAME slot the standard layer's jx-html-select reads — so one
+   * face/plugin override re-skins the composite and the native control
+   * together. The fallback URI is the standard layer's chevron-down
+   * (glyph vocabulary stroke-width 2). Sizing/color stay markup
+   * utilities (w-3 h-3 text-muted-foreground); only the mask paint is
+   * static residue utilities cannot express. */
+  :where(.jx-sel-chevron) {
+    display: block;
+    background-color: currentColor;
+    -webkit-mask: var(--jx-icon-chevron, url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")) center / contain no-repeat;
+    mask: var(--jx-icon-chevron, url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")) center / contain no-repeat;
+  }
+}
+
+/* ---- the state machines (unlayered carve-out) ----------------------- */
+/* F-1 well sweep (2026-09-02): the closed trigger is a FILLABLE control
+   — it sits on the well tier (the input-law / control-shell ruling):
+   resting --shadow-well; hover deepens the ink (--shadow-well-hover —
+   intensity, not tier); focus answers in border only (the retired
+   hover lift and the focus shadow-kill are gone; the shadow's
+   hierarchy never moves). */
+:where(.jx-sel-trigger) {
+  box-shadow: var(--shadow-well);
+  transition: box-shadow 150ms ease-out, border-color 150ms ease-out;
+}
+:where(.jx-sel-trigger:hover:not(:disabled)) {
+  box-shadow: var(--shadow-well-hover);
+}
+/* the site focus law: inset 1px outline on the ring token + the border
+   tint answers in kind */
+:where(.jx-sel-trigger:focus-visible) {
+  outline: 1px solid var(--ring);
+  outline-offset: -1px;
+  border-color: var(--ring);
+}
+:where(.jx-sel-trigger:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+:where(.jx-sel-trigger[aria-invalid='true']) {
+  border-style: dashed;
+}
+:where(.jx-sel-option:hover) {
+  background: var(--terminal-hover);
+  color: var(--terminal-foreground);
+}
+/* the list itself is the programmatic focus stop (aria-activedescendant
+   roving pattern) — the highlighted row IS the focus indication */
+:where(.jx-sel-list:focus-visible) {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(.jx-sel-trigger),
+  :where(.jx-sel-chevron),
+  :where(.jx-sel-option) {
+    transition: none;
+  }
+}

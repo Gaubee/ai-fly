@@ -1,0 +1,216 @@
+/**
+ * button-group.css — the hairline seam law (OpenSpec
+ * 2026-08-30-expand-form-family F2) + the r13 upgrades: the ghost
+ * separator seam, the wrap tracks, and the overflow display flips.
+ *
+ * The component-owned residue ONLY (the layout is markup utilities):
+ *
+ *  - THE CLUSTER SHADOW (Owner 2026-09-04): the joined row is ONE
+ *    control → ONE convex shadow on the ROOT — the press law's rest
+ *    pose alone (--shadow-xs, hard offset), no hover growth, no
+ *    active pose (the root never presses). The buttons inside ride
+ *    flat (the group's texture write), so this shadow REPLACES their
+ *    overlapping per-button ones. data-jx-btngroup-flat (raised={false},
+ *    a flat enclosing zone, or a nested cluster) opts out — false
+ *    removes the shadow and nothing else.
+ *
+ *  - THE SEAM: adjacent DIRECT children collapse their 1px borders
+ *    into ONE hairline (a -1px margin pulls each neighbor onto the
+ *    previous border — a joined row of outline buttons reads as one
+ *    control, never a 2px double border). Child-scoped on purpose: a
+ *    nested ButtonGroup is ONE child for the outer seam, so cluster
+ *    joins never leak the inner seams outward. The margins carry
+ *    into the r13 grid container unchanged: an auto track sizes to
+ *    its item's margin-box, so each -1px overlap is exact and the
+ *    group edges stay flush — the law never mentioned flex.
+ *
+ *  - THE DIVIDER: a COMPOSED Separator (Owner 2026-09-04) — the ink
+ *    is the contrast ghost from separator.css (no color channel,
+ *    theme-agnostic over any ground) and the element form is
+ *    Separator's W3C-first pair (div[role=separator] / native <hr>).
+ *    The family owns GEOMETRY ONLY: the junction edges are FLUSH on
+ *    both sides, so the boundary reads border·line·border — heavier
+ *    than the 1px intra-cluster seam, which a cluster boundary
+ *    should — and the line LENGTH stretches. GRID-ERA LAW (Codex B1
+ *    rework, pinned on Chromium): the
+ *    flex-era -1px/-1px pair (overlap both neighbors, total
+ *    junction 1px) gives a 1px element a NEGATIVE margin-box, and
+ *    grid auto tracks clamp that to a ZERO-WIDTH track — the
+ *    audit's `72.8px 0px` readout. The divider's margin-box is its
+ *    real 1px with flush junction edges, never a clamped zero-width
+ *    track.
+ *
+ *  - THE SEPARATOR (r13 → the REAL-DOM era, Owner 2026-09-04: "我更
+ *    希望上真正的 DOM 来做分割线"): ghost's seam. The bordered rungs
+ *    read through the -1px law (their collapsed borders ARE the
+ *    hairline); ghost paints no border, so the group paints the seam
+ *    slots itself — REAL 1px elements it owns as children (the
+ *    leading seam declaratively, the inter-button seams injected at
+ *    runtime), carrying the SEPARATOR INK LAW (separator/
+ *    separator.css, 2026-09-01: a separator paints no color — the
+ *    backdrop's own contrast ghost, auto-adaptive over any ground,
+ *    zero color tokens). The r13/r14-13 ::before era retired: the
+ *    pseudo hung the group's responsibility inside its buttons.
+ *    aria-hidden carriers (the ButtonGroupDivider stays the group's
+ *    SEMANTIC boundary; this is the decorative seam between adjacent
+ *    buttons).
+ *
+ *  - THE WRAP TRACKS (r13): [data-jx-overflow='wrap'] swaps the
+ *    single line for measured rows — the component stamps each item's
+ *    greedy cell as inline grid placement (CSS cannot express
+ *    per-row packing), row leads carry data-jx-row-start, and this
+ *    sheet only paints the stamps: flow stays row (DOM order =
+ *    visual order; dense would backfill holes with later items),
+ *    implicit columns hug content, and a row lead drops the -1px
+ *    seam + the separator pseudo (it has no inline-start neighbor).
+ *
+ *  - THE SCROLL RUN (Owner 2026-09-04, the unification): the machine,
+ *    the paint laws (run scroller, frosted chevron chips, veil layer,
+ *    ramps, gates) and the chrome markup are the SHARED scroll-run
+ *    item — nothing scroll-painted lives in this sheet; the family
+ *    only stamps its run (data-jx-scroll-run + data-axis) and mounts
+ *    ScrollChrome on its one-cell host.
+ *
+ * Everything here rides @layer components behind :where() — zero
+ * specificity, so consumer utilities still win (the layer law).
+ * Reduced motion: nothing here moves (layout only).
+ */
+@layer theme, base, components, utilities;
+
+@layer components {
+  /* the cluster shadow: the joined row's ONE convex shadow (the press
+     law's rest pose alone — the root never presses, so no hover or
+     active pose exists here). Behind :where() at zero specificity: a
+     consumer shadow utility still wins */
+  :where([data-jx-btngroup]:not([data-jx-btngroup-flat])) {
+    box-shadow: var(--shadow-xs);
+  }
+
+  /* the seam: every direct child after the first pulls onto the
+     previous child's edge border */
+  :where([data-jx-btngroup='horizontal']) > * + * {
+    margin-inline-start: -1px;
+  }
+  :where([data-jx-btngroup='vertical']) > * + * {
+    margin-block-start: -1px;
+  }
+
+  /* the divider: a composed Separator — the ink (contrast ghost) and
+     the cross-axis 1px live in separator.css on [data-jx-separator];
+     the family carries ONLY the geometry law. The junction edges are
+     FLUSH on both sides (source order after the seam rules — same
+     zero-specificity layer, later wins): the divider's margin-box is
+     its real 1px, never a clamped zero-width track (see the header's
+     grid-era law), and the line LENGTH stretches to the cluster */
+  :where([data-jx-btngroup='horizontal']) > [data-jx-btngroup-divider],
+  :where([data-jx-btngroup='horizontal']) > [data-jx-btngroup-divider] + * {
+    margin-inline-start: 0;
+  }
+  :where([data-jx-btngroup='horizontal']) > [data-jx-btngroup-divider] {
+    align-self: stretch;
+  }
+  :where([data-jx-btngroup='vertical']) > [data-jx-btngroup-divider],
+  :where([data-jx-btngroup='vertical']) > [data-jx-btngroup-divider] + * {
+    margin-block-start: 0;
+  }
+  :where([data-jx-btngroup='vertical']) > [data-jx-btngroup-divider] {
+    align-self: stretch;
+  }
+
+  /* ── the ghost separator (r13): the seam slot, painted with the
+     separator ink engine — backdrop contrast(0.5), the same 1px
+     strip the Separator component paints; no color, no border. The
+     ButtonGroupDivider is EXEMPT: it already IS the explicit line —
+     a separator pseudo under it would double the seam ── */
+  /* ── THE REAL-DOM SEPARATORS (Owner, 2026-09-04: "我更希望上真正
+     的 DOM 来做分割线"): the seams are REAL elements the group owns
+     as children — the leading seam declaratively, the inter-button
+     seams injected by the component. The r13/r14-13 ::before era is
+     retired (the pseudo hung the group's own responsibility inside
+     its buttons). Paint is the unchanged SEPARATOR INK ENGINE —
+     backdrop contrast ghost, no color channel, the same 1px strip
+     the Separator component paints. aria-hidden carriers: the
+     ButtonGroupDivider stays the SEMANTIC boundary; this is the
+     decorative seam ── */
+  :where([data-jx-btngroup-sep]) {
+    flex: none;
+    backdrop-filter: contrast(0.5);
+  }
+  :where([data-jx-btngroup='horizontal']) > [data-jx-btngroup-sep] {
+    inline-size: 1px;
+    align-self: stretch;
+  }
+  :where([data-jx-btngroup='vertical']) > [data-jx-btngroup-sep] {
+    block-size: 1px;
+  }
+  /* THE JUNCTION COLLAPSE (Owner correction, 2026-09-04: the seam
+     and the button were left a BORDER-WIDTH apart): the seam's own
+     track is its honest real 1px, but the FOLLOWING button keeps the
+     generic -1px seam law — its border slot rides ON the seam's
+     track pixel, so the line and the button's edge read as ONE line
+     (ghost's transparent border lets the ink through flush to the
+     wash/inset; bordered rungs collapse onto it exactly as they do
+     between each other). The -1px may NEVER ride the 1px seam
+     itself — its margin-box would clamp to a ZERO-WIDTH grid track
+     — so the seam's own margin stays 0 while the follower falls
+     through to `> * + *`. The DIVIDER's heavy border·line·border
+     boundary keeps its own no-collapse carve-out above (a cluster
+     boundary should read heavier than the intra-cluster seam) */
+  :where([data-jx-btngroup='horizontal']) > [data-jx-btngroup-sep] {
+    margin-inline-start: 0;
+  }
+  :where([data-jx-btngroup='vertical']) > [data-jx-btngroup-sep] {
+    margin-block-start: 0;
+  }
+
+  /* ── the wrap tracks (r13): measured rows over the same seam law ── */
+  :where([data-jx-btngroup][data-jx-overflow='wrap']) {
+    grid-auto-flow: row;
+    grid-auto-columns: max-content;
+  }
+  /* a row lead has no inline-start neighbor: no collapsed seam (the
+     component's seam sync never injects one before a row lead —
+     this belt-and-braces rule keeps the margin honest too).
+     THE LEADING-SEAM EXCEPTION (Owner 2026-09-04, round 2): row 1's
+     lead DIRECTLY FOLLOWS the leading seam — it HAS an inline-start
+     neighbor now that the seam is a real sibling, so it keeps the
+     generic -1px collapse onto the seam's track (a sep never opens
+     a row, so every OTHER row lead still follows a button — the
+     reset keeps owning exactly those) */
+  :where([data-jx-btngroup][data-jx-overflow='wrap']) > [data-jx-row-start]:not([data-jx-btngroup-sep] + *) {
+    margin-inline-start: 0;
+  }
+
+  /* ── THE SCROLL RUN (Owner 2026-09-04, the third overflow mode):
+     the machine, the paint laws and the chrome are the SHARED
+     scroll-run item now (one set for every scrollable region —
+     scroll-run.svelte.ts + scroll-run.css + scroll-chrome.svelte).
+     This family stamps the run (data-jx-scroll-run + data-axis) and
+     mounts ScrollChrome on its one-cell host; nothing scroll-painted
+     lives in this sheet anymore */
+}
+/* ── CASCADE CARVE-OUT (css-architecture exception #2, the P3
+   STATE-MACHINE CARVE-OUT — the dropdown-menu caret precedent): the
+   overflow display flips are STATE-MACHINE rules that must beat the
+   items' own display utilities (an inline-flex button class lives in
+   the utilities layer, which always wins over @layer components) —
+   they ride UNLAYERED behind :where(), zero specificity, so consumer
+   css still ties-wins within the unlayered level. The
+   [data-jx-measuring] guard suspends both flips during the
+   component's atomic measuring pass (every item reports its natural
+   line width); the flips key off the container's overflow stamp
+   ONLY — no descendant inference (the stamped-attribute law). */
+:where([data-jx-btngroup]:not([data-jx-measuring]):not([data-jx-overflow='collapse'])) > [data-jx-btngroup-more],
+:where([data-jx-btngroup]:not([data-jx-measuring])[data-jx-overflow='collapse']) > [data-jx-overflow-hidden='true'] {
+  display: none;
+}
+
+/* the veil-layer gates are UNLAYERED on purpose (cascade law, the
+   tabs precedent): the layer's own `grid` utility rides @layer
+   utilities, which BEATS this sheet's @layer components — a layered
+   display:none never wins. A run that cannot scroll shows no veils;
+   no verdict (pre-stamp, or no JS at all) shows none either */
+:where(.jx-btngroup-scroll-host):has(> [data-jx-btngroup-run][data-jx-scroll-state='none']) > :where(.jx-btngroup-veil-layer),
+:where(.jx-btngroup-scroll-host):has(> [data-jx-btngroup-run]:not([data-jx-scroll-state])) > :where(.jx-btngroup-veil-layer) {
+  display: none;
+}

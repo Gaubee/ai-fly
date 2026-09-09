@@ -1,0 +1,92 @@
+@layer theme, base, components, utilities;
+
+@layer components {
+/* jixoai tooltip — D1-exempt residue (tw4, 2026-08-24): anchor
+ * geometry the markup's utilities cannot own — the gap margin MUST
+ * stay here because the @supports viewport-center fallback re-sets it
+ * to auto in this same layer (a margin utility would beat the
+ * fallback), plus the transparent ::backdrop. Panel paint (size, text)
+ * lives as token utilities in the markup. */
+.jx-tip {
+  margin: var(--jx-tip-gap, 6px);
+  position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+  position-try: flip-block, flip-inline, flip-block flip-inline;
+  position-visibility: anchors-visible;
+}
+@supports not (anchor-name: --jx-tip-fallback) {
+  .jx-tip {
+    position-anchor: auto !important;
+    inset-area: none !important;
+    inset: 0;
+    margin: auto;
+    align-self: center;
+    justify-self: center;
+  }
+  /* the notch mask is anchor-driven — meaningless at viewport-center;
+     without aimPin the body degrades to a plain (slightly airier)
+     bordered bubble, never worse */
+}
+.jx-tip::backdrop {
+  background: transparent;
+}
+}
+
+/* ── UNLAYERED, natural specificity ──────────────────────────────────
+ * These override the UNLAYERED jx-surface law in jixoai.css (which a
+ * @layer components copy could never beat). Specificity carries them:
+ * .jx-tip.jx-surface::after (0,2,1) > .jx-surface::after (0,1,1). */
+
+/* the real .jx-tip-shadow child owns the shadow (the kernel animates
+   it in lockstep); the law's ::after fallback is disabled to avoid
+   painting both */
+.jx-tip.jx-surface::after {
+  content: none;
+}
+/* engines without anchor positioning: no notch → no ring (an unmasked
+   ring ::before would paint a solid rect) */
+@supports not (anchor-name: --jx-tip-fallback) {
+  .jx-tip[data-border-ring]::before {
+    content: none;
+  }
+}
+
+/* ── Notch cut (mask form, Owner-directed 2026-08-23) ────────────────
+ * The body reserves a NOTCH strip of padding on BOTH block sides
+ * (layout-stable across flips — the visual bubble keeps its 5px inner
+ * padding on both sides), drops its own border (the platform ::before
+ * ring owns the outline on a masked silhouette — this border:none must
+ * beat the unlayered .jx-surface-body law, hence unlayered here too),
+ * and masks to bubble+tab — the strip is dug away on both flanks of
+ * the tab (XboxYan's recipe). aimPin() authors --jx-tip-shape at open
+ * (rect read, the Chromium-safe pivot — see the component header);
+ * fill, blur and silhouette stay ONE paint, seamless by construction.
+ * NOTCH here and in the script are the same 8px by contract; the
+ * block gap keeps the 6px law (the tab lives INSIDE the reserved
+ * strip, no overhang). EVERYTHING notch-shaped is gated on Anchor
+ * Positioning (Codex r2): without it the panel degrades to a plain
+ * bordered bubble — no reserved strips, no masks, no ring, no notched
+ * shadow. Unlayered with natural specificity: the border/padding
+ * overrides must beat the unlayered surface-body law. */
+@supports (anchor-name: --jx-tip-fallback) {
+  .jx-tip[data-arrow] {
+    --jx-tip-notch: 8px;
+  }
+  .jx-tip[data-arrow] .jx-tip-body {
+    border: none;
+    padding-block: calc(5px + var(--jx-tip-notch) + 1px);
+    -webkit-mask-image: var(--jx-tip-shape, none);
+    -webkit-mask-size: 100% 100%;
+    -webkit-mask-repeat: no-repeat;
+    mask-image: var(--jx-tip-shape, none);
+    mask-size: 100% 100%;
+    mask-repeat: no-repeat;
+  }
+  .jx-tip[data-arrow] .jx-tip-shadow {
+    -webkit-mask-image: var(--jx-surface-ring, none);
+    -webkit-mask-size: 100% 100%;
+    -webkit-mask-repeat: no-repeat;
+    mask-image: var(--jx-surface-ring, none);
+    mask-size: 100% 100%;
+    mask-repeat: no-repeat;
+  }
+}

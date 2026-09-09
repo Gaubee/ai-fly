@@ -1,0 +1,103 @@
+@layer theme, base, components, utilities;
+
+/* jxoai card-footer css — ONE resident: the foot seats on the card's
+ * INLINE RULER (Owner, 2026-09-03 r2). Inside a Card foot zone the
+ * wrapper dissolves (display: contents) and the seats place directly
+ * against the ROOT's rented ruler tracks — passive text ENTERS at
+ * the content lines (the 14px card inset arrives BY TRACK), the
+ * button cluster SPANS the end inset to ride the card edge flush
+ * (its buttons carry the rhythm internally: measured on the dialog
+ * page, 40px tall, padding 0 12px). Standalone, the wrapper renders
+ * its OWN face of the same ruler — the mandatory fallback (dialog's
+ * no-subgrid geometry is the precedent). */
+@layer components {
+  /* THE STANDALONE FACE: the ruler's five tracks, re-declared. This
+     is the fallback the seats fall back to outside a Card; inside,
+     the dissolution rule below hands them the ROOT's tracks instead
+     (one geometry, two carriers — the rental is the source of truth,
+     this mirror only serves the standalone context) */
+  :where(.jx-card-foot-grid) {
+    display: grid;
+    grid-template-columns:
+      [card-inline-start] 0.875rem
+      [card-content-start] auto
+      [card-fill] minmax(0.625rem, 1fr)
+      [card-content-end] auto
+      [card-inline-end] 0.875rem;
+    align-items: center;
+  }
+  /* THE DISSOLUTION: inside the foot zone the wrapper is transparent
+     — the seats become the zone's direct grid items and rent the
+     card ROOT's ruler (subgrid columns, card.css) */
+  :where([data-jx-card-foot]) > :where(.jx-card-foot-grid) {
+    display: contents;
+  }
+
+  /* ── the seats ────────────────────────────────────────────────── */
+  /* MEASURED CROSS-ROW LAW (live, 2026-09-03): tracks are shared by
+     every row — the end-seat track is as wide as its widest resident
+     (the head actions slot OR the foot cluster; measured 115px leak
+     into the head row's line 4 when a foot cluster exists). Seats
+     that must END at the content axis span to card-inline-end (the
+     end INSET line) — never to card-content-end; seats that must
+     hug the EDGE span to -1 with justify-self: end. */
+  /* the inline-start TEXT seat: enters at the content axis, hugs
+     the leading edge of the content region */
+  :where(.jx-card-foot-start) {
+    grid-column: card-content-start / card-fill;
+    justify-self: start;
+  }
+  /* the inline-end TEXT seat: spans the fill + the end-seat track,
+     justified to the end INSET line — ends 14px short of the card
+     edge no matter how wide the shared end column grew */
+  :where(.jx-card-foot-end) {
+    grid-column: card-fill / card-inline-end;
+    justify-self: end;
+  }
+  /* the CLUSTER seat: THE CARVED-CELL LAW (Owner, 2026-09-03 r4:
+     "给人的感觉是在 foot 那边切出一些区域作为按钮的…容器被撑高
+     之后，它就不是切出一块，而是挖出一块"). The cluster is a
+     REGION of the card, not a floating widget: it spans the end
+     inset to ride the card edge AND fills the band vertically —
+     the separator is its top rim, the leading seam its carved left
+     edge, and its block height IS the band, whatever sizes the
+     band. The fill chain is native end to end: the seat stretches
+     (align-self), the group is the seat-grid's sole item (default
+     stretch), the buttons are the group's items (items-stretch)
+     with min-h-[--jx-hit] as a FLOOR, never a cap. The head's
+     action slot is deliberately NOT this law — it is a CORNER
+     (positional, align-self: start, dialog's × verbatim); only the
+     foot carves */
+  :where(.jx-card-foot-cluster) {
+    grid-column: card-content-end / -1;
+    justify-self: end;
+    align-self: stretch;
+    display: grid;
+  }
+
+  /* ── the narrow reversal (the dialog-footer law, grid-native) ────
+     Under 15rem the cluster takes the top row FULL-BLEED (reachable,
+     edge-riding both sides — dialog's items-stretch col-reverse) and
+     the text seats stack below at the content axis. Native @container
+     against the ROOT container (card.css): Tailwind display utilities
+     would replace the rented grid. In-grid cards retire the container
+     (the tenancy guard) — card-grid's 320px floor keeps them above
+     the reversal width anyway */
+  @container jx-card (width < 15rem) {
+    :where(.jx-card-foot-cluster) {
+      grid-row: 1;
+      grid-column: 1 / -1;
+      /* the base seat hugs the end; the reversal stretches it full
+         bleed — override the justification with the span */
+      justify-self: stretch;
+    }
+    :where(.jx-card-foot-start) {
+      grid-row: 2;
+      grid-column: card-content-start / card-inline-end;
+    }
+    :where(.jx-card-foot-end) {
+      grid-row: 3;
+      grid-column: card-content-start / card-inline-end;
+    }
+  }
+}

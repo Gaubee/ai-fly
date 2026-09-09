@@ -1,0 +1,433 @@
+/**
+ * input.css — the custom-control bridge (2026-08-28; full coverage
+ * 2026-08-29, OpenSpec 2026-08-29-input-native-controls).
+ *
+ * The platform's own controls — the number spinners, the date/time
+ * popup triggers — cannot be styled and their opening cannot be
+ * cancelled (UA shadow activation). The bridge intercepts the
+ * TRIGGER zones instead and mounts component-owned controls:
+ *
+ *   number   the .jx-number-shell modifier hides the spin pseudos
+ *            (webkit display:none + appearance:textfield, shell-scoped
+ *            so bare markup keeps the Tier-1 D3 platform spinners) and
+ *            input.svelte renders the −/+ icon-button pair at the
+ *            prefix/suffix slot positions.
+ *   picker   the DEFAULT mounts the embedded Popover-API panel for
+ *            every covered type (disabled-attribute philosophy):
+ *            date/datetime-local/week → the Calendar (+ the TimeStepper
+ *            row for datetime-local), month → the MonthGrid, time → the
+ *            TimeStepper, color → the Swatches editor. The bare boolean
+ *            attribute opts back into the platform popup —
+ *            <Input type="date" native-controls />. The input itself
+ *            stays a REAL input either way (native typing, parsing,
+ *            ARIA, FormData untouched) — only the control layer differs.
+ *   {#snippet picker(ctx)} → any custom panel content (highest priority)
+ *
+ * Intent ledger:
+ *  - trigger interception (indicator pointer-events, color overlay) — 2026-08-28
+ *  - the panel (date-panel law: bezel surface, anchor, try-fallbacks,
+ *    the no-anchor viewport-center fallback, transparent ::backdrop)
+ *  - the clearable ✕ kill — the repainted UA search ornament would
+ *    double the component's own clear button (2026-08-29)
+ *  - the number shell (spin kill) + the stepper icon buttons — 2026-08-29
+ *  - the stepper pair's edge-zone ownership (:has() padding drop) +
+ *    the clear button's full --jx-hit edge-lane geometry (Owner
+ *    catches: the pair floated ~9px inside the borders, hugged the
+ *    top edge, and a compact 1.75rem square left the glyphs pushed
+ *    against the border instead of centered in their zones — the
+ *    self-insetting child law now applies to it like it already did
+ *    to the clear button) — 2026-08-29
+ *  - the password reveal eye (the clear button's geometry law, the
+ *    OUTERMOST end child: innerInlineEnd > × > eye) and the floating
+ *    bracket label (labelMode="floating" — legend on the border, pure
+ *    CSS :placeholder-shown/:focus-visible/:has ink states, additive
+ *    under the .jx-floating modifier) — 2026-08-30
+ */
+@layer theme, base, components, utilities;
+
+@layer components {
+  /* ---- the clearable ✕ owns the clear job --------------------------------
+     the UA search-cancel repaint (the suffix-icon standard, css-laws)
+     still fires on the component's lane — hide it whenever the
+     component renders its own × so the two never double */
+  :where(.jx-html-control-shell.jx-clearable) input::-webkit-search-cancel-button {
+    display: none;
+  }
+
+  /* ---- trigger interception ------------------------------------------
+     the indicator's clicks fall through to the lane, whose click
+     router (input.svelte) opens OUR panel for the end-zone clicks */
+  :where([data-jx-custom-picker]) {
+    cursor: pointer;
+  }
+  :where([data-jx-custom-picker])::-webkit-calendar-picker-indicator {
+    pointer-events: none;
+    cursor: pointer;
+  }
+  /* color: the swatch input's UA activation cannot be cancelled —
+     retire it from the pointer path entirely; the overlay button is
+     the trigger (the input keeps the value/ARIA carrier role) */
+  :where([data-jx-custom-picker][data-jx-picker-color]) {
+    pointer-events: none;
+  }
+  :where(button.jx-picker-overlay) {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+  }
+  :where(button.jx-picker-overlay):focus-visible {
+    outline: 1px solid var(--ring);
+    outline-offset: -1px;
+  }
+
+  /* ---- the number shell: spin pseudos OFF (the −/+ pair owns
+     stepping; scoped to the component shell so Tier-1's D3 ruling —
+     bare markup keeps the platform spinners — stays untouched) ----- */
+  :where(.jx-number-shell) input::-webkit-inner-spin-button,
+  :where(.jx-number-shell) input::-webkit-outer-spin-button {
+    display: none;
+  }
+  :where(.jx-number-shell) input {
+    appearance: textfield;
+    -moz-appearance: textfield;
+    /* the number lane centers its glyphs between the −/+ pair (the
+       pair frames the value; a ragged start-align reads as a text
+       field with buttons stuck on) */
+    text-align: center;
+  }
+
+  /* the stepper pair CLOSES the shell's flex gap (Owner catch
+     2026-09-05): the buttons' own square hit geometry is already the
+     optical inset (the edge-zone ownership law zeroes the shell
+     padding on their side), so the 0.5rem gap stacked a SECOND inset
+     between glyph and value. The pair hugs the lane directly — and
+     only when they are truly ADJACENT (snippet slots between button
+     and lane keep the gap as their breathing room) */
+  :where(.jx-number-shell) > .jx-input-prefix-icon-button + input {
+    margin-inline-start: calc(var(--jx-gap, 0.5rem) * -1);
+  }
+  :where(.jx-number-shell) > input + .jx-input-suffix-icon-button {
+    margin-inline-start: calc(var(--jx-gap, 0.5rem) * -1);
+  }
+
+  /* ---- edge-zone ownership (the END-INSET OWNERSHIP law,
+     control-shell): the shell's inline padding is the inset for SLIM
+     children (text slots, the lane); a SELF-INSETTING edge child —
+     the stepper pair, like the clear button before it
+     (:has(> .jx-html-clear:last-child) in css-laws) — carries its own
+     square hit geometry and REPLACES that side's padding: the
+     centered glyph becomes the optical inset, the button hugs the
+     border instead of floating inside a double inset (measured:
+     8.8px dead zone before the law). :has() keyed to the component's
+     own classes + :first/:last-child — precise whatever the snippet
+     slots render (their slim spans KEEP the padding as their inset);
+     a sibling selector could not work here: the padding lives on the
+     shell (the parent), and slot content is arbitrary anyway */
+  :where(.jx-html-control-shell):has(> .jx-input-prefix-icon-button:first-child) {
+    padding-inline-start: 0;
+  }
+  :where(.jx-html-control-shell):has(> .jx-input-suffix-icon-button:last-child) {
+    padding-inline-end: 0;
+  }
+
+  /* ---- the stepper icon buttons (prefix/suffix slot positions) -------
+     The CLEAR BUTTON's geometry law, verbatim: a full var(--jx-hit)
+     edge lane flush with the border, glyph centered on BOTH axes
+     (measured Owner catch: the first cut was a compact 1.75rem square
+     — under the edge-zone :has() drop below the glyph hugged the
+     border at ~7px instead of centering in its zone, and the definite
+     height top-hugged under stretch). min-width/min-height stretch to
+     the shell like .jx-html-clear; same color/focus laws (muted →
+     hover foreground; the site's inset 1px focus-visible ring) */
+  :where(button.jx-input-prefix-icon-button),
+  :where(button.jx-input-suffix-icon-button) {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--jx-hit, 2.5rem);
+    min-height: var(--jx-hit, 2.5rem);
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    transition: color 150ms ease-out;
+  }
+  :where(button.jx-input-prefix-icon-button):hover:not(:disabled),
+  :where(button.jx-input-suffix-icon-button):hover:not(:disabled) {
+    color: var(--foreground);
+  }
+  :where(button.jx-input-prefix-icon-button):focus-visible,
+  :where(button.jx-input-suffix-icon-button):focus-visible {
+    outline: 1px solid var(--ring);
+    outline-offset: -1px;
+  }
+  :where(button.jx-input-prefix-icon-button):disabled,
+  :where(button.jx-input-suffix-icon-button):disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :where(button.jx-input-prefix-icon-button),
+    :where(button.jx-input-suffix-icon-button) {
+      transition: none;
+    }
+  }
+
+  /* ---- the password reveal eye (expand-form-family F1, 2026-08-30) ----
+     The CLEAR BUTTON's geometry law, verbatim (END-INSET OWNERSHIP): a
+     full var(--jx-hit) edge lane flush with the border, glyph centered
+     on BOTH axes. It is the OUTERMOST end child (end-lane order:
+     innerInlineEnd snippet > clearable × > eye), so its :has() padding
+     drop below owns the shell's inline-end inset whenever it renders —
+     with or without the clear × beside it. Same color/focus/disabled
+     laws as the stepper pair (muted → hover foreground; the site's
+     inset 1px focus-visible ring). The glyph is the shared inline icon
+     set (icons.eye / icons.eyeOff — 16px baked), swapped by the
+     component when the password shows. */
+  :where(button.jx-input-reveal) {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--jx-hit, 2.5rem);
+    min-height: var(--jx-hit, 2.5rem);
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    transition: color 150ms ease-out;
+  }
+  :where(button.jx-input-reveal):hover:not(:disabled) {
+    color: var(--foreground);
+  }
+  :where(button.jx-input-reveal):focus-visible {
+    outline: 1px solid var(--ring);
+    outline-offset: -1px;
+  }
+  :where(button.jx-input-reveal):disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  :where(.jx-html-control-shell):has(> .jx-input-reveal:last-child) {
+    padding-inline-end: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :where(button.jx-input-reveal) {
+      transition: none;
+    }
+  }
+
+  /* ---- the semantic glyph lane — the ORDER LADDER (Owner 2026-09-05) --
+     Every shell child owns an explicit rung so the glyph's start/end
+     flip is ONE order value, never DOM surgery. The glyph's DOM home
+     stays input-adjacent (the stepper's adjacency margins and the
+     first/last-child inset rules above read DOM order); the ladder:
+       0 stepper− · 1 start-slot · 2 GLYPH·lead · 10 lane
+       12 GLYPH·trail · 13 end-slot · 14 stepper+ · 15 × · 16 eye */
+  :where(.jx-html-control-shell) > .jx-input-prefix-icon-button {
+    order: 0;
+  }
+  :where(.jx-html-control-shell) > [data-jx-inline-start] {
+    order: 1;
+  }
+  :where(.jx-html-control-shell) > [data-jx-semantic-icon] {
+    order: 2;
+  }
+  :where(.jx-html-control-shell) > .jx-html-control-lane {
+    order: 10;
+  }
+  :where(.jx-html-control-shell) > [data-jx-inline-end] {
+    order: 13;
+  }
+  :where(.jx-html-control-shell) > .jx-input-suffix-icon-button {
+    order: 14;
+  }
+  :where(.jx-html-control-shell) > .jx-html-clear {
+    order: 15;
+  }
+  :where(.jx-html-control-shell) > .jx-input-reveal {
+    order: 16;
+  }
+  /* the PINNED side — explicit wins over every ambient below */
+  :where(.jx-html-control-shell[data-icon-position='end']) > [data-jx-semantic-icon] {
+    order: 12;
+  }
+
+  /* the trailing-lane ambient (Owner 2026-09-05): inside a list-item
+     end lane the glyph rides the TRAILING edge — the lane's
+     trailing-affordance line, select-chevron kin. Cross-family by
+     PUBLIC stamps only, the same vocabulary the end-inset contract
+     trades in (the control stamps data-self-inset, item.css :has()
+     consumes; here the lane stamps data-slot/data-wrap and the
+     glyph's own ladder consumes) */
+  [data-slot='item-end'] :where(.jx-html-control-shell[data-icon-position='auto']) > [data-jx-semantic-icon] {
+    order: 12;
+  }
+
+  /* SUSPENDED under the 30rem fold (the inset-contract suspension
+     precedent): a stacked lane is a full-width field below the row —
+     the glyph LEADS again. 'auto' only; a pinned side survives the
+     fold. The fold is a container query — invisible to JS — which is
+     exactly why this axis is CSS-owned end to end */
+  @container jx-items (max-width: 30rem) {
+    [data-slot='item-end'][data-wrap='auto']
+      :where(.jx-html-control-shell[data-icon-position='auto'])
+      > [data-jx-semantic-icon] {
+      order: 2;
+    }
+  }
+
+  /* ---- the floating bracket label (labelMode="floating", 2026-08-30) --
+     The terminal translation of the floating label: the label rides the
+     shell's TOP BORDER like a fieldset legend (the bracket), never the
+     SaaS in-field morph — zero motion, position constant for the
+     field's whole life. The background notch cuts the border under the
+     label; the state machine is pure CSS keyed on the lane inside:
+       rest (empty, unfocused)  muted prompt ink (.jx-label law)
+       filled  (:not(:placeholder-shown))  committed foreground ink
+       focused (:focus-visible)            live foreground ink
+       error   ([aria-invalid='true'])     destructive ink — wins
+     ADDITIVE ONLY: every rule is scoped under the .jx-floating modifier
+     (or the .jx-floating-label child it positions) — the default
+     stacked label law (jx-pure Part A) is untouched. The component
+     seeds placeholder=" " when none is given so :placeholder-shown can
+     express the empty state honestly. */
+  :where(.jx-html-control-shell.jx-floating) {
+    position: relative;
+    /* room for the bracket's upper half overhanging the border */
+    margin-block-start: 0.625rem;
+  }
+  :where(.jx-floating-label) {
+    position: absolute;
+    top: 0;
+    inset-inline-start: var(--jx-inset, 0.75rem);
+    transform: translateY(-50%);
+    padding-inline: 0.375rem;
+    background: var(--background);
+    font-family: var(--font-nav);
+    font-size: var(--jx-text-secondary, 11px);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    line-height: 1;
+    color: var(--muted-foreground);
+    z-index: 1;
+  }
+  :where(.jx-floating:has(> .jx-html-control-lane:not(:placeholder-shown)))
+    > :where(.jx-floating-label) {
+    color: var(--foreground);
+  }
+  :where(.jx-floating:has(> .jx-html-control-lane:focus-visible))
+    > :where(.jx-floating-label) {
+    color: var(--foreground);
+  }
+  /* the error composition: destructive ink outranks filled/focused
+     (last rule, equal specificity) — the label matches the dashed shell */
+  :where(.jx-floating:has(> .jx-html-control-lane[aria-invalid='true']))
+    > :where(.jx-floating-label) {
+    color: var(--destructive);
+  }
+
+  /* ---- panel: the date-panel law (bezel surface on the jx-surface
+     law; the popover element is the PLATFORM element — no paint of
+     its own beyond the resets) -------------------------------------- */
+  :where(.jx-picker-panel) {
+    --jx-surface-acrylic-fill: color-mix(in oklab, var(--terminal) 72%, transparent);
+    --jx-surface-solid-fill: var(--terminal);
+    position: fixed;
+    margin: 0;
+    /* the platform element paints nothing (surface law) — the body
+       child carries the fill/border/padding */
+    padding: 0;
+    position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+    width: fit-content;
+    font-size: 13px;
+    color: var(--terminal-foreground);
+  }
+  /* Engines without CSS Anchor Positioning: authored viewport-center —
+     the popover.svelte fallback visual, never worse. */
+  @supports not (anchor-name: --jx-picker-fb) {
+    :where(.jx-picker-panel) {
+      position-anchor: auto !important;
+      inset-area: none !important;
+      inset: 0;
+      margin: auto;
+    }
+  }
+  /* Popovers get a ::backdrop too; light dismiss must never dim the page. */
+  :where(.jx-picker-panel)::backdrop {
+    background: transparent;
+  }
+}
+
+/* ---- the chrome axis: BARE (control-integration, 2026-09-05) ----
+   The family's OWN paint for its bare state — an owning row declares
+   its controls bare via the control-chrome ambient; the shell drops
+   fill/border/well-shadow (specificity earned by attribute compound,
+   no !important), the state machine re-asserts on the same root. */
+.jx-html-control-shell[data-chrome='bare'] {
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.jx-html-control-shell[data-chrome='bare']:hover {
+  box-shadow: none;
+}
+.jx-html-control-shell[data-chrome='bare']:has(:focus) {
+  border-color: var(--ring);
+}
+.jx-html-control-shell[data-chrome='bare']:has([aria-invalid='true']),
+.jx-html-control-shell[data-chrome='bare'].jx-invalid {
+  border-color: var(--border);
+}
+.jx-html-control-shell[data-chrome='bare']:has(:disabled) {
+  border-color: var(--muted);
+}
+
+/* ---- the chrome axis: BARE — the native select (2026-09-05).
+   Lives in THIS sheet because the shell-family laws already do (the
+   number-shell spin-kill, the edge-zone law); native-select ships no
+   css of its own. background-COLOR ONLY, never the shorthand — the
+   chevron rides background-image and must survive (the Owner catch
+   that retired the cross-family CSS invasion in the first place). */
+.jx-html-select[data-chrome='bare'] {
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.jx-html-select[data-chrome='bare']:hover:not(:disabled) {
+  box-shadow: none;
+}
+.jx-html-select[data-chrome='bare']:focus-visible {
+  border-color: var(--ring);
+}
+
+
+/* ── ONE glyph, ONE owner — UNLAYERED ON PURPOSE ──────────────────────
+   (Owner catch 2026-09-05: "email 变成头尾都有图标" — 违背"首先默认
+   图标，然后默认图标位置"). jx-pure paints background glyphs on the
+   native lane for some types (email/search — Tier-1's default-icon
+   standard, leading position + a reserved padding-inline-start) and
+   those alias rules sit OUTSIDE every @layer in jx-pure.css — a
+   layered kill loses to an unlayered paint no matter its specificity,
+   so this block lives at the sheet's top level. The component's
+   semantic glyph lane IS that standard's component era: same geometry
+   (the shared icon set), a MOVABLE side (the order ladder — the
+   position axis the Owner asked for), snippet-overridable. Inside a
+   mounted component shell the painted background dies and its
+   reserved padding goes with it (the search-cancel kill's sibling law
+   — Tier-1 keeps painting BARE markup only); token customization
+   (--jx-icon-mail …) moves to the `icon` snippet on this lane */
+.jx-html-control-shell .jx-html-control-lane[type='email'],
+.jx-html-control-shell .jx-html-control-lane[type='search'] {
+  background-image: none;
+  padding-inline-start: 0;
+}

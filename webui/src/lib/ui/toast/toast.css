@@ -1,0 +1,260 @@
+@layer theme, base, components, utilities;
+
+/* jixoai toast — residue (tw4, 2026-08-24 → 2026-09-01): the enter/
+ * exit keyframes (not expressible as utilities), the reduced-motion
+ * kill, and — since the material/effect rebuild — the effect loops
+ * and the countdown companion's drain. The enter/exit animations
+ * themselves live as arbitrary-value animate utilities in the markup
+ * (the leaving swap is a conditional that tailwind-merge resolves
+ * inside cn()); the kill overrides them, so it rides UNLAYERED behind
+ * :where() — the toggle/Part A precedent.
+ *
+ * THE EFFECT LOOPS (2026-09-01) paint dedicated LAYERS, never the
+ * element's own animation slot (the enter/exit pair owns it):
+ *   [data-effect='pulse'] ::before  the breathing ring — an inset ring
+ *                                   glow for the urgent/attentive toast
+ *   [data-effect='sweep']  ::after  the traveling light — a primary
+ *                                   gradient pulse along the toast, the
+ *                                   live/in-flight signal (the beam
+ *                                   law's toast voice)
+ * THE COUNTDOWN (2026-09-01): a lane-sized gauge draining over the
+ * toast's duration; .paused (the viewport's hold) freezes the drain. */
+
+@keyframes jx-toast-in {
+  from {
+    opacity: 0;
+    /* the wrapper stamps the sign per posture (the growth law): the
+       card arrives from beyond the stack's anchor edge */
+    transform: translateY(var(--jx-toast-enter, 8px));
+  }
+}
+@keyframes jx-toast-out {
+  to {
+    opacity: 0;
+    /* toward the anchor's inline edge — the wrapper stamps the sign
+       (an RTL top-left pile exits left) */
+    transform: translateX(var(--jx-toast-exit-x, 12px));
+  }
+}
+
+@layer components {
+  /* ── the effect layers ── */
+  :where([data-jx-toast][data-effect='pulse']) {
+    position: relative;
+  }
+  :where([data-jx-toast][data-effect='pulse'])::before {
+    /* inset 0 — the card's overflow-hidden (the floor's corner clip,
+       R3-4) swallows every pixel outside the padding box; the breathing
+       ring hugs the edge from INSIDE (adversarial R3 P2-1, browser-
+       proved: a -2px ring paints nothing under the clip) */
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: 1px solid var(--primary);
+    border-radius: inherit;
+    pointer-events: none;
+    animation: jx-toast-pulse 1.6s ease-in-out infinite;
+  }
+  :where([data-jx-toast][data-effect='sweep']) {
+    position: relative;
+    overflow: hidden;
+  }
+  :where([data-jx-toast][data-effect='sweep'])::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    inline-size: 40%;
+    background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--primary) 45%, transparent), transparent);
+    pointer-events: none;
+    animation: jx-toast-sweep 2.4s linear infinite;
+  }
+
+  /* ── the countdown companion ── */
+  :where([data-jx-toast-countdown]) {
+    position: relative;
+    align-self: center;
+    inline-size: 3rem;
+    block-size: 3px;
+    background: color-mix(in oklab, currentColor 18%, transparent);
+    overflow: hidden;
+  }
+  :where([data-jx-toast-countdown])::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--primary);
+    transform-origin: left;
+    animation: jx-toast-countdown var(--jx-toast-countdown, 5000ms) linear forwards;
+  }
+  :where([data-jx-toast-countdown].paused)::after {
+    animation-play-state: paused;
+  }
+  /* RTL: the drain anchors the inline END and the traveling light
+     runs the other way (physical left/right would mirror the motion
+     against the reading direction) */
+  :where([data-jx-toast-countdown]):dir(rtl)::after {
+    transform-origin: right;
+  }
+  :where([data-jx-toast][data-effect='sweep']):dir(rtl)::after {
+    animation-direction: reverse;
+  }
+}
+
+@keyframes jx-toast-pulse {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+@keyframes jx-toast-sweep {
+  from {
+    left: -40%;
+  }
+  to {
+    left: 100%;
+  }
+}
+@keyframes jx-toast-countdown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(.jx-toast),
+  :where(.jx-toast-leaving) {
+    animation: none;
+  }
+  :where([data-jx-toast][data-effect='pulse'])::before,
+  :where([data-jx-toast][data-effect='sweep'])::after {
+    animation: none;
+    content: none;
+  }
+  :where([data-jx-toast-countdown])::after {
+    animation: none;
+    transform: scaleX(0.5);
+  }
+}
+
+/* ── the stacking dialect (toast-v2, 2026-09-02) ──────────────────────
+   Every card WRAPPER is the single grid cell's occupant; geometry is
+   TRANSFORM-only (the grid-not-position law): depth stairs while
+   collapsed, measured offsets while expanded. The wrapper's vars come
+   from the viewport (Svelte-owned style attr); the swipe vars live on
+   the VISUAL card (JS-owned) so a re-render never wipes a drag.
+   The ::after bridge keeps the pointer inside the stack between
+   cards while expanded (transient-ink category; pointer-events:none). */
+@layer components {
+  /* the card's NAMED-AREA grid (Owner R3-4): leading / body / close in
+     one content row — close owns the top-right corner, edge-equal by
+     the card's own uniform padding */
+  :where([data-jx-toasts] [data-jx-toast]) {
+    /* the floor's anchor (and the effect layers') */
+    position: relative;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-areas: 'leading body trail close';
+  }
+  /* inside a CARD the countdown is always the FLOOR: a full-width
+     drain pinned to the card's bottom edge. ABSOLUTE per the
+     transient-ink exemption (decoration pinned to its parent, the
+     bridge-pseudo precedent) — a grid track cannot sit flush against
+     the border box (probed: 5px gap through negative margins); the
+     card's overflow-hidden clips the rounded corners, and the press
+     shadow paints outside and is never touched */
+  :where([data-jx-toasts] [data-jx-toast]) > [data-jx-toast-countdown] {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    inline-size: auto;
+  }
+  /* scoped to CARD WRAPPERS — the +N queued chip is also a direct
+     child div; without :not() it inherits the depth transform, the
+     z-index ladder, and touch-action it never asked for (R1 P3-1) */
+  :where([data-jx-toasts] > div:not([data-jx-toast-queued])) {
+    transform: translateY(var(--jx-toast-y, 0)) scale(var(--jx-toast-scale, 1));
+    /* transform-origin rides the wrapper's inline style — it pivots on
+       the edge nearest the front card (top for the descending pile,
+       bottom for the climbing one) */
+    /* the swipe owns the touch gesture — a drag on the card must never
+       scroll the page behind the fixed stack (sonner's contract) */
+    touch-action: none;
+    transition:
+      transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      translate 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    z-index: calc(10 - var(--jx-toast-i, 0));
+  }
+  /* the expanded ::after bridge: while expanded each wrapper paints a
+     transparent strip DOWN to the next card's top so pointer travel
+     between cards never exits the stack (the hover keep). The strip is
+     HIT-TESTABLE — pointer-events:none would make the gap hit the PAGE
+     and pointerleave would collapse the stack mid-travel (R1 P1-2);
+     a pseudo with events targets its originating wrapper, keeping the
+     stack in the pointer's boundary chain (transient-ink category) */
+  :where([data-jx-toasts][data-expanded] > div)::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 100%;
+    height: calc(var(--jx-toast-gap, 8px) + 1px);
+  }
+  :where([data-jx-toasts][data-expanded] > div) {
+    position: relative;
+  }
+  /* the swipe: the visual card translates with the pointer; releasing
+     without a verdict removes the vars and this transition springs it
+     home (the user's hand drives the drag; the spring is decoration —
+     reduced-motion keeps the former, drops the latter) */
+  :where([data-jx-toasts] [data-jx-toast]) {
+    transition: translate 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    translate: var(--jx-toast-swipe-x, 0) var(--jx-toast-swipe-y, 0);
+  }
+  :where([data-jx-toasts] [data-jx-toast]):active {
+    transition: none;
+  }
+  /* the +N queued chip rides the second grid row, BELOW the single
+     cell whose transforms never change layout — it translates by the
+     pile's visual extent so the descending/expanded column never walks
+     over its slot; same curve as the wrappers so they move in lockstep */
+  :where([data-jx-toasts] [data-jx-toast-queued]) {
+    transform: translateY(var(--jx-toast-extend, 0px));
+    transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where([data-jx-toasts] > div:not([data-jx-toast-queued])) {
+    transition: none;
+  }
+  :where([data-jx-toasts] [data-jx-toast]) {
+    transition: none;
+  }
+  :where([data-jx-toasts] [data-jx-toast-queued]) {
+    transition: none;
+  }
+}
+
+/* ── the expandable morph's bounce (Owner R3-2) ────────────────────────
+   The card↔dialog shared element rides a view transition carrying the
+   jx-toast-morph TYPE (open and close both); the group's geometry
+   interpolation gets the overshoot curve — the panel BOUNCES out of
+   the card and back into it. Snapshot cross-fades stay short so the
+   shared element, not the fade, reads as the motion. Reduced motion
+   never reaches here (the viewport gates the VT itself). */
+::view-transition-group(.jx-toast-morph) {
+  animation-duration: 340ms;
+  animation-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+::view-transition-image-pair(.jx-toast-morph) {
+  /* short cross-fade so the shared element's geometry (and its bounce)
+     reads as the motion — long fades double-expose the text (vision R3) */
+  animation-duration: 120ms;
+}

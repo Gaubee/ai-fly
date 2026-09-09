@@ -19,11 +19,15 @@
     "test:watch": "vitest",
     "test:integration": "node --import tsx --test \"test/integration/*.test.mjs\"",
     "test:e2e": "node --import tsx --test \"test/e2e/*.test.mjs\"",
-    "test:all": "vitest run && pnpm test:integration && pnpm test:e2e"
+    "test:all": "vitest run && pnpm test:integration && pnpm test:e2e",
+    "webui:dev": "pnpm --filter @ai-fly/webui dev",
+    "webui:build": "pnpm --filter @ai-fly/webui build"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "@jixo/opendweb-client-sdk": "^0.3.2",
+    "@orpc/contract": "1.14.6",
+    "@orpc/server": "1.14.6",
     "hono": "^4.13.7",
     "ts-pattern": "^5.9.0",
     "ws": "^8.21.3",
@@ -31,6 +35,7 @@
   },
   "devDependencies": {
     "@jixo/opendweb-server-binary": "^0.3.2",
+    "@orpc/client": "1.14.6",
     "@types/node": "^26.5.0",
     "@types/ws": "^8.18.1",
     "tsdown": "^0.23.0",

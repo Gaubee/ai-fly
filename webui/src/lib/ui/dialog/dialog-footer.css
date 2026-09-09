@@ -1,0 +1,18 @@
+@layer theme, base, components, utilities;
+
+/* jixoai dialog-footer css — ONE resident: the foot grid (r14-9, moved
+ * from dialog.css when the foot's button economy became this
+ * component's). The grid packs every child to the INLINE END (the
+ * Owner's r14-5 law) as content-sized auto columns; the leading side
+ * needs no track because the footer's content is the cluster itself.
+ * The narrow-screen reversal lives on the element's utilities. */
+@layer components {
+  :where(.jx-dialog-foot-grid) {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: auto;
+    justify-content: end;
+    align-items: center;
+    column-gap: 0.625rem;
+  }
+}

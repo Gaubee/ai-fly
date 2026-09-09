@@ -1,0 +1,3 @@
+@import 'tailwindcss';
+/* jixoai-theme 项会落 $lib/jixoai.css（含 --brand-hue: 95 品牌琥珀），
+ * 组件自身按需引其 css；此处只做 tailwind 扇入（A4）。 */

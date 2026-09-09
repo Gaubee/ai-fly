@@ -1,0 +1,13 @@
+@layer theme, base, components, utilities;
+
+/* jixoai alert — D1-exempt residue (tw4, 2026-08-24): ONLY the
+ * passed-through icon-glyph normalization remains — a descendant
+ * boundary utilities never own (the old scoped :global(svg) law).
+ * All static paint lives as token utilities in the markup. */
+
+@layer components {
+  :where(.jx-alert-icon svg) {
+    width: 1em;
+    height: 1em;
+  }
+}

@@ -1,0 +1,136 @@
+@layer theme, base, components, utilities;
+
+@layer components {
+/* jixoai tabs indicator — D1-exempt residue (tw4, 2026-09-01 tabs
+ * variant system). The selection indicator is a shared span the LIST
+ * measures and drives (transform/width/height law in tabs-list.svelte);
+ * utilities cannot author an absolutely-positioned sibling paint keyed
+ * on the list's data attributes, nor hide the scrollbar pseudo-element
+ * — both stay here. All other trigger paint lives as token utilities
+ * in the markup; the static per-trigger ::after bar this sheet used
+ * to carry is deleted (the sliding indicator replaces it).
+ *
+ * 2026-09-02 fix wave: chevron glyphs on the lucide geometry (icons.ts
+ * same source), pre-hydration overlay gates (no scroll verdict → no
+ * overlays), reduced-motion veil rest gated by the closed edges, the
+ * indicator's edge fade (V1-2 — the stamps themselves live in
+ * tabs-list.svelte, RTL-normalized).
+ *
+ * Material law: line = 2px primary bar at the strip edge · pill =
+ * tonal hug · outline = border hug · glass/liquid = backdrop hug
+ * (liquid swaps its backdrop-filter for the SVG displacement filter
+ * the list mounts). layout law: grow stretches the triggers · wrap
+ * flows rows · every horizontal strip degrades to a hidden-scrollbar
+ * scroll run (the tablist IS the run) with DOM chevron buttons and
+ * the merged veil layer over it (below). */
+:where([data-jx-tabs-list]) {
+  position: relative;
+}
+:where([data-jx-tabs-ind]) {
+  position: absolute;
+  inset: 0 auto auto 0;
+  pointer-events: none;
+  z-index: 0;
+  transition:
+    transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    width 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: transform;
+}
+/* quiet placement: first placement after mount and every resize
+ * remeasure snap into place — the slide is a selection-move signal */
+:where([data-jx-tabs-ind][data-quiet]) {
+  transition: none;
+}
+:where([data-jx-tabs-ind][data-material='line']) {
+  background: var(--primary);
+}
+:where([data-jx-tabs-ind][data-material='pill']) {
+  background: color-mix(in oklab, var(--jx-tonal) 14%, transparent);
+  border-radius: calc(var(--radius) - 2px);
+}
+:where([data-jx-tabs-ind][data-material='outline']) {
+  border: 1px solid var(--jx-outline);
+  border-radius: calc(var(--radius) - 2px);
+  box-sizing: border-box;
+}
+:where([data-jx-tabs-ind][data-material='glass']),
+:where([data-jx-tabs-ind][data-material='liquid']) {
+  backdrop-filter: blur(10px) saturate(1.5);
+  -webkit-backdrop-filter: blur(10px) saturate(1.5);
+  background: color-mix(in oklab, var(--background) 40%, transparent);
+  border: 1px solid color-mix(in oklab, var(--foreground) 12%, transparent);
+  border-radius: calc(var(--radius) - 2px);
+}
+:where([data-jx-tabs-ind][data-material='liquid']) {
+  backdrop-filter: var(--jx-tabs-liquid-bf, blur(10px) saturate(1.5));
+  -webkit-backdrop-filter: var(--jx-tabs-liquid-bf, blur(10px) saturate(1.5));
+}
+:where([data-layout='grow']) > [role='tab'] {
+  flex: 1 1 0;
+  justify-content: center;
+}
+
+/* ── the horizontal overflow contract (Owner, 2026-09-01 R4) ──
+ * Every horizontal strip degrades to a scroll run the moment its
+ * content outgrows the container — and the TABLIST IS THE RUN (the
+ * a11y scroll region and the DOM scroller are one element,
+ * data-jx-tabs-list/.jx-tabs-run): hidden scrollbar, smooth travel,
+ * proximity snap, and scroll-padding that walks the focused trigger
+ * clear of the overlay lanes.
+ *
+ * Children of a scroller scroll with its content, so the OVERLAYS
+ * mount on the ROOT — the one-cell grid host stacking the run, the
+ * merged veil layer (z 1) and the chevron BUTTONS (z 2) in the same
+ * cell. The chevrons are REAL DOM (Owner, 2026-09-01 R4 — the
+ * engine's scroll-button pseudos are retired: UA-internal boxes took
+ * no timelines, offered no mask control and generated flakily across
+ * engines; DOM buttons are standard, styleable and live OUTSIDE the
+ * tablist so the a11y tree holds only tabs). Existence keys on the
+ * JS-stamped data-jx-scroll-state; the fade calcs from the host's
+ * --jx-scroll-progress. Positioning is GRID + z-index ONLY — never
+ * position:absolute/sticky (project law). */
+:where(.jx-tabs-horizontal) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+/* THE UNIFICATION (Owner 2026-09-04): the scroll chrome's var family
+ * lives in the SHARED sheet on .jx-scroll-host — the horizontal host
+ * carries the class, so this tuning rule is deliberately NOT :where():
+ * same element, same var, and a 0-specificity tie would hand the
+ * winner to css bundle order (not a law carrier). The earned (0,1,0)
+ * beats the shared default (0,0,0) deterministically; consumer
+ * utilities still win (the utilities layer outranks components) */
+.jx-tabs-horizontal {
+  /* tabs keeps ONE tuning override — its wider veil band (the strip's
+   * accepted scale; the shared default is the compact inset·1.5) */
+  --jx-scroll-veil: calc(var(--jx-inset) * 6);
+}
+/* same earned-specificity seam for the RUN tuning: the tablist
+ * carries .jx-tabs-run AND data-jx-scroll-run — the snap lane must
+ * beat the shared sheet's inset·1.5 scroll-padding whatever the
+ * bundle order */
+.jx-tabs-run {
+  grid-area: 1 / 1;
+  /* tabs' OWN tuning: the wider snap lane (inset·2, the
+   * focused-trigger clearing distance) and the SNAP itself (the tab
+   * strip keeps it: its triggers are pages; the button-group's
+   * retirement was a buttons-are-not-pages ruling) */
+  scroll-padding-inline: calc(var(--jx-inset) * 2);
+  scroll-snap-type: x proximity;
+}
+:where(.jx-tabs-run)::-webkit-scrollbar {
+  display: none;
+}
+.jx-tabs-run > [role='tab'] {
+  scroll-snap-align: start;
+}
+
+  /* reduced motion: the indicator's geometry transition dies (the
+     shared scroll-run sheet owns the scroll-treatment halves) */
+  @media (prefers-reduced-motion: reduce) {
+    :where([data-jx-tabs-ind]) {
+      transition: none;
+    }
+  }
+}
