@@ -65,7 +65,8 @@ async function dispatch(command: string, rest: string[]): Promise<number> {
     .with("key", () => {
       const sub = rest[0];
       if (sub === "add") {
-        return lazy(() => import("./cli/commands/consumer/key.ts"))(rest.slice(1));
+        // consumer/key.ts 自行识别并剥掉首 token "add"，此处必须整参透传
+        return lazy(() => import("./cli/commands/consumer/key.ts"))(rest);
       }
       return lazy(() => import("./cli/commands/provider/key.ts"))(rest);
     })

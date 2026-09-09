@@ -350,9 +350,12 @@ describe("接收侧兜底（buffer_overflow）", () => {
     const route = new FakeRoute();
     const limit = 4 * 1024;
     route.onForward = (_i, h) => {
-      // 同步连发：客户端尚未消费任何字节（fetch 未返回）
+      // 同步连发：客户端尚未消费任何字节（fetch 未返回）。首个 chunk 会被 pump
+      // 漏进流内部队列（HWM=1 计数，内存上界 = limit + 单 chunk），第二块起全部
+      // 计入待消费缓冲 → 第三块触发超限。
       h.handlers.onMeta({ id: "x", status: 200, contentType: "application/octet-stream" });
-      h.handlers.onChunk(new Uint8Array(limit)); // 恰好到达限额
+      h.handlers.onChunk(new Uint8Array(limit)); // 漏入流内部队列（desiredSize 归零）
+      h.handlers.onChunk(new Uint8Array(limit)); // 待消费 = limit（恰好到达）
       h.handlers.onChunk(new Uint8Array(1)); // 再来 1 字节 → 超限
     };
     const gw = await bootGateway(route, svc("svc-a", "a", await freePort()), { receiveBufferLimitBytes: limit });
@@ -445,7 +448,7 @@ describe("WS 中继", () => {
     await gw.stop();
   });
 
-  it("上游 accept 与本地计算不一致 → 升级失败（连接被拒）", async () => {
+  it("上游 accept 与本地计算不一致 → 升级照常成立（上游 ws 库自管 key，不做恒等校验）", async () => {
     const route = new FakeRoute();
     const gw = await bootGateway(route, svc("svc-a", "a", await freePort()));
     route.onForward = (_i, handle) => {
@@ -453,15 +456,17 @@ describe("WS 中继", () => {
         id: "w",
         status: 101,
         contentType: "text/plain",
-        headers: { "sec-websocket-accept": "mismatched-accept-value" },
+        headers: { "sec-websocket-accept": "upstream-lib-managed-accept" },
       });
     };
     const ws = new WebSocket(`ws://127.0.0.1:${gw.port}/ws`);
-    const failure = await new Promise<string>((r) => {
-      ws.once("error", (e) => r(e.message));
+    // open 即证明本地 accept（ws 库按客户端 key 自算）校验通过，上游 accept 仅参考
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", (e) => reject(new Error(`upgrade failed: ${e.message}`)));
+      setTimeout(() => reject(new Error("upgrade timeout")), 3000).unref?.();
     });
-    expect(failure).toBeTruthy();
-    expect(route.handles[0]!.aborted.length).toBe(1); // CLOSE 帧终结
+    ws.close();
     await gw.stop();
   });
 

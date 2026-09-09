@@ -8,6 +8,7 @@ import type { FabricOptions } from "@jixo/opendweb-client-sdk";
 import { loadConfig, resolveRelayUrls } from "../../config.ts";
 import type { FabricFactory, FabricLike } from "../../../consumer/providers.ts";
 import type { Keyring } from "../../../consumer/store.ts";
+import { loadSdk } from "../../../sdk.ts";
 
 export interface CommandContext {
   /** 测试注入的 HOME 替代（默认 os.homedir()）。 */
@@ -37,7 +38,7 @@ export async function createSdkFabricFactory(
   relayFlag: readonly string[] | undefined,
   ctx: CommandContext = {},
 ): Promise<FabricFactory> {
-  const sdk: typeof import("@jixo/opendweb-client-sdk") = await import("@jixo/opendweb-client-sdk");
+  const sdk = await loadSdk();
   const relayUrls = resolveRelayUrls({
     ...(relayFlag !== undefined ? { flag: relayFlag } : {}),
     env: process.env.AIFLY_RELAY,

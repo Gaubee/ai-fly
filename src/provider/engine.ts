@@ -106,6 +106,10 @@ export class ProviderEngine {
         this.addPeer(event.endpointId);
       } else if (event.type === "peer-disconnected") {
         this.removePeer(event.endpointId, "peer-disconnected");
+      } else if (event.type === "roster-updated") {
+        // 跨进程 revoke 的一致性：另一进程 revoke 后名册投影收紧，但 SDK 不主动断
+        // 既有会话（同进程 revoke 才断）——这里复核在线 peer 的成员资格，非成员即拆。
+        void this.enforceMembership();
       } else if (event.type === "relay-online" || event.type === "relay-offline") {
         // relayUrls 随目录刷新同步：入口变化推 refresh AUTH_OK。
         void this.refreshRelayUrls().then(() => this.broadcastRefresh());
@@ -191,6 +195,26 @@ export class ProviderEngine {
     this.peers.delete(peerId);
     this.keyIndex.untrack(ps);
     ps.disposeLocal(reason);
+  }
+
+  /** roster-updated 后复核在线 peer 成员资格：被 revoke 的成员即刻拆会话。 */
+  private async enforceMembership(): Promise<void> {
+    for (const peerId of [...this.peers.keys()]) {
+      try {
+        const member = await this.fabric.isMember(peerId);
+        if (!member) {
+          this.removePeer(peerId, "revoked-from-roster");
+          // 主动断开 fabric 会话（removePeer 只清引擎侧；SDK 同进程 revoke 才自动断）
+          try {
+            await this.fabric.disconnect(peerId);
+          } catch {
+            // 会话可能已断：忽略
+          }
+        }
+      } catch {
+        // isMember 查询失败（SDK 异常）：保守不动，等下一次事件复核
+      }
+    }
   }
 
   /** 用量记录（forward 回调；--logUsage 关闭时引擎侧不挂回调）。 */

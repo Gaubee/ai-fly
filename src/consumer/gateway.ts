@@ -6,12 +6,11 @@
 // 结束、ERROR→HTTP 映射 + OpenAI 风格 error JSON；客户端断开→ABORT。
 // 接收侧兜底：每请求待消费缓冲默认 4MiB（WS 双向各自计），超限 ABORT + 本地连接
 // 错误关闭 + buffer_overflow 记账（显式字节计数 + drain 追踪，进程内存有界）。
-// WS：本地握手由 ws 库 handleUpgrade 完成（accept=base64(sha1(key+GUID))，与上游
-// 透传 key 时的上游 accept 数学上恒等，故本地计算值即透传值，并额外与上游
-// sec-websocket-accept 比对校验一致性，不一致按协议违规处置）——实现期裁决见报告。
+// WS：本地握手由 ws 库 handleUpgrade 完成（accept=base64(sha1(key+GUID)) 自算，
+// 客户端校验由此保证）；上游侧 ws 库自管握手 key，其 accept 与本地无恒等关系，
+// 不做比对（避免恒 destroy）。
 // 正交意图：只做本地端点与流还原；wire 帧语义、Fabric、重连在 wire//providers.ts。
 
-import { createHash } from "node:crypto";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { Hono } from "hono";
@@ -34,13 +33,6 @@ export const DEFAULT_REQUEST_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const PUMP_BATCH_BYTES = 256 * 1024;
 /** null-body 状态码：Response 构造不允许携带正文。 */
 const NULL_BODY_STATUSES = new Set([204, 205, 304]);
-
-const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-
-function expectedWsAccept(key: string | undefined): string | undefined {
-  if (key === undefined || key === "") return undefined;
-  return createHash("sha1").update(key + WS_GUID).digest("base64");
-}
 
 // ---------------------------------------------------------------------------
 // 错误码 → HTTP 映射（表驱动；null = 连接错误关闭，不回 HTTP 实体）
@@ -636,8 +628,14 @@ class HttpStreamCtx implements LocalCtx {
     }
     this.queue.push(bytes);
     this.queuedBytes += bytes.length;
-    // 不主动 pump：字节仅在 pull（本地消费方读取）时搬入流——待消费缓冲的字节计数
-    // 即背压信号，本地客户端消费过慢 → queuedBytes 持续增长 → 达限走 overflow。
+    // 背压主体仍是 pull 驱动（queuedBytes 即待消费信号）；但 pull 空返回后 V8 不会
+    // 重调 pull，需在有消费需求（desiredSize>0，含挂起读）时主动补驱，否则分片
+    // 滞留到 onEnd 才集中投递、SSE 逐块 flush 失效。流内部队列受默认 HWM=1 约束，
+    // 多搬的量有界（≤PUMP_BATCH_BYTES），不破坏 4MiB 兜底语义。
+    const desired = this.controller?.desiredSize;
+    if (desired !== undefined && desired !== null && desired > 0) {
+      this.pump();
+    }
   }
 
   /**
@@ -648,7 +646,9 @@ class HttpStreamCtx implements LocalCtx {
     const controller = this.controller;
     if (controller === undefined || this.state !== "streaming") return;
     let moved = 0;
-    while (this.queue.length > 0 && moved < PUMP_BATCH_BYTES) {
+    // desiredSize≤0（流内部队列满，HWM=1 计数策略）即停——保证 queuedBytes 仍是
+    // 真实待消费信号（接收侧兜底依据），同时 pull/onChunk 双驱动消除空 pull 死锁。
+    while (this.queue.length > 0 && moved < PUMP_BATCH_BYTES && (controller.desiredSize ?? 0) > 0) {
       const chunk = this.queue.shift()!;
       moved += chunk.length;
       this.queuedBytes -= chunk.length;
@@ -825,16 +825,9 @@ class WsStreamCtx implements LocalCtx {
       this.socket?.write(head + "\r\n");
       return;
     }
-    // 101：校验上游 accept 与本地计算一致（key 端到端透传 ⇒ 数学恒等；不等即协议违规）
-    const key = this.req?.headers["sec-websocket-key"];
-    const expected = expectedWsAccept(typeof key === "string" ? key : undefined);
-    const upstream = header.headers?.["sec-websocket-accept"];
-    if (expected !== undefined && upstream !== undefined && upstream !== expected) {
-      this.finish();
-      this.requestAbort({ ws: true });
-      this.socket?.destroy();
-      return;
-    }
+    // 101：本地握手由 ws 库按客户端 key 自算 accept（客户端校验由它保证）。上游侧
+    // 因 ws 库自管握手 key（不可注入帧内 key），上游 accept 对应的是提供方 ws 客户端
+    // 的 key，与本地计算值无恒等关系——不做比对（曾因该矛盾恒 destroy，§5 e2e 实证）。
     const req = this.req;
     const socket = this.socket;
     const head = this.head ?? Buffer.alloc(0);

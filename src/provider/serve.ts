@@ -17,6 +17,7 @@ import { LimitEnforcer } from "./limits.ts";
 import { ProviderEngine, type ProviderEngineOptions } from "./engine.ts";
 import { collectEnvVarNames, type EnvSource } from "./rewrite.ts";
 import type { UpstreamTimeouts } from "./upstream.ts";
+import { loadSdk } from "../sdk.ts";
 
 export const DEFAULT_PROVIDER_DATA_DIR = (): string => join(homedir(), ".aifly", "provider");
 
@@ -44,7 +45,7 @@ export async function openOrCreateFabric(
   dataDir: string,
   relayUrls?: readonly string[] | undefined,
 ): Promise<Fabric> {
-  const { Fabric } = await import("@jixo/opendweb-client-sdk");
+  const { Fabric } = await loadSdk();
   const opts = fabricOptions(dataDir, relayUrls);
   const existed = dirHasEntries(providerFabricDir(dataDir));
   if (existed) {
@@ -77,7 +78,7 @@ export async function openExistingFabric(
   if (!dirHasEntries(providerFabricDir(dataDir))) {
     throw new Error(`error: no fabric identity under ${dataDir}; run 'ai-fly serve --data <dir>' first`);
   }
-  const { Fabric } = await import("@jixo/opendweb-client-sdk");
+  const { Fabric } = await loadSdk();
   return Fabric.open(fabricOptions(dataDir, relayUrls));
 }
 
