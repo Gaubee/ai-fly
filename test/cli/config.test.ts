@@ -74,4 +74,21 @@ describe("resolveRelayUrls precedence flag > env > file > default", () => {
     expect(resolveRelayUrls({})).toBeUndefined();
     expect(resolveRelayUrls({ flag: [] })).toBeUndefined();
   });
+
+  it("link tier: 链接内嵌 relay 高于 env/file（兑换与连接须与签发同网）", () => {
+    expect(
+      resolveRelayUrls({
+        link: ["http://link:1"],
+        env: "http://env:1",
+        file: { relayUrls: ["http://file:1"] },
+      }),
+    ).toEqual(["http://link:1"]);
+  });
+
+  it("link tier: flag 仍可覆盖链接；空链接数组视为缺席", () => {
+    expect(
+      resolveRelayUrls({ flag: ["http://flag:1"], link: ["http://link:1"] }),
+    ).toEqual(["http://flag:1"]);
+    expect(resolveRelayUrls({ link: [], env: "http://env:1" })).toEqual(["http://env:1"]);
+  });
 });

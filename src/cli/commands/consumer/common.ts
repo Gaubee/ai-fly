@@ -33,14 +33,17 @@ export function ctxHomedir(ctx: CommandContext): string {
  * 真实 Fabric 工厂（CLI 层唯一触 SDK 的位置）：动态 import 规避 vitest worker 与
  * 原生模块的不兼容；relay 配置映射为 SDK FabricOptions.relay（custom urls），
  * 未配置时缺省走 SDK 默认（n0）。
+ * @param linkRelayUrls aifly1. 链接内嵌 relay（import 命令传入；层级见 config.ts）
  */
 export async function createSdkFabricFactory(
   relayFlag: readonly string[] | undefined,
   ctx: CommandContext = {},
+  linkRelayUrls?: readonly string[],
 ): Promise<FabricFactory> {
   const sdk = await loadSdk();
   const relayUrls = resolveRelayUrls({
     ...(relayFlag !== undefined ? { flag: relayFlag } : {}),
+    ...(linkRelayUrls !== undefined ? { link: linkRelayUrls } : {}),
     env: process.env.AIFLY_RELAY,
     file: loadConfig(ctxHomedir(ctx)),
   });

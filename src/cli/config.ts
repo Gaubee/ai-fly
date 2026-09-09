@@ -62,16 +62,23 @@ export function saveConfig(next: ConfigFile, base = homedir()): void {
 }
 
 /**
- * 解析生效的 relay 入口：flag > env(AIFLY_RELAY，逗号分隔) > config file。
- * 返回 undefined 表示走 SDK 默认（n0 公共 relay）。
+ * 解析生效的 relay 入口：flag > 链接内嵌（import 消费侧）> env(AIFLY_RELAY，逗号
+ * 分隔) > config file。返回 undefined 表示走 SDK 默认（n0 公共 relay）。
+ * 链接层级的语义：aifly1. 链接内嵌的 relayUrls 是提供方签发 invite 的入口——
+ * 兑换与后续连接都必须发生在同一 relay 网，故高于机器级 env/config（2026-09-09
+ * 实机踩坑：不带 --relay 时落 SDK 公网默认，兑换成功但连接永败且无提示）。
  */
 export function resolveRelayUrls(input: {
   flag?: readonly string[];
+  /** 链接内嵌 relay 入口（import 命令传入；空数组视为缺席）。 */
+  link?: readonly string[];
   env?: string | undefined;
   file?: ConfigFile;
 }): string[] | undefined {
   const fromFlag = input.flag?.filter((u) => u.length > 0);
   if (fromFlag && fromFlag.length > 0) return [...fromFlag];
+  const fromLink = input.link?.filter((u) => u.length > 0);
+  if (fromLink && fromLink.length > 0) return [...fromLink];
   const envRaw = input.env?.trim();
   if (envRaw) {
     const urls = envRaw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);

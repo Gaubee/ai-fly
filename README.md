@@ -75,9 +75,9 @@ the UI shows.
    URL directly shows the guidance page; a reused link token reports
    "The link token is invalid or was already used."
 3. **Theme toggle** — dark/light switch persists across a window close/reopen.
-4. **Share wizard (3 steps)** — pick a preset (local presets first), name &
-   group, generate link. The final card shows the `aifly1.` link with a copy
-   field and the raw key once.
+4. **Share wizard (3 steps)** — pick a preset (provider logos render, search
+   filters; local presets first), name & group, generate link. The final card
+   shows the `aifly1.` link with a copy field and the raw key once.
 5. **Connect wizard (3 steps)** — paste the link from another machine (or the
    same one with a fresh data dir), confirm ports, pick an agent writer; the
    preview diff matches the written file.
@@ -87,3 +87,17 @@ the UI shows.
 7. **Restart recovery** — quit and relaunch on both sides: services, groups,
    keys, imported providers and custom ports all come back; the gateway
    resumes and serves traffic without re-importing.
+8. **Overlay safe area & drag** (macOS overlay window) — the traffic lights
+   never overlap the brand block or content; dragging the strip at the very
+   top of the window moves the window; resize keeps the offset correct. In a
+   plain browser tab the layout must look identical (zero inset fallback).
+9. **Secrets panel** — Advanced > secrets: add a key-value pair, pick it in
+   the share wizard's "api key" selector, generate a service; the saved
+   rewrite shows `authorization: $secret:<name>`; values never re-display
+   after saving; removing a secret referenced by a service is allowed but the
+   service then fails with `secret_missing` until re-added.
+10. **Connectivity test** — in the share wizard (with a secret picked) or a
+    service row in Advanced, press `test`: the cheapest priced chat model is
+    picked by default, the dropdown lists models sorted by price, and the
+    result line shows `ok · <ms> · <model>` or the upstream error (an
+    upstream 401 with an invalid key is a PASS — the network is proven).

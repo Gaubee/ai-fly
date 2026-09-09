@@ -1,5 +1,5 @@
-// `ai-fly group <add|list>`：分组管理（服务引用 + 可选分组级限额）。限额结构
-// {maxConcurrency?, dailyRequests?} 由 limits.ts 执行，此处只写入 store。
+// `ai-fly group <add|set-services|list>`：分组管理（服务引用 + 可选分组级限额）。
+// 限额结构 {maxConcurrency?, dailyRequests?} 由 limits.ts 执行，此处只写入 store。
 
 import { homedir } from "node:os";
 import { parseArgv, type OptionValue } from "../../args.ts";
@@ -15,6 +15,7 @@ const SPEC = {
 
 const USAGE = `usage:
   ai-fly group add <name> [--service <serviceName>]... [--max-concurrency <n>] [--daily-requests <n>] [--data <dir>]
+  ai-fly group set-services <name> [--service <serviceName>]... [--data <dir>]
   ai-fly group list [--data <dir>]`;
 
 export async function run(argv: string[], ctx: { homedir?: string } = {}): Promise<number> {
@@ -23,9 +24,10 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
     const { options, positionals } = parseArgv(argv, SPEC, { homedir: home });
     const sub = positionals[0];
     if (sub === "add") return add(options, positionals, home);
+    if (sub === "set-services") return setServices(options, positionals, home);
     if (sub === "list") return list(options, home);
     if (sub === undefined) throw new UsageError(USAGE);
-    throw new UsageError(`error: unknown group subcommand '${sub}' (known: add, list)`);
+    throw new UsageError(`error: unknown group subcommand '${sub}' (known: add, set-services, list)`);
   } catch (err) {
     return reportCliError(err);
   }
@@ -55,6 +57,24 @@ function add(options: Readonly<Record<string, OptionValue>>, positionals: readon
       "",
     ].join("\n"),
   );
+  return 0;
+}
+
+function setServices(
+  options: Readonly<Record<string, OptionValue>>,
+  positionals: readonly string[],
+  home: string,
+): number {
+  const name = positionals[1];
+  if (name === undefined) throw new UsageError("error: group set-services requires a <name> argument");
+  const services = multi(options.service);
+  if (services.length === 0) {
+    throw new UsageError("error: group set-services requires at least one --service <serviceName> (use the store API to empty a group)");
+  }
+  const store = openStore(resolveDataDir(str(options.data), home));
+  const group = store.setGroupServices(name, services);
+  const names = group.serviceIds.map((id) => store.getService(id)?.name ?? id).join(", ");
+  process.stdout.write(`group updated: ${group.name}\n  services: ${names}\n`);
   return 0;
 }
 

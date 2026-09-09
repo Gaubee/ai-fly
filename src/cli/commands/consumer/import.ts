@@ -38,15 +38,29 @@ export async function run(argv: readonly string[], ctx: CommandContext = {}): Pr
   }
   const out = ctxOut(ctx);
   const root = consumersRoot(options.data as string | undefined, ctxHomedir(ctx));
+  // 链接内嵌 relay 是提供方签发入口：作为缺省层级参与解析（flag 仍可覆盖）
+  const payload = decodeShareLink(link);
 
   if (options.preview === true) {
     // 离线解析：零网络请求、零 Fabric 构造（不加载 SDK）
-    const payload = decodeShareLink(link);
     for (const line of formatLinkPreview(payload)) out(line);
     return 0;
   }
 
-  const factory = await createSdkFabricFactory(options.relay as string[] | undefined, ctx);
+  const linkRelays = payload.provider.relayUrls;
+  const flagRelays = options.relay as string[] | undefined;
+  if (flagRelays !== undefined && flagRelays.length > 0 && linkRelays.length > 0) {
+    const sameSet =
+      flagRelays.length === linkRelays.length && flagRelays.every((u) => linkRelays.includes(u));
+    if (!sameSet) {
+      out(
+        "warning: --relay overrides the share link's relay entries; if the provider stays unreachable, drop the flag to use the link's entries",
+      );
+    }
+  } else if (linkRelays.length > 0) {
+    out(`relay: using ${linkRelays.length} entry URL(s) from the share link (override with --relay)`);
+  }
+  const factory = await createSdkFabricFactory(flagRelays, ctx, linkRelays);
   const result = await importLink(link, { consumersRoot: root, fabric: factory });
   out(result.redeemed ? "invite redeemed - fabric identity created" : "existing fabric identity reused - invite not consumed");
   for (const line of formatKeyringSummary(result.ring)) out(line);

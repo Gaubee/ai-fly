@@ -17,7 +17,7 @@ const USAGE = `ai-fly — peer-to-peer HTTP/WebSocket bridge with AI-ready prese
 Provider:
   ai-fly serve    [--data <dir>] [--relay <url>]...        run the provider daemon
   ai-fly service  add|list|remove ...                      manage services
-  ai-fly group    add|list ...                             manage groups
+  ai-fly group    add|set-services|list ...                  manage groups
   ai-fly key      issue|list|revoke --group <name>         manage group keys
   ai-fly share    --group <name> [--ttl <dur>]             mint a share link (token + key)
   ai-fly revoke   <endpointId>                             eject a device (fabric-level)

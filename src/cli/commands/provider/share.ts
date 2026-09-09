@@ -38,6 +38,13 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
 
     const store = openStore(dataDir);
     const resolvedRelay = resolvedRelayUrls(options, home);
+    if (resolvedRelay === undefined) {
+      // 实机踩坑（2026-09-09）：serve --relay <自定> 而 share 未带 --relay 时，链接
+      // 会内嵌 SDK 公网默认 relay——兑换可能成功但消费方连接永败。此处显式警示。
+      process.stdout.write(
+        "warning: no relay configured for this command (flag/env/config); the link will carry public default relays - if the provider daemon runs on a custom relay, pass a matching --relay\n",
+      );
+    }
     fabric = await openExistingFabric(dataDir, resolvedRelay);
 
     const invite = await issueInvite(fabric, ttlMs, options["allow-relayless"] === true);
