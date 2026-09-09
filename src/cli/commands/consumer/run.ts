@@ -1,0 +1,53 @@
+// `ai-fly run [--data <dir>] [--strict-ports]`：网关长驻。加载全部钥环，物化本地监听
+// （离线 503 语义），启动提供者连接与退避重连；SIGINT/SIGTERM 优雅退出。
+// 正交意图：参数解析 + 生命周期；引擎装配在 consumer/runtime.ts。
+
+import { homedir } from "node:os";
+import { parseArgv } from "../../args.ts";
+import { CliError } from "../../errors.ts";
+import { consumersRoot, listKeyrings } from "../../../consumer/store.ts";
+import { startEngine } from "../../../consumer/runtime.ts";
+import { createFabricProviderTransport } from "../../../consumer/providers.ts";
+import {
+  createSdkFabricFactory,
+  ctxHomedir,
+  ctxOut,
+  printListeners,
+  ringsForRun,
+  waitForSignals,
+  type CommandContext,
+} from "./common.ts";
+
+export async function run(argv: readonly string[], ctx: CommandContext = {}): Promise<number> {
+  const { options } = parseArgv(
+    argv,
+    { data: { type: "string", tilde: true }, "strict-ports": { type: "boolean" }, relay: { type: "multi" } },
+    { homedir: ctx.homedir ?? homedir() },
+  );
+  const out = ctxOut(ctx);
+  const root = consumersRoot(options.data as string | undefined, ctxHomedir(ctx));
+  const { rings, warnings } = listKeyrings(root);
+  for (const w of warnings) out(`warning: ${w}`);
+  const engineRings = ringsForRun(rings);
+  if (engineRings.length === 0) {
+    throw new CliError("error: no imported providers - run 'ai-fly import <aifly1-link>' or 'ai-fly join <token>' first");
+  }
+  const factory = await createSdkFabricFactory(options.relay as string[] | undefined, ctx);
+  const engine = await startEngine({
+    rings: engineRings,
+    consumersRoot: root,
+    sessionFactoryFor: (ring) =>
+      createFabricProviderTransport(factory, {
+        dataDir: `${root}/${ring.endpointId.slice(0, 8)}/fabric`,
+        providerEndpointId: ring.endpointId,
+      }),
+    strictPorts: options["strict-ports"] === true,
+    onNotice: out,
+  });
+  printListeners(out, engine.gateway.listenerInfo());
+  out("gateway running - press Ctrl-C to stop");
+  await waitForSignals();
+  await engine.stop();
+  out("gateway stopped");
+  return 0;
+}
