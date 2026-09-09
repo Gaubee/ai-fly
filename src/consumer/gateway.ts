@@ -57,6 +57,8 @@ export const ERROR_HTTP_MAPPING: Readonly<Record<ErrorCodeValue, HttpErrorMappin
   // 上游错误状态正常路径走 RESP_META/CHUNK/END 流原样透传；裸 ERROR(upstream_status)
   // 帧不携带 status 载荷，只能以 502 兜底（裁决记录于报告）。
   upstream_status: { status: 502, type: "api_error" },
+  // 提供方密钥库无此引用（$secret 未知名）：提供方配置问题，消费方视角 502。
+  secret_missing: { status: 502, type: "api_error" },
   protocol_version: { status: 500, type: "api_error" },
   protocol_seq: { status: 500, type: "api_error" },
   protocol_error: { status: 500, type: "api_error" },

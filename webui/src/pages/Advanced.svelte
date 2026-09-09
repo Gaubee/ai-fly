@@ -1,7 +1,10 @@
-<!-- 高级设置（B 3.5，#/advanced）：Tabs = 服务 / 分组 / 密钥 / 中继与限额 /
-     设置。net-fly 通用概念（match 全集、rewrite 规则、relay 配置）只出现在
-     这里；默认一行一服务，展开 detail（$env 头值显示 ●）。密钥 issue 一次性
-     原文 dialog + revoke 两步确认。状态机在 stores/advanced。 -->
+<!-- 高级设置（B 3.5 + M3 6.x，#/advanced）：Tabs = 服务 / 分组 / 密钥 /
+     密钥库 / 中继与限额 / 设置。net-fly 通用概念（match 全集、rewrite 规则、
+     relay 配置）只出现在这里；默认一行一服务，展开 detail（$env:/$secret:
+     注入值掩码），行内 test 连通测试（M3 6.3）。keys = 消费者侧 share 密钥
+     （issue 一次性原文 dialog + revoke 两步确认）；secrets = provider 侧
+     上游密钥库（列表/增删改内联卡，值不回显，M3 6.1/6.2）。状态机在
+     stores/advanced。 -->
 <script lang="ts">
   import { onMount } from "svelte";
   import Card, { CardFooter } from "$lib/ui/card";
@@ -16,11 +19,17 @@
   import ThemeToggle from "$lib/ui/theme-toggle";
   import Tabs, { TabsList, TabsTrigger, TabsContent } from "$lib/ui/tabs";
   import Dialog, { DialogFooter } from "$lib/ui/dialog";
+  import { toRpcError } from "$lib/rpc-client";
+  import type { ServiceConfigView } from "$shared/rpc-contract.ts";
   import { slide } from "svelte/transition";
   import ErrorAlert from "../components/ErrorAlert.svelte";
   import CopyField from "../components/CopyField.svelte";
+  import SecretPicker from "../components/SecretPicker.svelte";
+  import TestConnection from "../components/TestConnection.svelte";
   import { app, refresh } from "../stores/app.svelte.ts";
   import { call } from "../stores/rpc.svelte.ts";
+  import { toastRpcError } from "../stores/toast.svelte.ts";
+  import { setSecret, removeSecret } from "../stores/secrets.svelte.ts";
   import {
     maskSecret,
     serviceForm,
@@ -73,6 +82,111 @@
   $effect(() => {
     if (!keyDialogOpen && keyIssue.result !== null) keyIssue.result = null;
   });
+
+  // ── 密钥库区（M3 6.1）：页面内联卡（非 dialog）──────────────────────
+  // 共享 store 只持名称名单（SecretPicker 用）；本区另持带时间戳的行
+  // （契约仅回 name/createdAt/updatedAt，值不跨 RPC 亦不回显）。
+  interface SecretRow {
+    name: string;
+    createdAt: number;
+    updatedAt: number;
+  }
+  let secretRows = $state<SecretRow[]>([]);
+  let secretsLoading = $state(false);
+  let secretsLoaded = $state(false);
+  // 名词法镜像契约 SECRET_NAME_SCHEMA（同 SecretsDialog，不引 zod 保 bundle 干净）
+  const SECRET_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/;
+  let secretNameDraft = $state("");
+  /** password 型输入，提交后即清空，永不回显。 */
+  let secretValueDraft = $state("");
+  /** 正在覆写的既有密钥名（编辑 = 同名 set 覆写；值不回显）。 */
+  let secretEditing = $state<string | null>(null);
+  /** 行内 remove 二次确认（与 services/keys 行同款切换）。 */
+  let secretConfirm = $state<string | null>(null);
+  let secretRemoving = $state<string | null>(null);
+  let secretBusy = $state(false);
+
+  // 进入 secrets 区拉一份名单（set/remove 成功后各自再刷）
+  $effect(() => {
+    if (tab === "secrets") void loadSecretRows();
+  });
+
+  async function loadSecretRows(): Promise<void> {
+    if (secretsLoading) return;
+    secretsLoading = true;
+    try {
+      const result = await call((c) => c.provider.secrets.list({}));
+      secretRows = result.secrets;
+      secretsLoaded = true;
+    } catch (error) {
+      toastRpcError(toRpcError(error));
+    } finally {
+      secretsLoading = false;
+    }
+  }
+
+  const secretNameError = $derived(
+    secretNameDraft.trim() === "" || SECRET_NAME_RE.test(secretNameDraft.trim())
+      ? undefined
+      : "lowercase letters, digits, dot, dash, underscore",
+  );
+  const secretFormValid = $derived(
+    secretNameError === undefined && secretNameDraft.trim() !== "" && secretValueDraft !== "",
+  );
+
+  function resetSecretForm(): void {
+    secretNameDraft = "";
+    secretValueDraft = "";
+    secretEditing = null;
+  }
+
+  function editSecretRow(name: string): void {
+    secretEditing = name;
+    secretNameDraft = name;
+    secretValueDraft = "";
+  }
+
+  async function submitSecret(): Promise<void> {
+    const name = secretNameDraft.trim();
+    if (secretBusy || !secretFormValid) return;
+    secretBusy = true;
+    const ok = await setSecret(name, secretValueDraft);
+    secretBusy = false;
+    if (!ok) return; // 失败已由 store toast
+    await loadSecretRows();
+    resetSecretForm();
+  }
+
+  async function removeSecretRow(name: string): Promise<void> {
+    if (secretRemoving !== null) return;
+    secretRemoving = name;
+    const ok = await removeSecret(name);
+    secretRemoving = null;
+    if (!ok) return;
+    secretConfirm = null;
+    void loadSecretRows();
+  }
+
+  // ── 服务行内联 test（M3 6.3）────────────────────────────────────
+  /** 内联 test 展开中的服务 id（null = 全收起；互斥从简）。 */
+  let serviceTestOpen = $state<string | null>(null);
+
+  /** 已存服务的注入密钥名（authorization 头 $secret: 前缀解析）。 */
+  function serviceSecretName(service: ServiceConfigView): string | undefined {
+    const authorization = service.rewrite?.headerSet?.["authorization"];
+    return authorization !== undefined && authorization.startsWith("$secret:")
+      ? authorization.slice("$secret:".length)
+      : undefined;
+  }
+
+  /** 行头 key injected 徽章：$env: / $secret: 任一注入即亮。 */
+  function hasInjectedAuth(service: ServiceConfigView): boolean {
+    const authorization = service.rewrite?.headerSet?.["authorization"];
+    return (
+      authorization !== undefined &&
+      (authorization.startsWith("$env:") || authorization.startsWith("$secret:"))
+    );
+  }
 
   function toggleExpanded(serviceId: string): void {
     const next = new Set(expanded);
@@ -127,7 +241,7 @@
   <header class="flex flex-wrap items-baseline justify-between gap-2">
     <h1 class="font-nav text-base uppercase tracking-[0.1em]">Advanced</h1>
     <p class="text-xs text-muted-foreground">
-      net-fly internals - match sets, rewrite rules, keys, relay
+      net-fly internals - match sets, rewrite rules, keys, secrets, relay
     </p>
   </header>
 
@@ -136,6 +250,7 @@
       <TabsTrigger value="services">services</TabsTrigger>
       <TabsTrigger value="groups">groups</TabsTrigger>
       <TabsTrigger value="keys">keys</TabsTrigger>
+      <TabsTrigger value="secrets">secrets</TabsTrigger>
       <TabsTrigger value="relay">relay & limits</TabsTrigger>
       <TabsTrigger value="settings">settings</TabsTrigger>
     </TabsList>
@@ -182,11 +297,15 @@
                     {#each groupsOfService.get(service.name) ?? [] as groupName (groupName)}
                       <Badge variant="tonal">{groupName}</Badge>
                     {/each}
-                    {#if service.rewrite?.headerSet?.["authorization"]?.startsWith("$env:")}
+                    {#if hasInjectedAuth(service)}
                       <Badge variant="tonal" class="jx-hue-info">key injected</Badge>
                     {/if}
                   </button>
                   <span class="flex items-center gap-1.5">
+                    <PressButton
+                      variant="ghost"
+                      onclick={() => (serviceTestOpen = serviceTestOpen === service.serviceId ? null : service.serviceId)}
+                    >test</PressButton>
                     <PressButton variant="ghost" onclick={() => openServiceEdit(service)}>edit</PressButton>
                     {#if serviceRemove.confirm === service.name}
                       <PressButton
@@ -205,7 +324,7 @@
                   </span>
                 </div>
                 {#if open}
-                  <!-- detail 展开：upstream / match 全集 / rewrite（$env 值显示 ●） -->
+                  <!-- detail 展开：upstream / match 全集 / rewrite（$env:/$secret: 注入值掩码） -->
                   <dl class="grid gap-x-6 gap-y-1.5 border-t border-border px-3 py-2.5 text-xs" transition:slide={{ duration: 150 }}>
                     <div class="flex gap-2">
                       <dt class="w-20 flex-none text-muted-foreground">upstream</dt>
@@ -249,6 +368,12 @@
                     </div>
                   </dl>
                 {/if}
+                {#if serviceTestOpen === service.serviceId}
+                  <!-- 行内连通测试（M3 6.3）：自定义服务无 presetId → 无模型下拉 -->
+                  <div class="border-t border-border px-3 py-2.5" transition:slide={{ duration: 150 }}>
+                    <TestConnection upstream={service.upstream} secretName={serviceSecretName(service)} />
+                  </div>
+                {/if}
               </div>
             {/each}
           </div>
@@ -269,14 +394,14 @@
                 {#each serviceForm.match as rule, i (i)}
                   <div class="flex items-center gap-2">
                     <div class="w-28">
+                      <!-- Select 只有 bind:value（无 onchange prop）——直写表单状态 -->
                       <Select
                         options={[
                           { value: "suffix", label: "suffix" },
                           { value: "exact", label: "exact" },
                           { value: "regex", label: "regex" },
                         ]}
-                        value={rule.type}
-                        onchange={(value) => (serviceForm.match[i]!.type = value)}
+                        bind:value={rule.type}
                       />
                     </div>
                     <input
@@ -298,11 +423,14 @@
                   onclick={() => (serviceForm.match = [...serviceForm.match, { type: "suffix", value: "" }])}
                 >+ add rule</PressButton>
               </div>
-              <Input
-                label="$env variable name (optional authorization injection)"
-                placeholder="MY_API_KEY"
-                bind:value={serviceForm.keyEnv}
+              <!-- 密钥选择器（M3 6.2）：$env 变量名 → 本机密钥库；提交写 $secret: -->
+              <SecretPicker
+                value={serviceForm.secretName}
+                onchange={(name) => (serviceForm.secretName = name)}
               />
+              <!-- 连通测试（M3 6.3）：自定义服务不传 apiForm（服务端缺省）/
+                   presetId（无模型下拉），密钥取表单当前选择 -->
+              <TestConnection upstream={serviceForm.upstream} secretName={serviceForm.secretName} />
               {#if serviceForm.editingName !== ""}
                 <p class="text-[11px] text-muted-foreground">
                   editing re-creates the service (remove + add) - group membership is preserved by name.
@@ -526,6 +654,89 @@
           </table>
         {/if}
         <ErrorAlert error={keyRevoke.error} />
+      </div>
+    </TabsContent>
+
+    <!-- ── 密钥库（provider 侧上游密钥，M3 6.1/6.2）─────────── -->
+    <TabsContent value="secrets">
+      <div class="flex flex-col gap-3">
+        <Card title="secrets" scroll={false}>
+          <div class="flex flex-col gap-3 p-3">
+            <p class="text-xs leading-relaxed text-muted-foreground">
+              upstream api keys for your services - stored only in this machine's
+              secret panel; consumers only ever see
+              <code class="font-mono">&#9679;</code>.
+            </p>
+
+            {#if secretsLoading && !secretsLoaded}
+              <div class="flex flex-col gap-2">
+                <Skeleton class="h-9" />
+                <Skeleton class="h-9" />
+              </div>
+            {:else if secretRows.length === 0}
+              <p class="border border-dashed border-border px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+                no secrets yet - add one below (e.g. the api key of the upstream you are sharing).
+              </p>
+            {:else}
+              <div class="flex flex-col gap-1.5">
+                {#each secretRows as row (row.name)}
+                  <div class="flex flex-wrap items-center gap-2 border border-border/70 px-2.5 py-1.5">
+                    <span class="min-w-0 truncate font-mono text-xs">{row.name}</span>
+                    <span class="text-[11px] text-muted-foreground">updated {formatDate(row.updatedAt)}</span>
+                    <span class="ml-auto flex items-center gap-1.5">
+                      <PressButton variant="ghost" onclick={() => editSecretRow(row.name)}>edit</PressButton>
+                      {#if secretConfirm === row.name}
+                        <PressButton
+                          variant="tonal"
+                          class="jx-pair-destructive"
+                          loading={secretRemoving === row.name}
+                          onclick={() => void removeSecretRow(row.name)}
+                        >confirm remove</PressButton>
+                        <PressButton variant="ghost" onclick={() => (secretConfirm = null)}>cancel</PressButton>
+                      {:else}
+                        <PressButton variant="ghost" onclick={() => (secretConfirm = row.name)}>remove</PressButton>
+                      {/if}
+                    </span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+
+            <Separator />
+
+            <div class="flex flex-col gap-3">
+              <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
+                {secretEditing !== null ? `overwrite "${secretEditing}"` : "add a secret"}
+              </span>
+              <Input label="name" placeholder="openai" error={secretNameError} bind:value={secretNameDraft} />
+              <Input
+                type="password"
+                label="value"
+                placeholder="Bearer sk-..."
+                autocomplete="off"
+                bind:value={secretValueDraft}
+              />
+              <p class="text-[11px] leading-relaxed text-muted-foreground">
+                the full authorization header value, e.g.
+                <code class="font-mono">Bearer sk-...</code> - it is stored locally
+                and cleared from this form after saving.
+              </p>
+              <div class="flex items-center gap-2">
+                <PressButton
+                  variant="fill"
+                  loading={secretBusy}
+                  class={secretFormValid ? undefined : "pointer-events-none opacity-50"}
+                  onclick={() => void submitSecret()}
+                >
+                  {secretEditing !== null ? "overwrite" : "save"}
+                </PressButton>
+                {#if secretEditing !== null}
+                  <PressButton variant="ghost" onclick={resetSecretForm}>cancel</PressButton>
+                {/if}
+              </div>
+            </div>
+          </div>
+        </Card>
       </div>
     </TabsContent>
 

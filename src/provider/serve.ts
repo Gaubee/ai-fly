@@ -15,7 +15,8 @@ import { ProviderStore } from "./store.ts";
 import type { ServiceConfig } from "./store.ts";
 import { LimitEnforcer } from "./limits.ts";
 import { ProviderEngine, type ProviderEngineOptions } from "./engine.ts";
-import { collectEnvVarNames, type EnvSource } from "./rewrite.ts";
+import { collectEnvVarNames, type EnvSource, type SecretSource } from "./rewrite.ts";
+import { SecretsStore } from "./secrets.ts";
 import type { UpstreamTimeouts } from "./upstream.ts";
 import { loadSdk } from "../sdk.ts";
 
@@ -154,6 +155,8 @@ export interface DaemonOptions extends ProviderEngineOptions {
   watch?: boolean;
   /** $env 解析源（默认 process.env）。 */
   env?: EnvSource | undefined;
+  /** $secret 解析源（默认 dataDir 下的 SecretsStore；测试注入）。 */
+  secrets?: SecretSource | undefined;
   timeouts?: Partial<UpstreamTimeouts> | undefined;
 }
 
@@ -174,6 +177,9 @@ export async function startProviderDaemon(opts: DaemonOptions): Promise<RunningD
     store.setAlias(opts.alias);
   }
   const limits = new LimitEnforcer({ dataDir: opts.dataDir });
+  // $secret 解析默认接密钥库（无内存态：每请求读盘，UI/CLI 写入即刻生效）。
+  const secretsStore = SecretsStore.open(opts.dataDir);
+  const secrets = opts.secrets ?? ((name: string) => secretsStore.get(name));
   const fabric = await openOrCreateFabric(opts.dataDir, opts.relayUrls);
   const engine = new ProviderEngine({
     fabric,
@@ -185,6 +191,7 @@ export async function startProviderDaemon(opts: DaemonOptions): Promise<RunningD
       logUsage: opts.logUsage,
       timeouts: opts.timeouts,
       env: opts.env,
+      secrets,
     },
   });
   await engine.start();

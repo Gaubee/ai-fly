@@ -64,6 +64,23 @@
     void refreshWriterPreview();
   }
 
+  // Select 只支持 bind:value（无 onchange prop）：本地 $state + 受保护双向 effect 桥接
+  let serviceSel = $state(connectW.agentServiceId);
+  $effect(() => {
+    if (connectW.agentServiceId !== serviceSel) serviceSel = connectW.agentServiceId;
+  });
+  $effect(() => {
+    if (serviceSel !== connectW.agentServiceId) onServiceChange(serviceSel);
+  });
+
+  let agentSel = $state(connectW.agent);
+  $effect(() => {
+    if (connectW.agent !== agentSel) agentSel = connectW.agent;
+  });
+  $effect(() => {
+    if (agentSel !== connectW.agent) onAgentChange(agentSel);
+  });
+
   const serviceOptions = $derived(
     connectW.applied !== null
       ? connectW.applied.services.map((service) => ({
@@ -264,17 +281,12 @@
     <Card title="agent setup" scroll={false}>
       <div class="flex flex-col gap-3 p-3">
         <div class="grid gap-3 sm:grid-cols-2">
-          <Select
-            label="service"
-            options={serviceOptions}
-            value={connectW.agentServiceId}
-            onchange={onServiceChange}
-          />
+          <!-- Select 只支持 bind:value：serviceSel/agentSel 为 derived get/set 桥接 -->
+          <Select label="service" options={serviceOptions} bind:value={serviceSel} />
           <Select
             label="agent"
             options={AGENT_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
-            value={connectW.agent}
-            onchange={onAgentChange}
+            bind:value={agentSel}
           />
         </div>
 

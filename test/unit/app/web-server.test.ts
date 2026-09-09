@@ -227,6 +227,17 @@ describe("orpc over ws", () => {
     });
     expect(applied.envHint).toContain("OPENAI_API_KEY");
 
+    // secretName 优先于 keyEnv：rewrite 写 $secret:<name>，不给 envHint
+    const viaSecret = await client.presets.applyAsService({
+      presetId: "openai",
+      name: "openai-via-secret",
+      secretName: "openai-main",
+    });
+    expect(viaSecret.service.rewrite).toEqual({
+      headerSet: { authorization: "$secret:openai-main" },
+    });
+    expect(viaSecret.envHint).toBeUndefined();
+
     // 写手两段式（preview → confirm → apply）
     const writerPreview = await client.writers.preview({ agent: "codex", target: { port: 8787 } });
     expect(writerPreview.path).toContain(join(base, ".codex", "config.toml"));

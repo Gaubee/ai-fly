@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="ai-fly">
+  <!-- Direction A — geometric minimal glyph: one origami dart, 45° thrust.
+       Solid form = handing a service out; tail notch (negative chevron) = the
+       incoming channel. One shape, both readings. Silhouette holds at 16px. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#181818"/>
+      <stop offset="1" stop-color="#0a0a0a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.56" cy="0.44" r="0.5">
+      <stop offset="0" stop-color="#fdd309" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#fdd309" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <!-- dart built on its own flight axis, rotated -45deg to point NE -->
+  <g transform="translate(519.07 504.93) rotate(-45)">
+    <!-- upper fold plane (lit): nose, wing tip, notch base, notch apex -->
+    <polygon points="390,0 -390,-210 -390,-62 -105,0" fill="#fdd309"/>
+    <!-- lower fold plane (shade): nose, notch apex, notch base, wing tip -->
+    <polygon points="390,0 -105,0 -390,62 -390,210" fill="#f5b800"/>
+  </g>
+</svg>

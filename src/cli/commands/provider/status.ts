@@ -1,6 +1,6 @@
 // `ai-fly status [--verbose]`：提供方状态快照——存储摘要（服务/分组/密钥）+ fabric
 // 身份（EndpointId/fabric-id/relay 状态/成员数）；--verbose 含服务 detail（ASCII
-// 展示形，$env 头值显示为 <env>）。
+// 展示形，$env/$secret 引用头值显示为 <hidden>）。
 
 import { homedir } from "node:os";
 import { parseArgv } from "../../args.ts";

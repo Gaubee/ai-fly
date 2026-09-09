@@ -1,7 +1,10 @@
-// 提供方分享向导状态机（B 3.2，#/share 三步）：
-// ①服务来源（预设卡片 / 自定义 URL）→ ②命名与分组（可新建组、可选限额、
-// $env 变量名）→ ③生成分享（applyAsService/services.add + 分组落位 +
-// daemon 幂等启动 + share.create → 链接 + 警示 + TTL）。
+// 提供方分享向导状态机（B 3.2 / M3 3.2·3.3·6.2·6.3，#/share 三步）：
+// ①服务来源（预设卡片 / 自定义 URL）→ ②命名与分组（可新建组、密钥选择器
+// secretName、连通测试；限额收进 advanced options）→ ③生成分享
+// （applyAsService/services.add + 分组落位 + daemon 幂等启动 +
+// share.create → 链接 + 警示 + TTL）。选中密钥时：preset 路径传
+// secretName（服务端写 $secret:<name>）；custom 路径手组
+// rewrite.headerSet.authorization = $secret:<name>。
 // 每步可回退；成功后锁定结果视图（回退会重复建服务，故隐藏 Back）。
 import { toRpcError, type RpcError } from "$lib/rpc-client";
 import type { Preset } from "$shared/rpc-contract.ts";
@@ -45,7 +48,6 @@ export const share = $state({
   customUpstream: "",
   customMatch: "",
   customPort: "",
-  customKeyEnv: "",
   // ② 命名与分组（端口沿用预设 defaultPort，可覆盖）
   name: "",
   port: "",
@@ -54,8 +56,8 @@ export const share = $state({
   groupNew: true,
   limitsConcurrency: "",
   limitsDaily: "",
-  /** $env 注入变量名（选了带 keyEnv 的预设时预填，可改空 = 不注入）。 */
-  keyEnv: "",
+  /** 密钥库选择（undefined = 不注入 authorization；本地运行时可留空）。 */
+  secretName: undefined as string | undefined,
   // ③ 生成
   ttlMs: TTL_OPTIONS[0]!.ttlMs,
   /** 在途阶段（'' | 'service' | 'group' | 'daemon' | 'share'）。 */
@@ -72,27 +74,25 @@ export function resetShare(): void {
   share.customUpstream = "";
   share.customMatch = "";
   share.customPort = "";
-  share.customKeyEnv = "";
   share.name = "";
   share.port = "";
   share.groupName = "";
   share.groupNew = true;
   share.limitsConcurrency = "";
   share.limitsDaily = "";
-  share.keyEnv = "";
+  share.secretName = undefined;
   share.ttlMs = TTL_OPTIONS[0]!.ttlMs;
   share.busy = "";
   share.error = null;
   share.result = null;
 }
 
-/** ① 选择预设 → 预填 ② 并前进。 */
+/** ① 选择预设 → 预填 ② 并前进（密钥选择器留空，由用户挑选）。 */
 export function choosePreset(preset: Preset): void {
   share.mode = "preset";
   share.presetId = preset.id;
   share.name = preset.id;
   share.port = String(preset.defaultPort);
-  share.keyEnv = preset.keyEnv ?? "";
   share.error = null;
   share.step = 2;
 }
@@ -103,7 +103,6 @@ export function chooseCustom(): void {
   share.presetId = "";
   share.name = "";
   share.port = share.customPort;
-  share.keyEnv = share.customKeyEnv;
   share.error = null;
   share.step = 2;
 }
@@ -204,7 +203,7 @@ export async function generateShare(): Promise<void> {
           presetId: share.presetId,
           ...(share.name.trim() !== "" ? { name: share.name.trim() } : {}),
           ...(parsePositiveInt(share.port) !== undefined ? { port: parsePositiveInt(share.port) } : {}),
-          ...(share.keyEnv.trim() !== "" ? { keyEnv: share.keyEnv.trim() } : {}),
+          ...(share.secretName !== undefined ? { secretName: share.secretName } : {}),
         }),
       );
       serviceName = applied.service.name;
@@ -217,8 +216,8 @@ export async function generateShare(): Promise<void> {
           ...(parsePositiveInt(share.port) !== undefined
             ? { defaultPort: parsePositiveInt(share.port) }
             : {}),
-          ...(share.keyEnv.trim() !== ""
-            ? { rewrite: { headerSet: { authorization: `$env:${share.keyEnv.trim()}` } } }
+          ...(share.secretName !== undefined
+            ? { rewrite: { headerSet: { authorization: `$secret:${share.secretName}` } } }
             : {}),
         }),
       );

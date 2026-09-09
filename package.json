@@ -19,7 +19,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:integration": "node --import tsx --test \"test/integration/*.test.mjs\"",
+    "test:integration": "node --import tsx --test --test-concurrency=1 \"test/integration/*.test.mjs\"",
     "test:e2e": "node --import tsx --test \"test/e2e/*.test.mjs\"",
     "test:all": "vitest run && pnpm test:integration && pnpm test:e2e",
     "webui:dev": "pnpm --filter @ai-fly/webui dev",

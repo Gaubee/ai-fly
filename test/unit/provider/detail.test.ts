@@ -60,10 +60,24 @@ describe("detail 披露脱敏", () => {
     expect(JSON.stringify(entry)).not.toContain("ZAI_KEY");
   });
 
-  it("ASCII 展示形：● -> <env>（终端文案码位 < 128）", () => {
+  it("ASCII 展示形：● -> <hidden>（$env 与 $secret 同形；终端文案码位 < 128）", () => {
     const lines = detailDisplayLines(buildServiceDetail(service)).join("\n");
-    expect(lines).toContain("header-set: authorization: <env>");
+    expect(lines).toContain("header-set: authorization: <hidden>");
     expect(lines).toContain("header-set: x-literal: keep-me");
     for (const ch of lines) expect(ch.codePointAt(0)!).toBeLessThan(128);
+  });
+
+  it("$secret 引用同样 ● 掩码（名称不出现）", () => {
+    const withSecret = buildServiceDetail({
+      ...service,
+      rewrite: {
+        headerSet: { authorization: "$secret:openai", "x-literal": "keep-me" },
+      },
+    });
+    const masked = withSecret.rewrite?.headerSet?.find((h) => h.name === "authorization");
+    expect(masked?.value).toBe(ENV_VALUE_MASK);
+    const json = JSON.stringify(withSecret);
+    expect(json).not.toContain("openai");
+    expect(json).not.toContain("$secret");
   });
 });

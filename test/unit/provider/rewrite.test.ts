@@ -4,7 +4,13 @@
 
 import { describe, expect, it } from "vitest";
 import type { ReqHeader } from "../../../src/wire/frames.ts";
-import { buildUpstreamRequest, isWebSocketUpgradeRequest, RewriteError } from "../../../src/provider/rewrite.ts";
+import {
+  buildUpstreamRequest,
+  isWebSocketUpgradeRequest,
+  resolveHeaderValue,
+  RewriteError,
+  SecretMissingError,
+} from "../../../src/provider/rewrite.ts";
 import type { ServiceConfig } from "../../../src/provider/store.ts";
 
 function makeService(over: Partial<ServiceConfig> = {}): ServiceConfig {
@@ -147,6 +153,75 @@ describe("$env 头链矩阵", () => {
   it("contentType 折叠为 content-type 头", () => {
     const plan = buildUpstreamRequest(makeService(), makeReq({ contentType: "application/json" }), {});
     expect(plan.headers["content-type"]).toBe("application/json");
+  });
+});
+
+describe("$secret 头链矩阵", () => {
+  const service = makeService({
+    rewrite: {
+      headerSet: {
+        authorization: "$secret:openai",
+        "x-api-key": "$secret:vendor.key",
+        "x-env": "$env:UPSTREAM_KEY",
+        "x-lit": "plain",
+      },
+    },
+  });
+  const secrets = (name: string): string | undefined =>
+    name === "openai" ? "Bearer sk-live-1" : undefined;
+
+  it("命中 -> 注入完整头值；与 $env 并存于不同头；literal 原样", () => {
+    const allSecrets = (name: string): string | undefined =>
+      name === "openai" ? "Bearer sk-live-1" : name === "vendor.key" ? "sk-vendor" : undefined;
+    const plan = buildUpstreamRequest(service, makeReq(), { UPSTREAM_KEY: "sk-env-2" }, allSecrets);
+    expect(plan.headers["authorization"]).toBe("Bearer sk-live-1");
+    expect(plan.headers["x-api-key"]).toBe("sk-vendor");
+    expect(plan.headers["x-env"]).toBe("sk-env-2");
+    expect(plan.headers["x-lit"]).toBe("plain");
+  });
+
+  it("未知名 -> SecretMissingError（不省略、不回退空值）", () => {
+    expect(() => buildUpstreamRequest(service, makeReq(), {}, secrets)).toThrow(SecretMissingError);
+  });
+
+  it("未注入密钥源（secrets 缺省）-> 任何 $secret 引用都抛 SecretMissingError", () => {
+    expect(() => buildUpstreamRequest(service, makeReq(), {})).toThrow(SecretMissingError);
+  });
+
+  it("密钥库值为空串 -> 同未命中", () => {
+    expect(() => buildUpstreamRequest(service, makeReq(), {}, () => "")).toThrow(SecretMissingError);
+  });
+
+  it("$secret 判定优先于 $env（值以 $secret: 开头时不走 env 路径）", () => {
+    // "$secret:openai" 不是合法 env 名——若前缀判定顺序错误，会从 env 取到 undefined 而静默省略。
+    const plan = buildUpstreamRequest(
+      makeService({ rewrite: { headerSet: { authorization: "$secret:openai" } } }),
+      makeReq(),
+      {},
+      secrets,
+    );
+    expect(plan.headers["authorization"]).toBe("Bearer sk-live-1");
+  });
+
+  it("resolveHeaderValue：$secret 未命中错误信息不含名字与值", () => {
+    try {
+      resolveHeaderValue("$secret:ghost", {}, secrets);
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(SecretMissingError);
+      expect((err as Error).message).not.toContain("ghost");
+      expect((err as Error).message).not.toContain("sk-live");
+    }
+  });
+
+  it("$env 语义保持：空串/未设置 -> 省略（不抛）", () => {
+    const plan = buildUpstreamRequest(
+      makeService({ rewrite: { headerSet: { authorization: "$env:NOPE" } } }),
+      makeReq(),
+      { NOPE: "" },
+      secrets,
+    );
+    expect(plan.headers["authorization"]).toBeUndefined();
   });
 });
 

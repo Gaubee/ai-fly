@@ -11,16 +11,23 @@ import type { Preset } from "../shared/rpc-contract.ts";
 import { DomainError, toDomainError } from "./errors.ts";
 import type { EngineHost } from "./engine-host.ts";
 import { buildShareLink, previewShareLink, SHARE_TTL_DEFAULT_MS } from "../provider/link.ts";
+import { parseUpstreamUrl } from "../provider/store.ts";
 import type { KeyRecord, ServiceConfig, ServiceInput } from "../provider/store.ts";
+import { SecretsStore } from "../provider/secrets.ts";
+import { testUpstream } from "../provider/upstream-test.ts";
 import { importLink, joinDevice, addKey } from "../consumer/join.ts";
 import { listKeyrings, removeKeyring, setPort } from "../consumer/store.ts";
 import { applyWriter, previewWriter } from "./writers/index.ts";
 import { resolveTargetPort } from "./writers/common.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
 import {
+  deriveModels,
   fetchModelsDevPresets,
+  fetchModelsDevRaw,
   loadCuratedPresets,
   modelsDevCachePath,
+  readModelsDevRaw,
+  type ModelCatalogEntry,
 } from "../../presets/models-dev.ts";
 
 /** router 依赖（engine-host 注入；测试可替换 home/缓存路径）。 */
@@ -45,10 +52,17 @@ function keyView(key: KeyRecord): {
   };
 }
 
-/** 预设 → 服务输入展开（applyAsService 核心：match 从 matchDomains 派生 suffix 规则；$env 注入 authorization）。 */
+/** 预设 → 服务输入展开（applyAsService 核心：match 从 matchDomains 派生 suffix 规则；
+ * 密钥注入 secretName 优先——rewrite 写 `$secret:<name>`；否则 keyEnv 建议 `$env:<VAR>`）。
+ * envHint 仅在走 $env 时给出（$secret 路径的值在密钥库，无环境变量导出建议）。 */
 export function presetToServiceInput(
   preset: Preset,
-  input: { name?: string | undefined; port?: number | undefined; keyEnv?: string | undefined },
+  input: {
+    name?: string | undefined;
+    port?: number | undefined;
+    keyEnv?: string | undefined;
+    secretName?: string | undefined;
+  },
 ): { serviceInput: ServiceInput; envHint?: string } {
   const keyEnv = input.keyEnv ?? preset.keyEnv;
   const serviceInput: ServiceInput = {
@@ -56,12 +70,14 @@ export function presetToServiceInput(
     upstream: preset.baseUrl,
     match: preset.matchDomains.map((domain) => ({ type: "suffix" as const, value: domain })),
     ...(input.port !== undefined ? { defaultPort: input.port } : { defaultPort: preset.defaultPort }),
-    ...(keyEnv !== undefined
-      ? { rewrite: { headerSet: { authorization: `$env:${keyEnv}` } } }
-      : {}),
+    ...(input.secretName !== undefined
+      ? { rewrite: { headerSet: { authorization: `$secret:${input.secretName}` } } }
+      : keyEnv !== undefined
+        ? { rewrite: { headerSet: { authorization: `$env:${keyEnv}` } } }
+        : {}),
   };
   const envHint =
-    keyEnv !== undefined
+    input.secretName === undefined && keyEnv !== undefined
       ? `export ${keyEnv}='Bearer <your-api-key>' (full header value; the provider injects it upstream)`
       : undefined;
   return { serviceInput, ...(envHint !== undefined ? { envHint } : {}) };
@@ -122,9 +138,20 @@ export function createRpcRouter(deps: RpcRouterDeps) {
   return rpc.use(domainErrorBoundary).router({
     provider: {
       services: {
-        // 占位：m3 MODELS-TEST 车道替换为真实实现（密钥解析 + 三 apiForm 最小请求）
-        test: rpc.provider.services.test.handler(() => {
-          throw new DomainError("INVALID_STATE", "connectivity test is not wired yet");
+        // 上游连通性测试（provider-local、不落盘、不计限额；失败以结果对象返回）。
+        // upstream 须 http(s) 且无 userinfo/query/fragment（parseUpstreamUrl ->
+        // StoreError(invalid) -> INVALID_INPUT）；模型缺省从 models.dev 缓存取
+        // priced chat 最低价（只读缓存，不为此发起刷新）。
+        test: rpc.provider.services.test.handler(async ({ input }) => {
+          parseUpstreamUrl(input.upstream);
+          return testUpstream({
+            upstream: input.upstream,
+            ...(input.apiForm !== undefined ? { apiForm: input.apiForm } : {}),
+            ...(input.secretName !== undefined ? { secretName: input.secretName } : {}),
+            ...(input.model !== undefined ? { model: input.model } : {}),
+            secretsStore: SecretsStore.open(host.providerDataDir),
+            modelsRaw: readModelsDevRaw(modelsDevCachePath(home())),
+          });
         }),
         list: rpc.provider.services.list.handler(() => ({
           services: host.providerStore().listServices(),
@@ -169,16 +196,18 @@ export function createRpcRouter(deps: RpcRouterDeps) {
           key: keyView(host.providerStore().revokeKey(input.keyId)),
         })),
       },
-      // 占位：m3 SECRETS 车道替换为真实实现（secrets.json store；list 只回名称）
+      // 密钥库（provider-local；直连 SecretsStore——无内存态，daemon 运行时写入即刻
+      // 生效。remove 未命中 StoreError(not-found) -> NOT_FOUND；list 只投影名称与时间戳）。
       secrets: {
-        list: rpc.provider.secrets.list.handler(() => {
-          throw new DomainError("INVALID_STATE", "secrets store is not wired yet");
-        }),
-        set: rpc.provider.secrets.set.handler(() => {
-          throw new DomainError("INVALID_STATE", "secrets store is not wired yet");
-        }),
-        remove: rpc.provider.secrets.remove.handler(() => {
-          throw new DomainError("INVALID_STATE", "secrets store is not wired yet");
+        list: rpc.provider.secrets.list.handler(() => ({
+          secrets: SecretsStore.open(host.providerDataDir).list(),
+        })),
+        set: rpc.provider.secrets.set.handler(({ input }) => ({
+          secret: SecretsStore.open(host.providerDataDir).set(input.name, input.value),
+        })),
+        remove: rpc.provider.secrets.remove.handler(({ input }) => {
+          SecretsStore.open(host.providerDataDir).remove(input.name);
+          return { removed: true as const };
         }),
       },
       share: {
@@ -379,9 +408,50 @@ export function createRpcRouter(deps: RpcRouterDeps) {
         const service: ServiceConfig = host.providerStore().addService(serviceInput);
         return { service, ...(envHint !== undefined ? { envHint } : {}) };
       }),
-      // 占位：m3 MODELS-TEST 车道替换为真实实现（models.dev models 解析 + 价格排序）
-      models: rpc.presets.models.handler(() => {
-        throw new DomainError("INVALID_STATE", "model catalog is not wired yet");
+      // 模型清单（models.dev 缓存）：精选 presetId 先按 [id, iconId?] 顺序查
+      // provider 键（变体条目如 zai-coding 经 iconId=zai 命中；gemini 经 iconId=google
+      // 命中），长尾 presetId 即 models.dev provider id。缓存未命中/过期先刷新
+      // （modelsDevEnabled 关闭时不发网络，只读缓存），失败回退缓存并附错误说明。
+      models: rpc.presets.models.handler(async ({ input }) => {
+        const cachePath = modelsDevCachePath(home());
+        let raw: string | undefined;
+        let error: string | undefined;
+        if (loadSettings(home()).modelsDevEnabled) {
+          // TTL 内命中直接回缓存（零网络）；过期/未命中才刷新、失败回退缓存。
+          const result = await fetchModelsDevRaw({ cachePath });
+          raw = result.raw;
+          error = result.error;
+        } else {
+          raw = readModelsDevRaw(cachePath);
+          if (raw === undefined) {
+            error = "models.dev is disabled in settings and no cache is available";
+          }
+        }
+        if (raw === undefined) {
+          return { models: [], ...(error !== undefined ? { error } : {}) };
+        }
+        const preset = loadCuratedPresets().find((p) => p.id === input.presetId);
+        const keys =
+          preset !== undefined
+            ? [
+                preset.id,
+                ...(preset.iconId !== undefined && preset.iconId !== preset.id
+                  ? [preset.iconId]
+                  : []),
+              ]
+            : [input.presetId];
+        let models: ModelCatalogEntry[] | undefined;
+        for (const key of keys) {
+          models = deriveModels(raw, key);
+          if (models !== undefined) break;
+        }
+        if (models === undefined) {
+          return {
+            models: [],
+            error: error ?? `no models.dev catalog for '${input.presetId}'`,
+          };
+        }
+        return { models, ...(error !== undefined ? { error } : {}) };
       }),
     },
     writers: {

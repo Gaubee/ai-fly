@@ -309,6 +309,46 @@ describe("错误与超时族", () => {
     expect(upstream.requests).toHaveLength(0);
   });
 
+  it("$secret 命中：上游收到密钥库完整头值", async () => {
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("{}");
+    });
+    const h = makeHarness();
+    const service = makeService(upstream.port, {
+      rewrite: { headerSet: { authorization: "$secret:openai", "x-env": "$env:SOME_VAR" } },
+    });
+    const fh = forward(h, service, makeReq("rs1", { method: "POST" }), new Uint8Array(0), {
+      secrets: (name) => (name === "openai" ? "Bearer sk-lib-9" : undefined),
+      env: { SOME_VAR: "env-val" },
+    });
+    await fh.done;
+    expect(upstream.requests).toHaveLength(1);
+    expect(upstream.requests[0]!.headers["authorization"]).toBe("Bearer sk-lib-9");
+    expect(upstream.requests[0]!.headers["x-env"]).toBe("env-val");
+    expect(of(h.consumerEvents, FRAME_TYPE.RESP_END, "rs1")).toHaveLength(1);
+  });
+
+  it("$secret 未命中 -> ERROR(secret_missing)，零上游请求，错误信息不含名字", async () => {
+    const upstream = await startUpstream((_req, res) => res.end("never"));
+    const h = makeHarness();
+    const service = makeService(upstream.port, {
+      rewrite: { headerSet: { authorization: "$secret:openai" } },
+    });
+    const fh = forward(h, service, makeReq("rs2", { method: "POST" }), new Uint8Array(0), {
+      secrets: () => undefined,
+    });
+    await fh.done;
+    const err = of(h.consumerEvents, FRAME_TYPE.ERROR, "rs2")[0]?.header as {
+      code: string;
+      message: string;
+    };
+    expect(err.code).toBe("secret_missing");
+    expect(err.message).not.toContain("openai");
+    expect(upstream.requests).toHaveLength(0);
+    expect(fh.usage).toEqual([{ status: "secret_missing", bytes: 0 }]);
+  });
+
   it("流中途停滞（120s 可配 -> 60ms）-> ERROR(idle_timeout) 且中止上游", async () => {
     const upstream = await startUpstream((_req, res) => {
       res.writeHead(200, { "content-type": "text/event-stream" });

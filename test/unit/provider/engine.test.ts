@@ -15,6 +15,7 @@ import { FabricWireAdapter } from "../../../src/wire/fabric-adapter.ts";
 import { WireSession, type InboundFrame } from "../../../src/wire/mux.ts";
 import { ProviderEngine } from "../../../src/provider/engine.ts";
 import { ProviderStore } from "../../../src/provider/store.ts";
+import { SecretsStore } from "../../../src/provider/secrets.ts";
 import { composeStartupBanner, findEmptyEnvRefs } from "../../../src/provider/serve.ts";
 import { FakeFabric } from "./fake-fabric.ts";
 
@@ -73,6 +74,8 @@ beforeEach(async () => {
     dataDir: dir,
     opts: {
       env: { TEST_UPSTREAM_KEY: "sk-env-injected" },
+      // $secret 解析走真实密钥库（无内存态：测试内 set/remove 即刻生效）。
+      secrets: (name) => SecretsStore.open(dir).get(name),
       timeouts: { connectMs: 1_000, firstByteMs: 30_000, stallMs: 30_000, pingMs: 60_000 },
     },
   });
@@ -216,6 +219,43 @@ describe("REQ 全链路", () => {
     await consumer.send(FRAME_TYPE.REQ_BODY, { id: "m1", seq: 1, end: true }, ENC.encode("ghij"));
     await waitFor(() => of(FRAME_TYPE.RESP_END, "m1")[0]);
     expect(upstreamBodies[upstreamBodies.length - 1]).toBe("abcdefghij");
+  });
+
+  it("$secret 全链路：命中注入密钥库完整头值；删除后同请求 secret_missing（信息不含名字）", async () => {
+    const secrets = SecretsStore.open(dir);
+    const secService = store.addService({
+      name: "sec-api",
+      upstream: `http://127.0.0.1:${mockPort}`,
+      match: [{ type: "suffix", value: ".local" }],
+      rewrite: { headerSet: { authorization: "$secret:test-key" } },
+    });
+    store.addGroup("secret-holders", ["sec-api"]);
+    const keySecret = store.issueKey("secret-holders");
+    secrets.set("test-key", "Bearer sk-lib-42");
+
+    await connectAndAuth([keySecret.key]);
+    await consumer.send(
+      FRAME_TYPE.REQ,
+      { v: 1, id: "sec1", serviceId: secService.serviceId, method: "GET", path: "/v1/echo", bodyLen: 0 },
+    );
+    await waitFor(() => of(FRAME_TYPE.RESP_END, "sec1")[0]);
+    const chunks = of(FRAME_TYPE.RESP_CHUNK, "sec1");
+    const payload = JSON.parse(Buffer.concat(chunks.map((f) => bodyOf(f))).toString()) as {
+      auth: string | null;
+    };
+    expect(payload.auth).toBe("Bearer sk-lib-42");
+
+    // 删除密钥 -> 同一服务的后续请求被拒（不回退空值、名字不出网）。
+    secrets.remove("test-key");
+    await consumer.send(
+      FRAME_TYPE.REQ,
+      { v: 1, id: "sec2", serviceId: secService.serviceId, method: "GET", path: "/v1/echo", bodyLen: 0 },
+    );
+    const err = await waitFor(() => of(FRAME_TYPE.ERROR, "sec2")[0]);
+    const header = err.header as { code: string; message: string };
+    expect(header.code).toBe("secret_missing");
+    expect(JSON.stringify(header)).not.toContain("test-key");
+    expect(JSON.stringify(header)).not.toContain("sk-lib-42");
   });
 });
 

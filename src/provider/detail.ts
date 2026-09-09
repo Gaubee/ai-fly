@@ -16,8 +16,20 @@ export const ENV_VALUE_MASK = "\u25cf"; // ●
 
 export const ENV_REF_PREFIX = "$env:";
 
+/** $secret 引用前缀（密钥库名；与 $env 同样按引用整体掩码）。 */
+export const SECRET_REF_PREFIX = "$secret:";
+
 export function isEnvRef(value: string): boolean {
   return value.startsWith(ENV_REF_PREFIX);
+}
+
+export function isSecretRef(value: string): boolean {
+  return value.startsWith(SECRET_REF_PREFIX);
+}
+
+/** 引用型头值（$env:/$secret:）——披露时统一掩码（名与值都不出）。 */
+export function isMaskedRef(value: string): boolean {
+  return isEnvRef(value) || isSecretRef(value);
 }
 
 /** 前缀重写规则的披露形态：strip:/a 与 append:/b 的组合标记。 */
@@ -41,7 +53,7 @@ export function buildServiceDetail(service: ServiceConfig): ServiceDetail {
     if (service.rewrite.headerSet !== undefined) {
       rewrite.headerSet = Object.entries(service.rewrite.headerSet).map(([name, value]) => ({
         name,
-        value: isEnvRef(value) ? ENV_VALUE_MASK : value,
+        value: isMaskedRef(value) ? ENV_VALUE_MASK : value,
       }));
     }
   }
@@ -65,7 +77,7 @@ export function buildServiceEntry(service: ServiceConfig): ServiceEntry {
 
 /**
  * detail 的 ASCII 展示形（CLI status --verbose 用；用户面文案码位 < 128，故 ●
- * 在终端侧替换为 <env>）。
+ * 在终端侧替换为 <hidden>——$env 与 $secret 掩码同形，无法区分，用中性词）。
  */
 export function detailDisplayLines(detail: ServiceDetail): string[] {
   const lines: string[] = [`upstream: ${detail.upstream}`];
@@ -75,7 +87,7 @@ export function detailDisplayLines(detail: ServiceDetail): string[] {
     if (r.host !== undefined) lines.push(`host: ${r.host}`);
     if (r.prefix !== undefined) lines.push(`prefix: ${r.prefix}`);
     for (const h of r.headerSet ?? []) {
-      lines.push(`header-set: ${h.name}: ${h.value === ENV_VALUE_MASK ? "<env>" : h.value}`);
+      lines.push(`header-set: ${h.name}: ${h.value === ENV_VALUE_MASK ? "<hidden>" : h.value}`);
     }
   }
   return lines;

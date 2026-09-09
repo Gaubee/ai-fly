@@ -9,10 +9,14 @@ import {
   MODELS_DEV_CACHE_TTL_MS,
   classifyApiForm,
   derivedPortFor,
+  deriveModels,
   deriveModelsDevPresets,
   fetchModelsDevPresets,
+  findModelsDevProviderKey,
+  isChatModelId,
   loadCuratedPresets,
   modelsDevCachePath,
+  readModelsDevRaw,
 } from "../../../presets/models-dev.ts";
 
 let dir: string;
@@ -176,6 +180,132 @@ describe("deriveModelsDevPresets", () => {
     expect(some.keyEnv).toBe("SOME_LLM_API_KEY");
     expect(some.source).toBe("models.dev");
     expect(some.matchDomains).toEqual(["api.some-llm.example"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 模型清单与价格（deriveModels / findModelsDevProviderKey）
+// ---------------------------------------------------------------------------
+
+const MODELS_FIXTURE_RAW = JSON.stringify({
+  "some-llm": {
+    id: "some-llm",
+    name: "Some LLM",
+    api: "https://api.some-llm.example/v1",
+    npm: "@ai-sdk/openai-compatible",
+    models: {
+      "pricey-chat": { id: "pricey-chat", name: "Pricey", cost: { input: 10, output: 20 } },
+      "mid-chat": { id: "mid-chat", cost: { input: 1, output: 1 } },
+      "cheap-chat": { id: "cheap-chat", cost: { input: 0.1, output: 0.2 } },
+      "unpriced-chat": { id: "unpriced-chat", name: "No Price" },
+      "half-priced": { id: "half-priced", cost: { input: 0.5 } }, // 只有 input：未知价
+      "cheap-embed": { id: "text-embedding-3", cost: { input: 0.01, output: 0.01 } },
+      "image-gen": { id: "dall-e-3", cost: { input: 0.001, output: 0 } },
+      "unpriced-embed": { id: "whisper-1" },
+    },
+  },
+  empty: { id: "empty", api: "https://api.empty.example" }, // 无 models
+});
+
+describe("deriveModels", () => {
+  it("排序：chat 价已知升序 -> chat 未价 -> non-chat 价已知 -> non-chat 未价", () => {
+    const models = deriveModels(MODELS_FIXTURE_RAW, "some-llm")!;
+    expect(models.map((m) => m.id)).toEqual([
+      "cheap-chat", // 0.3
+      "mid-chat", // 2
+      "pricey-chat", // 30
+      "half-priced", // 只有 input：未知价，chat 未价组（按 id 排）
+      "unpriced-chat", // 未知价，chat 未价组
+      "dall-e-3", // non-chat 价已知（0.001）
+      "text-embedding-3", // non-chat 价已知（0.02）
+      "whisper-1", // non-chat 未价
+    ]);
+    const first = models[0]!;
+    expect(first.id).toBe("cheap-chat");
+    expect(first.priced).toBe(true);
+    expect(first.chat).toBe(true);
+    expect(first.pricePerMTok).toBeCloseTo(0.3, 10);
+    expect(models[3]!).toMatchObject({ id: "half-priced", priced: false, chat: true });
+    expect(models[3]!.pricePerMTok).toBeUndefined();
+    expect(models[1]!.name).toBeUndefined(); // name 缺省省略
+    expect(models.find((m) => m.id === "pricey-chat")!.name).toBe("Pricey");
+  });
+
+  it("最便宜 chat 模型排首位（spec Scenario）", () => {
+    expect(deriveModels(MODELS_FIXTURE_RAW, "some-llm")![0]!.id).toBe("cheap-chat");
+  });
+
+  it("chat 启发式（id 词族）", () => {
+    expect(isChatModelId("gpt-4o")).toBe(true);
+    expect(isChatModelId("claude-sonnet-4")).toBe(true);
+    for (const nonChat of [
+      "text-embedding-3-large",
+      "gpt-image-1",
+      "whisper-1",
+      "tts-1-hd",
+      "rerank-v2",
+      "omni-moderation-latest",
+      "dall-e-3",
+      "sd3.5-large",
+    ]) {
+      expect(isChatModelId(nonChat), nonChat).toBe(false);
+    }
+  });
+
+  it("provider 不在清单 -> undefined；空 models -> []（两者语义区分）", () => {
+    expect(deriveModels(MODELS_FIXTURE_RAW, "nope")).toBeUndefined();
+    expect(deriveModels(MODELS_FIXTURE_RAW, "empty")).toEqual([]);
+  });
+
+  it("防御式：cost 非法值不炸（整清单该条目按未知价或跳过）", () => {
+    const raw = JSON.stringify({
+      p: {
+        id: "p",
+        models: {
+          ok: { id: "ok", cost: { input: 1, output: 1 } },
+          weird: { id: "weird", extra: "ignored", cost: { input: 1, output: 1, currency: "USD" } },
+        },
+      },
+    });
+    const models = deriveModels(raw, "p")!;
+    expect(models).toHaveLength(2);
+    expect(models.every((m) => m.priced)).toBe(true);
+  });
+});
+
+describe("findModelsDevProviderKey", () => {
+  it("精确命中 > 路径前缀 > 主机名；未命中 undefined", () => {
+    expect(findModelsDevProviderKey(MODELS_FIXTURE_RAW, "https://api.some-llm.example/v1")).toBe("some-llm");
+    // 前缀（upstream 比 api 短/长都算）
+    expect(findModelsDevProviderKey(MODELS_FIXTURE_RAW, "https://api.some-llm.example/v1/")).toBe("some-llm");
+    expect(findModelsDevProviderKey(MODELS_FIXTURE_RAW, "https://api.some-llm.example")).toBe("some-llm");
+    // 主机名兜底
+    expect(findModelsDevProviderKey(MODELS_FIXTURE_RAW, "https://api.some-llm.example/other")).toBe("some-llm");
+    expect(findModelsDevProviderKey(MODELS_FIXTURE_RAW, "https://api.other.example")).toBeUndefined();
+  });
+
+  it("同主机多候选：长 api（更具体）胜出", () => {
+    const raw = JSON.stringify({
+      a: { id: "a", api: "https://x.example.com", models: {} },
+      b: { id: "b", api: "https://x.example.com/specific", models: {} },
+    });
+    expect(findModelsDevProviderKey(raw, "https://x.example.com/specific/deeper")).toBe("b");
+  });
+
+  it("非 JSON 原文 -> undefined（不抛）", () => {
+    expect(findModelsDevProviderKey("{not json", "https://api.example.com")).toBeUndefined();
+  });
+});
+
+describe("readModelsDevRaw", () => {
+  it("读缓存原始文本；损坏/不存在返回 undefined", () => {
+    const cachePath = join(dir, "raw-cache", "models-dev.json");
+    expect(readModelsDevRaw(cachePath)).toBeUndefined();
+    mkdirSync(join(dir, "raw-cache"), { recursive: true });
+    writeFileSync(cachePath, JSON.stringify({ fetchedAt: 5, raw: FIXTURE_RAW }));
+    expect(readModelsDevRaw(cachePath)).toBe(FIXTURE_RAW);
+    writeFileSync(cachePath, "{broken");
+    expect(readModelsDevRaw(cachePath)).toBeUndefined();
   });
 });
 

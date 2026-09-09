@@ -16,8 +16,8 @@ import { DEFAULT_BODY_CHUNK_BYTES } from "../wire/codec.ts";
 import type { WireSession } from "../wire/mux.ts";
 import type { ServiceConfig } from "./store.ts";
 import type { UsageRecord } from "./limits.ts";
-import { buildUpstreamRequest, type EnvSource, type UpstreamPlan } from "./rewrite.ts";
-import { RewriteError } from "./rewrite.ts";
+import { buildUpstreamRequest, type EnvSource, type SecretSource, type UpstreamPlan } from "./rewrite.ts";
+import { RewriteError, SecretMissingError } from "./rewrite.ts";
 import type { WsRelayHandle } from "./ws-upstream.ts";
 import { forwardWsUpgrade } from "./ws-upstream.ts";
 
@@ -68,6 +68,8 @@ export interface ForwardCtx {
   onUsage?: ((record: UsageRecord) => void) | undefined;
   /** $env 解析源（默认 process.env）。 */
   env?: EnvSource | undefined;
+  /** $secret 解析源（密钥库读取面；未注入时任何 $secret 引用按 secret_missing 拒绝）。 */
+  secrets?: SecretSource | undefined;
   /** 连接期探测（默认 TCP 探测；测试注入）。 */
   probeConnect?: ((url: URL, ms: number) => Promise<void>) | undefined;
   fetchImpl?: typeof fetch | undefined;
@@ -138,16 +140,22 @@ function mergeTimeouts(overrides?: Partial<UpstreamTimeouts> | undefined): Upstr
 export async function forwardRequest(ctx: ForwardCtx): Promise<void> {
   let plan: UpstreamPlan;
   try {
-    plan = buildUpstreamRequest(ctx.service, ctx.req, ctx.env ?? process.env);
+    plan = buildUpstreamRequest(ctx.service, ctx.req, ctx.env ?? process.env, ctx.secrets);
   } catch (err) {
-    // RewriteError（protocol_error 语义）：零上游请求。
-    const message = err instanceof RewriteError ? err.message : "request rewrite failed";
-    await sendError(ctx.session, ctx.id, ERROR_CODE.protocol_error, message);
+    // 分类：$secret 未命中（secret_missing）> RewriteError（protocol_error）> 兜底。
+    // 两类都是零上游请求；message 不含密钥名与值。
+    const code =
+      err instanceof SecretMissingError ? ERROR_CODE.secret_missing : ERROR_CODE.protocol_error;
+    const message =
+      err instanceof RewriteError || err instanceof SecretMissingError
+        ? err.message
+        : "request rewrite failed";
+    await sendError(ctx.session, ctx.id, code, message);
     ctx.onUsage?.({
       ts: Date.now(),
       keyId: ctx.keyId,
       serviceId: ctx.service.serviceId,
-      status: ERROR_CODE.protocol_error,
+      status: code,
       bytes: 0,
     });
     return;

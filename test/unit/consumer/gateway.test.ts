@@ -158,6 +158,7 @@ describe("错误码 → HTTP 映射", () => {
     { code: "key_all_invalid", expect: 503 },
     { code: "upstream_unreachable", expect: 502 },
     { code: "upstream_status", expect: 502 }, // 裸 ERROR 帧（无 status 载荷）兜底；正常上游错误走 RESP 流
+    { code: "secret_missing", expect: 502 }, // 提供方密钥库缺引用：提供方配置问题，502
     { code: "protocol_error", expect: 500 },
     { code: "protocol_seq", expect: 500 },
     { code: "internal", expect: 500 },

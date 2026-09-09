@@ -8,13 +8,18 @@
 //   来自帧内（wire schema 已拒绝 host 头，此处纵深防御同样剥离）；
 // - $env:VAR 每请求解析（空串与未设置同义 -> 该头省略）；解析时机为每请求，
 //   不做启动期缓存（env 可变）。
+// - $secret:<name> 每请求从密钥库解析（SecretSource 注入；未命中抛
+//   SecretMissingError -> secret_missing，不回退空值、不带引用名出网）；与
+//   $env 可并存于不同头。
 
 import { FORBIDDEN_REQ_HEADER_NAMES } from "../wire/frames.ts";
 import type { ReqHeader } from "../wire/frames.ts";
 import { parseUpstreamUrl } from "./store.ts";
 import type { ServiceConfig } from "./store.ts";
 
-export { ENV_REF_PREFIX, isEnvRef } from "./detail.ts";
+import { SECRET_REF_PREFIX } from "./detail.ts";
+
+export { ENV_REF_PREFIX, SECRET_REF_PREFIX, isEnvRef, isSecretRef } from "./detail.ts";
 
 /** 拼接/断言失败（protocol_error 语义）。 */
 export class RewriteError extends Error {
@@ -24,8 +29,22 @@ export class RewriteError extends Error {
   }
 }
 
+/**
+ * `$secret:<name>` 引用未命中（secret_missing 语义）：该请求以 ERROR(secret_missing)
+ * 拒绝。message 固定——MUST NOT 包含密钥名与值（错误帧会过网）。
+ */
+export class SecretMissingError extends Error {
+  constructor() {
+    super("referenced secret is missing");
+    this.name = "SecretMissingError";
+  }
+}
+
 /** 环境读取面（默认 process.env；测试注入用）。 */
 export type EnvSource = Record<string, string | undefined>;
+
+/** 密钥读取面（name -> value；未命中 undefined——由 resolveHeaderValue 升级为错误）。 */
+export type SecretSource = (name: string) => string | undefined;
 
 export interface UpstreamPlan {
   /** 最终上游 URL（已过双重断言；含查询串）。 */
@@ -38,8 +57,25 @@ export interface UpstreamPlan {
   isWebSocketUpgrade: boolean;
 }
 
-/** $env:VAR 解析：literal 原样；$env 引用空串/未设置返回 undefined（= 省略该头）。 */
-export function resolveHeaderValue(value: string, env: EnvSource): string | undefined {
+/**
+ * 头值解析：literal 原样；`$secret:<name>` 优先于 `$env:` 判定——命中密钥库返回
+ * 完整值，未命中（含空名/空值/未注入密钥源）抛 SecretMissingError（不回退空值、
+ * 不省略该头）；`$env:<VAR>` 语义保持——空串/未设置返回 undefined（= 省略该头）。
+ * 两者可并存于不同头（逐头独立解析）。
+ */
+export function resolveHeaderValue(
+  value: string,
+  env: EnvSource,
+  secrets?: SecretSource | undefined,
+): string | undefined {
+  if (value.startsWith(SECRET_REF_PREFIX)) {
+    const name = value.slice(SECRET_REF_PREFIX.length);
+    const resolved = secrets?.(name);
+    if (resolved === undefined || resolved === "") {
+      throw new SecretMissingError();
+    }
+    return resolved;
+  }
   if (!value.startsWith("$env:")) return value;
   const name = value.slice("$env:".length);
   if (name === "") return undefined;
@@ -149,6 +185,7 @@ export function buildUpstreamRequest(
   service: ServiceConfig,
   req: ReqHeader,
   env: EnvSource = process.env,
+  secrets?: SecretSource | undefined,
 ): UpstreamPlan {
   const upstream = parseUpstreamUrl(service.upstream);
 
@@ -189,7 +226,7 @@ export function buildUpstreamRequest(
     throw new RewriteError("upstream base path prefix assertion failed");
   }
 
-  // 3) 头链：帧内头（凭据/hop-by-hop 纵深剥离）-> headerRemove -> headerSet($env)。
+  // 3) 头链：帧内头（凭据/hop-by-hop 纵深剥离）-> headerRemove -> headerSet($secret/$env)。
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(req.headers ?? {})) {
     if (DEFENSIVE_STRIP.has(name)) continue;
@@ -204,8 +241,10 @@ export function buildUpstreamRequest(
   const headerSet = service.rewrite?.headerSet;
   if (headerSet !== undefined) {
     for (const [name, value] of Object.entries(headerSet)) {
-      const resolved = resolveHeaderValue(value, env);
-      if (resolved === undefined) continue; // $env 空串/未设置 = 省略
+      // $secret 未命中在此抛 SecretMissingError（上游 catch 映射 secret_missing）；
+      // $env 空串/未设置 = 省略。
+      const resolved = resolveHeaderValue(value, env, secrets);
+      if (resolved === undefined) continue;
       headers[name] = resolved;
     }
   }

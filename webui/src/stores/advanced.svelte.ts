@@ -12,8 +12,9 @@ import { parsePositiveInt } from "./share-wizard.svelte.ts";
 /** services.add 的输入类型（契约推导，保持单源）。 */
 type ServiceAddInput = Parameters<RpcClient["provider"]["services"]["add"]>[0];
 
-/** $env 注入值脱敏：凭据值位置显示 ●，无变量名（与 AUTH_OK 披露同源）。 */
+/** 注入值脱敏：$secret 显示面板名（值只在本机密钥库）；$env 维持 ●，无变量名。 */
 export function maskSecret(value: string): string {
+  if (value.startsWith("$secret:")) return `secret panel: ${value.slice(8)}`;
   return value.startsWith("$env:") ? "\u25cf" : value;
 }
 
@@ -28,7 +29,8 @@ export const serviceForm = $state({
   name: "",
   upstream: "",
   port: "",
-  keyEnv: "",
+  /** 选中密钥名（undefined = 不注入 authorization；$secret: 语法，M3 6.2）。 */
+  secretName: undefined as string | undefined,
   match: [{ type: "suffix", value: "" }] as Array<{ type: string; value: string }>,
   busy: false,
   error: null as RpcError | null,
@@ -40,7 +42,7 @@ export function openServiceAdd(): void {
   serviceForm.name = "";
   serviceForm.upstream = "";
   serviceForm.port = "";
-  serviceForm.keyEnv = "";
+  serviceForm.secretName = undefined;
   serviceForm.match = [{ type: "suffix", value: "" }];
   serviceForm.error = null;
 }
@@ -52,7 +54,8 @@ export function openServiceEdit(service: ServiceConfigView): void {
   serviceForm.upstream = service.upstream;
   serviceForm.port = String(service.defaultPort);
   const authorization = service.rewrite?.headerSet?.["authorization"];
-  serviceForm.keyEnv = authorization?.startsWith("$env:") ? authorization.slice(5) : "";
+  serviceForm.secretName =
+    authorization?.startsWith("$secret:") ? authorization.slice("$secret:".length) : undefined;
   serviceForm.match = service.match.map((rule) => ({ type: rule.type, value: rule.value }));
   serviceForm.error = null;
 }
@@ -71,6 +74,7 @@ function serviceInput(): { ok: true; input: ServiceAddInput } | { ok: false; mes
     .map((rule) => ({ type: rule.type as "exact" | "suffix" | "regex", value: rule.value.trim() }))
     .filter((rule) => rule.value !== "");
   const port = parsePositiveInt(serviceForm.port);
+  const secretName = serviceForm.secretName?.trim();
   if (name === "") return { ok: false, message: "service name is required" };
   if (!/^https?:\/\//.test(upstream)) return { ok: false, message: "upstream must be an http(s) URL" };
   if (match.length === 0) return { ok: false, message: "at least one match rule is required" };
@@ -84,8 +88,9 @@ function serviceInput(): { ok: true; input: ServiceAddInput } | { ok: false; mes
       upstream,
       match,
       ...(port !== undefined ? { defaultPort: port } : {}),
-      ...(serviceForm.keyEnv.trim() !== ""
-        ? { rewrite: { headerSet: { authorization: `$env:${serviceForm.keyEnv.trim()}` } } }
+      // 有密钥 → $secret: 注入（引擎请求期从本机密钥库取值）；无 → 不带
+      ...(secretName !== undefined && secretName !== ""
+        ? { rewrite: { headerSet: { authorization: `$secret:${secretName}` } } }
         : {}),
     },
   };

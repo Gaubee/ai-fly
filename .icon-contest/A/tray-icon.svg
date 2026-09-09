@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="ai-fly tray">
+  <!-- macOS template image: same dart glyph, pure #000 with alpha-only layering -->
+  <g transform="translate(519.07 504.93) rotate(-45)">
+    <polygon points="390,0 -390,-210 -390,-62 -105,0" fill="#000000"/>
+    <polygon points="390,0 -105,0 -390,62 -390,210" fill="#000000" fill-opacity="0.6"/>
+  </g>
+</svg>

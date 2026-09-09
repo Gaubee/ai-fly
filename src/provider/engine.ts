@@ -35,7 +35,7 @@ import {
 } from "./auth.ts";
 import { forwardRequest, UpstreamAbortError, type UpstreamTimeouts } from "./upstream.ts";
 import type { WsRelayHandle } from "./ws-upstream.ts";
-import type { EnvSource } from "./rewrite.ts";
+import type { EnvSource, SecretSource } from "./rewrite.ts";
 
 export interface ProviderEngineOptions {
   alias?: string | undefined;
@@ -43,6 +43,8 @@ export interface ProviderEngineOptions {
   timeouts?: Partial<UpstreamTimeouts> | undefined;
   /** $env 解析源（默认 process.env；测试注入）。 */
   env?: EnvSource | undefined;
+  /** $secret 解析源（密钥库读取面；缺省由 serve 装配为 dataDir 下的 SecretsStore）。 */
+  secrets?: SecretSource | undefined;
 }
 
 interface ActiveForward {
@@ -440,6 +442,7 @@ class ProviderPeerSession implements AuthSessionBinding {
       timeouts: this.engine.opts.timeouts,
       onUsage: this.engine.opts.logUsage === true ? (r) => this.engine.recordUsage(r) : undefined,
       env: this.engine.opts.env,
+      secrets: this.engine.opts.secrets,
       onWsRelay: (relay) => {
         act.ws = relay;
       },
