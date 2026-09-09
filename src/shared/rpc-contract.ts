@@ -176,11 +176,13 @@ export const SECRET_NAME_SCHEMA = z
   .max(128)
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "lowercase letters, digits, dot, dash, underscore");
 
-/** 密钥库清单条目（仅名称——值由设计不跨 RPC）。 */
+/** 密钥库清单条目（仅名称与开关——值由设计不跨 RPC）。 */
 export const SECRET_ENTRY_SCHEMA = z.strictObject({
   name: SECRET_NAME_SCHEMA,
   createdAt: z.number().int().min(0),
   updatedAt: z.number().int().min(0),
+  /** 注入时自动拼 "Bearer "（默认 true；Owner 2026-09-10：值默认是裸 key）。 */
+  bearerPrefix: z.boolean(),
 });
 
 // ---------------------------------------------------------------------------
@@ -297,18 +299,26 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
             latencyMs: z.number().int().min(0),
             model: z.string(),
             error: z.string().optional(),
+            /** 请求详情（发起过即有）：UI 呈现「发了什么」。 */
+            request: z
+              .strictObject({ method: z.literal("POST"), url: z.string(), model: z.string() })
+              .optional(),
+            /** 模型选择来源（explicit / models.dev / upstream-probe）。 */
+            modelSource: z.enum(["explicit", "models.dev", "upstream-probe"]).optional(),
           }),
         ),
     },
     secrets: {
       /** 密钥库清单（仅名称与时间戳；值由设计不跨 RPC）。 */
       list: oc.input(z.object({})).output(z.object({ secrets: z.array(SECRET_ENTRY_SCHEMA) })),
-      /** 新增/覆写（value 为完整头值，如 "Bearer sk-…"）。 */
+      /** 新增/覆写（value 为裸密钥——bearerPrefix 默认 true 时注入自动拼 "Bearer "）。 */
       set: oc
         .input(
           z.strictObject({
             name: SECRET_NAME_SCHEMA,
             value: z.string().min(1).max(8192),
+            /** 关闭后按原样注入（非 Bearer 站点）。 */
+            bearerPrefix: z.boolean().optional(),
           }),
         )
         .output(z.object({ secret: SECRET_ENTRY_SCHEMA })),
@@ -339,6 +349,19 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
           }),
         )
         .output(z.object({ group: GROUP_SCHEMA })),
+      /** 更新分组限额（省略 limits = 清除为无限）。 */
+      setLimits: oc
+        .input(
+          z.strictObject({
+            name: z.string().min(1).max(256),
+            limits: GROUP_LIMITS_SCHEMA.optional(),
+          }),
+        )
+        .output(z.object({ group: GROUP_SCHEMA })),
+      /** 删除分组（仍有未撤销密钥时 CONFLICT——先 revoke）。 */
+      remove: oc
+        .input(z.strictObject({ name: z.string().min(1).max(256) }))
+        .output(z.object({ removed: z.literal(true) })),
     },
     keys: {
       /** 签发（原文仅本次返回；此后只余哈希）。 */
@@ -506,9 +529,20 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
           envHint: z.string().optional(),
         }),
       ),
-    /** 模型清单（models.dev 缓存；按价格升序，chat 优先，未知价尾排）。 */
+    /** 模型清单（models.dev 缓存；按价格升序，chat 优先，未知价尾排）。
+     *  presetId 二选一：已知预设；或 custom（自定义上游）实时探测 {upstream}/models。 */
     models: oc
-      .input(z.strictObject({ presetId: z.string().min(1).max(128) }))
+      .input(
+        z
+          .strictObject({
+            presetId: z.string().min(1).max(128).optional(),
+            upstream: z.string().min(1).max(2048).optional(),
+            secretName: SECRET_NAME_SCHEMA.optional(),
+          })
+          .refine((v) => (v.presetId !== undefined) !== (v.upstream !== undefined), {
+            message: "exactly one of presetId or upstream is required",
+          }),
+      )
       .output(
         z.strictObject({
           models: z.array(

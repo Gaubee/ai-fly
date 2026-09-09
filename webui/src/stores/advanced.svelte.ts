@@ -150,7 +150,8 @@ export async function removeService(name: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 分组：新建（可带限额）/ 成员整表替换（limits 契约只在创建时设置）
+// 分组：新建（可带限额）/ 行内编辑（成员整表替换 + 限额更新）/ 删除
+// （组内仍有未撤销密钥 → 引擎 CONFLICT，toast 带 revoke them first）
 // ---------------------------------------------------------------------------
 
 export const groupForm = $state({
@@ -216,26 +217,67 @@ export async function submitGroupAdd(): Promise<void> {
 }
 
 export const groupEdit = $state({
-  /** 正在编辑成员的分组名（空 = 无）。 */
+  /** 正在编辑的分组名（空 = 无）。 */
   open: "",
   draft: [] as string[],
+  /** 限额草稿（空串 = unlimited；保存时 setLimits，省略即清除）。 */
+  limitsConcurrency: "",
+  limitsDaily: "",
   busy: false,
   error: null as RpcError | null,
 });
 
-export function openGroupEdit(name: string, current: string[]): void {
+/** 限额草稿校验（非法 → 消息；合法 → null）。 */
+function groupLimitsProblem(): string | null {
+  if (
+    (groupEdit.limitsConcurrency.trim() !== "" && parsePositiveInt(groupEdit.limitsConcurrency) === undefined) ||
+    (groupEdit.limitsDaily.trim() !== "" && parsePositiveInt(groupEdit.limitsDaily) === undefined)
+  ) {
+    return "limits must be positive integers";
+  }
+  return null;
+}
+
+export function openGroupEdit(
+  name: string,
+  current: string[],
+  limits?: { maxConcurrency?: number; dailyRequests?: number },
+): void {
   groupEdit.open = name;
   groupEdit.draft = [...current];
+  groupEdit.limitsConcurrency = limits?.maxConcurrency !== undefined ? String(limits.maxConcurrency) : "";
+  groupEdit.limitsDaily = limits?.dailyRequests !== undefined ? String(limits.dailyRequests) : "";
   groupEdit.error = null;
 }
 
+/** 行内编辑保存：成员整表替换（setServices）+ 限额更新（空 = 清除为无限）。 */
 export async function submitGroupEdit(): Promise<void> {
   if (groupEdit.busy || groupEdit.open === "") return;
+  const problem = groupLimitsProblem();
+  if (problem !== null) {
+    groupEdit.error = { code: "INVALID_INPUT", message: problem };
+    return;
+  }
+  const maxConcurrency = parsePositiveInt(groupEdit.limitsConcurrency);
+  const dailyRequests = parsePositiveInt(groupEdit.limitsDaily);
   groupEdit.busy = true;
   groupEdit.error = null;
   try {
     await call((c) =>
       c.provider.groups.setServices({ name: groupEdit.open, serviceNames: groupEdit.draft }),
+    );
+    await call((c) =>
+      c.provider.groups.setLimits({
+        name: groupEdit.open,
+        ...(maxConcurrency !== undefined || dailyRequests !== undefined
+          ? {
+              limits: {
+                ...(maxConcurrency !== undefined ? { maxConcurrency } : {}),
+                ...(dailyRequests !== undefined ? { dailyRequests } : {}),
+              },
+            }
+          : {}),
+      }),
     );
     toastSuccess("Group updated", groupEdit.open);
     groupEdit.open = "";
@@ -245,6 +287,32 @@ export async function submitGroupEdit(): Promise<void> {
     toastRpcError(groupEdit.error);
   } finally {
     groupEdit.busy = false;
+  }
+}
+
+export const groupRemove = $state({
+  confirm: "",
+  busy: "",
+  error: null as RpcError | null,
+});
+
+/** 删除分组（组内仍有未撤销密钥 → 引擎 CONFLICT，错误信息含 revoke them first）。 */
+export async function removeGroup(name: string): Promise<void> {
+  if (groupRemove.busy !== "") return;
+  groupRemove.busy = name;
+  groupRemove.error = null;
+  try {
+    await call((c) => c.provider.groups.remove({ name }));
+    toastSuccess("Group removed", name);
+    // 正在编辑的组被删 → 收起编辑块（行已消失）
+    if (groupEdit.open === name) groupEdit.open = "";
+    refresh("groups", "provider");
+  } catch (error) {
+    groupRemove.error = toRpcError(error);
+    toastRpcError(groupRemove.error);
+  } finally {
+    groupRemove.busy = "";
+    groupRemove.confirm = "";
   }
 }
 

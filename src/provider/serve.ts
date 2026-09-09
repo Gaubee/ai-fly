@@ -178,8 +178,9 @@ export async function startProviderDaemon(opts: DaemonOptions): Promise<RunningD
   }
   const limits = new LimitEnforcer({ dataDir: opts.dataDir });
   // $secret 解析默认接密钥库（无内存态：每请求读盘，UI/CLI 写入即刻生效）。
+  // resolve() 应用 bearerPrefix（默认拼 "Bearer "；Owner 裁决 2026-09-10）。
   const secretsStore = SecretsStore.open(opts.dataDir);
-  const secrets = opts.secrets ?? ((name: string) => secretsStore.get(name));
+  const secrets = opts.secrets ?? ((name: string) => secretsStore.resolve(name)?.headerValue);
   const fabric = await openOrCreateFabric(opts.dataDir, opts.relayUrls);
   const engine = new ProviderEngine({
     fabric,

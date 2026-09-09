@@ -24,7 +24,7 @@ export function toDomainError(err: unknown): DomainError {
   const name = err instanceof Error ? err.name : "";
   if (name === "StoreError") {
     const code = (err as { code?: string }).code;
-    if (code === "duplicate") return new DomainError("CONFLICT", safeMessage);
+    if (code === "duplicate" || code === "conflict") return new DomainError("CONFLICT", safeMessage);
     if (code === "not-found") return new DomainError("NOT_FOUND", safeMessage);
     if (code === "invalid") return new DomainError("INVALID_INPUT", safeMessage);
     return new DomainError("INTERNAL", safeMessage); // corrupt

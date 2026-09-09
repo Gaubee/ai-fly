@@ -1,6 +1,7 @@
-<!-- 密钥面板（M3 6.2）：列表仅名称 + 每行 remove（二次确认，Dashboard
-     forget 同款）；新增/编辑表单 name + value（password 型，提交后清空
-     不回显——值由设计不跨 RPC 亦不回显）；空态引导。open 由选择器持有；
+<!-- 密钥面板（M3 6.2 + M3-acceptance ①）：列表仅名称 + 每行 remove（二次
+     确认，Dashboard forget 同款）；新增/编辑表单 name + value（password 型
+     裸密钥，提交后清空不回显——值由设计不跨 RPC 亦不回显）+ "Bearer "
+     前缀开关（编辑回填既有条目值）；空态引导。open 由选择器持有；
      onpick 在新增/覆写成功后回选通知。 -->
 <script lang="ts">
   import Dialog, { DialogFooter } from "$lib/ui/dialog";
@@ -8,6 +9,7 @@
   import Input from "$lib/ui/input";
   import Separator from "$lib/ui/separator";
   import Skeleton from "$lib/ui/skeleton";
+  import Toggle from "$lib/ui/toggle";
   import { secrets, refreshSecrets, setSecret, removeSecret } from "../stores/secrets.svelte.ts";
 
   interface Props {
@@ -23,6 +25,8 @@
 
   let name = $state("");
   let value = $state("");
+  /** Bearer 开关（M3-acceptance ①）：编辑既有条目时回填该条目值。 */
+  let bearerPrefix = $state(true);
   /** 正在覆写的既有密钥名（编辑 = 同名 set 覆写；值不回显）。 */
   let editing = $state<string | null>(null);
   /** 每行 remove 二次确认（与 Dashboard forget 同款切换）。 */
@@ -45,6 +49,7 @@
   function resetForm(): void {
     name = "";
     value = "";
+    bearerPrefix = true;
     editing = null;
   }
 
@@ -52,13 +57,14 @@
     editing = secretName;
     name = secretName;
     value = "";
+    bearerPrefix = secrets.entries.find((entry) => entry.name === secretName)?.bearerPrefix ?? true;
   }
 
   async function submit(): Promise<void> {
     const trimmed = name.trim();
     if (busy || !formValid) return;
     busy = true;
-    const ok = await setSecret(trimmed, value);
+    const ok = await setSecret(trimmed, value, bearerPrefix);
     busy = false;
     if (!ok) return;
     onpick?.(trimmed);
@@ -124,15 +130,21 @@
       <Input
         type="password"
         label="value"
-        placeholder="Bearer sk-..."
+        placeholder="sk-..."
         autocomplete="off"
         bind:value={value}
       />
-      <p class="text-[11px] leading-relaxed text-muted-foreground">
-        the full authorization header value, e.g.
-        <code class="font-mono">Bearer sk-...</code> - it is stored locally and
-        cleared from this form after saving.
-      </p>
+      <div class="flex flex-col gap-1.5">
+        <Toggle
+          label='add "Bearer " prefix'
+          checked={bearerPrefix}
+          onchange={(event) => (bearerPrefix = event.currentTarget.checked)}
+        />
+        <p class="text-[11px] leading-relaxed text-muted-foreground">
+          most OpenAI-compatible providers expect it; turn off for raw keys -
+          the value is stored locally and cleared from this form after saving.
+        </p>
+      </div>
       <div class="flex items-center gap-2">
         <PressButton
           variant="fill"

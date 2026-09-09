@@ -22,9 +22,18 @@ export interface SecretEntryView {
   name: string;
   createdAt: number;
   updatedAt: number;
+  /** 注入时自动拼 "Bearer " 前缀（默认 true；Owner 裁决 2026-09-10：密钥值默认
+   *  是裸 key，不再要求用户手写完整头值；非 Bearer 站点关闭即可）。 */
+  bearerPrefix: boolean;
 }
 
-/** 文件形状：{ version: 1, secrets: { [name]: { value, createdAt, updatedAt } } }。 */
+/** 解析结果（$secret:/test 注入用的最终头值）。 */
+export interface ResolvedSecret {
+  headerValue: string;
+}
+
+/** 文件形状：{ version: 1, secrets: { [name]: { value, createdAt, updatedAt, bearerPrefix } } }。
+ *  旧文件无 bearerPrefix 字段按 true 读入（zod default，写入时补齐）。 */
 const SECRETS_FILE_SCHEMA = z.strictObject({
   version: z.literal(1),
   secrets: z.record(
@@ -33,6 +42,7 @@ const SECRETS_FILE_SCHEMA = z.strictObject({
       value: z.string().min(1).max(8192),
       createdAt: z.number().int().min(0),
       updatedAt: z.number().int().min(0),
+      bearerPrefix: z.boolean().default(true),
     }),
   ),
 });
@@ -85,11 +95,16 @@ export class SecretsStore {
     atomicWriteFileSync(SecretsStore.filePath(this.dataDir), `${JSON.stringify(data, null, 2)}\n`);
   }
 
-  /** 清单（仅名称与时间戳；按名称排序稳定输出）。 */
+  /** 清单（名称/时间戳/bearer 开关；按名称排序稳定输出）。 */
   list(): SecretEntryView[] {
     const { secrets } = this.read();
     return Object.entries(secrets)
-      .map(([name, entry]) => ({ name, createdAt: entry.createdAt, updatedAt: entry.updatedAt }))
+      .map(([name, entry]) => ({
+        name,
+        createdAt: entry.createdAt,
+        updatedAt: entry.updatedAt,
+        bearerPrefix: entry.bearerPrefix,
+      }))
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }
 
@@ -99,8 +114,19 @@ export class SecretsStore {
     return entry === undefined ? undefined : entry.value;
   }
 
+  /** 解析为最终注入头值：bearerPrefix 开启时前拼 "Bearer "（幂等：值已以
+   *  Bearer 开头则不再重复拼）。$secret:/test 一律走这里，不直接用 get()。 */
+  resolve(name: string): ResolvedSecret | undefined {
+    const entry = this.read().secrets[name];
+    if (entry === undefined) return undefined;
+    const bare = entry.value;
+    const headerValue =
+      entry.bearerPrefix && !/^Bearer\s/i.test(bare) ? `Bearer ${bare}` : bare;
+    return { headerValue };
+  }
+
   /** 新增/覆写（返回清单投影；createdAt 首次落定时固定，覆写只动 updatedAt）。 */
-  set(name: string, value: string): SecretEntryView {
+  set(name: string, value: string, opts?: { bearerPrefix?: boolean }): SecretEntryView {
     if (!SECRET_NAME_SCHEMA.safeParse(name).success) {
       throw new StoreError(
         "invalid",
@@ -113,14 +139,16 @@ export class SecretsStore {
     const data = this.read();
     const now = Date.now();
     const previous = data.secrets[name];
+    const bearerPrefix = opts?.bearerPrefix ?? previous?.bearerPrefix ?? true;
     const entry = {
       value,
       createdAt: previous === undefined ? now : previous.createdAt,
       updatedAt: now,
+      bearerPrefix,
     };
     data.secrets[name] = entry;
     this.write(data);
-    return { name, createdAt: entry.createdAt, updatedAt: entry.updatedAt };
+    return { name, createdAt: entry.createdAt, updatedAt: entry.updatedAt, bearerPrefix };
   }
 
   /** 删除（不存在抛 StoreError(not-found)——RPC 边界映射 NOT_FOUND）。 */

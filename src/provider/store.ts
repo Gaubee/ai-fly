@@ -42,7 +42,7 @@ export const KEY_MATERIAL_BYTES = 32; // randomZ32(32) -> 52 字符
 
 /** 存储层错误（用户面 message 为英文 ASCII，直接透出 CLI）。 */
 export class StoreError extends Error {
-  readonly code: "duplicate" | "not-found" | "invalid" | "corrupt";
+  readonly code: "duplicate" | "not-found" | "invalid" | "corrupt" | "conflict";
 
   constructor(code: StoreError["code"], message: string) {
     super(message);
@@ -398,6 +398,36 @@ export class ProviderStore {
     group.serviceIds = this.resolveServiceIds(serviceNames);
     this.save();
     return { ...group, serviceIds: [...group.serviceIds] };
+  }
+
+  /** 更新分组限额（undefined = 清除限额变无限）。 */
+  setGroupLimits(name: string, limits: GroupLimits | undefined): GroupConfig {
+    const group = this.data.groups.find((g) => g.name === name);
+    if (group === undefined) {
+      throw new StoreError("not-found", `error: group '${name}' not found`);
+    }
+    if (limits !== undefined) validateLimits(limits);
+    group.limits = limits === undefined ? undefined : { ...limits };
+    this.save();
+    return { ...group, serviceIds: [...group.serviceIds] };
+  }
+
+  /** 删除分组（仍有未撤销密钥时拒绝——孤儿密钥会以 key_all_invalid 形态困扰
+   *  持钥消费方；先 revoke 再删。Owner 验收 2026-09-10：group 管理对齐 keys）。 */
+  removeGroup(name: string): void {
+    const index = this.data.groups.findIndex((g) => g.name === name);
+    if (index === -1) {
+      throw new StoreError("not-found", `error: group '${name}' not found`);
+    }
+    const activeKeys = this.data.keys.filter((k) => k.group === name && k.revokedAt === undefined);
+    if (activeKeys.length > 0) {
+      throw new StoreError(
+        "conflict",
+        `error: group '${name}' still has ${activeKeys.length} active key(s) - revoke them first`,
+      );
+    }
+    this.data.groups.splice(index, 1);
+    this.save();
   }
 
   private resolveServiceIds(serviceNames: readonly string[]): string[] {

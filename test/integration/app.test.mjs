@@ -198,7 +198,16 @@ describe("app integration: token gate + contract over ws", () => {
   it("草稿形状连通测试：fake upstream + models.dev 缓存注入（免网络）", async () => {
     // 本地 fake upstream：记录请求、回 200 JSON。
     const seen = [];
+    // custom 探测用第二上游（finally 统一收尾：keep-alive 下 close 回调式收）
+    let probeServer;
     const upstreamServer = createServer((req, res) => {
+      // /models：OpenAI 兼容清单（探测路径用：便宜档 mini 排前由引擎启发式保证）
+      if (req.method === "GET" && req.url === "/models") {
+        seen.push({ url: req.url, authorization: req.headers.authorization ?? null, googKey: null });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ data: [{ id: "probe-big" }, { id: "probe-mini" }] }));
+        return;
+      }
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
@@ -258,7 +267,8 @@ describe("app integration: token gate + contract over ws", () => {
       assert.equal(noSecret.error, "secret not found");
 
       // 设密钥后：默认模型 = priced chat 最低价；openai 形状请求注入 authorization。
-      await client.provider.secrets.set({ name: "fake", value: "Bearer fk-1" });
+      // 裸 key（Owner 2026-09-10）：bearerPrefix 默认开，注入自动拼 "Bearer "
+      await client.provider.secrets.set({ name: "fake", value: "fk-1" });
       const ok = await client.provider.services.test({
         upstream: upstreamBase,
         secretName: "fake",
@@ -307,12 +317,36 @@ describe("app integration: token gate + contract over ws", () => {
         },
       );
 
-      // 清单不可用（缓存里没有的 provider）且未指定模型 -> 结果级失败（零网络）
+      // 清单不可用（缓存没有 + 探测拒绝）且未指定模型 -> 结果级失败（零外网）
       const noCatalog = await client.provider.services.test({
-        upstream: "https://catalog-miss.example",
+        upstream: "http://127.0.0.2:9",
       });
       assert.equal(noCatalog.ok, false);
-      assert.match(noCatalog.error, /model list unavailable/);
+      assert.match(noCatalog.error, /no model available/);
+
+      // custom 上游探测模式：不在缓存里的第二上游，/models 拉清单 + test 走探测模型
+      probeServer = createServer((req, res) => {
+        if (req.method === "GET" && req.url === "/models") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ data: [{ id: "relay-xl" }, { id: "relay-mini" }] }));
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("{}");
+      });
+      // 仍绑 127.0.0.1，但以 http://localhost:<port> 访问：缓存按 URL 主机名匹配
+      // （localhost ≠ 127.0.0.1），探测路径得以触发（同主机不同端口会命中缓存——
+      // 设计如此：同主机=同 provider）。
+      await new Promise((r) => probeServer.listen(0, "127.0.0.1", r));
+      const probeBase = `http://localhost:${probeServer.address().port}`;
+      const probed = await client.presets.models({ upstream: probeBase, secretName: "fake" });
+      assert.equal(probed.error, undefined);
+      assert.equal(probed.models[0].id, "relay-mini", "探测清单便宜档排首");
+      const viaProbe = await client.provider.services.test({ upstream: probeBase, secretName: "fake" });
+      assert.equal(viaProbe.ok, true, JSON.stringify(viaProbe));
+      assert.equal(viaProbe.model, "relay-mini");
+      assert.equal(viaProbe.modelSource, "upstream-probe");
+      assert.equal(viaProbe.request.url, `${probeBase}/chat/completions`);
 
       // 删除密钥后同请求回到 secret not found
       await client.provider.secrets.remove({ name: "fake" });
@@ -326,6 +360,7 @@ describe("app integration: token gate + contract over ws", () => {
     } finally {
       ws.close();
       await new Promise((r) => upstreamServer.close(() => r()));
+      if (probeServer !== undefined) await new Promise((r) => probeServer.close(() => r()));
     }
   });
 });

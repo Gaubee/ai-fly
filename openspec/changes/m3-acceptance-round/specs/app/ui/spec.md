@@ -62,3 +62,19 @@ macOS 另计左侧控件起点）写入根元素 CSS 变量，导航与内容区
 
 - **WHEN** 用户选好预设与密钥后点击 test
 - **THEN** 按钮进入 loading，返回后内联显示 `ok · 812ms · glm-4-flash` 或失败原因；不产生任何已保存服务或流量计费之外的副作用提示
+
+### Requirement: 呈现规范增补（2026-09-10 第二轮）
+
+- 空数据首屏入口卡 SHALL 为标准 Card + CardFooter 按钮（整卡 `<a>` 跳转违例）。
+- 向导 advanced options SHALL 使用标准手风琴组件（details/summary 基座）；内含
+  限额、default consumer port 与（custom 模式）match domains——后者留空即
+  "use host"（提交时按 upstream host 派生单条 exact 规则）。
+- 密钥面板值输入为裸密钥语义 + "add Bearer prefix" 开关（默认开）。
+- 连通测试结果 SHALL 展示请求详情行（POST url）与错误全文（含上游正文摘录）；
+  custom 上游的模型下拉来自实时探测，探测失败转手填。
+- groups 标签页 SHALL 提供行级管理（编辑服务/限额、删除带二次确认）。
+
+#### Scenario: 手风琴收纳
+
+- **WHEN** 进入向导第 ② 步
+- **THEN** 主区仅服务名/分组/密钥/测试；advanced options 以手风琴（默认收起）承载限额/端口/match

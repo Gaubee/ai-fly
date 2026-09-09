@@ -2,9 +2,10 @@
      ①服务来源（预设卡片网格：图标（models.dev logos，失败回退首字母
      tile）+ 搜索框（label/id/baseUrl 过滤精选与长尾）/ 本地运行时排前 /
      featured 徽标 / models.dev 长尾折叠区 + 断网提示 + 自定义 URL 卡）→
-     ②命名与分组（服务名/分组（可新建，提示已有组）/default consumer
-     port/密钥选择器 + manage secrets 面板/连通测试；限额收进默认折叠的
-     advanced options）→ ③生成分享（链接 + 一键复制 + 链接即凭证警示 +
+     ②命名与分组（服务名/分组（可新建，提示已有组）/密钥选择器 + manage
+     secrets 面板/连通测试；限额/default consumer port/自定义 match domains
+     收进默认折叠的 advanced options 手风琴——match 留空 = 提交时用 upstream
+     host）→ ③生成分享（链接 + 一键复制 + 链接即凭证警示 +
      TTL + 密钥已存本机密钥面板提示）。状态机在 stores/share-wizard。 -->
 <script lang="ts">
   import { onMount } from "svelte";
@@ -16,6 +17,7 @@
   import Alert from "$lib/ui/alert";
   import Skeleton from "$lib/ui/skeleton";
   import Separator from "$lib/ui/separator";
+  import Accordion, { AccordionItem } from "$lib/ui/accordion";
   import { slide } from "svelte/transition";
   import StepHeader from "../components/StepHeader.svelte";
   import ErrorAlert from "../components/ErrorAlert.svelte";
@@ -38,7 +40,6 @@
     customSourceValid,
     namingNext,
     generateShare,
-    hostFromUrl,
     TTL_OPTIONS,
   } from "../stores/share-wizard.svelte.ts";
   import { presetLogoUrl, type Preset } from "$shared/rpc-contract.ts";
@@ -83,9 +84,6 @@
   function markLogoFailed(presetId: string): void {
     failedLogos = new Set([...failedLogos, presetId]);
   }
-
-  /** ② 限额默认折叠（advanced options）。 */
-  let showAdvanced = $state(false);
 
   const groupOptions = $derived([
     { value: "__new__", label: "new group..." },
@@ -266,23 +264,6 @@
       <div class="flex flex-col gap-3 p-3">
         {#if share.mode === "custom"}
           <Input label="upstream URL" placeholder="https://api.example.com/v1" bind:value={share.customUpstream} />
-          <Input
-            label="match domain"
-            placeholder="api.example.com"
-            bind:value={share.customMatch}
-            error={share.customMatch.trim() === "" ? "match domain is required" : undefined}
-          />
-          <p class="text-[11px] text-muted-foreground">
-            requests whose host matches this domain are captured. defaults to the upstream host.
-            <button
-              type="button"
-              class="ml-1 text-primary underline-offset-2 hover:underline"
-              onclick={() => {
-                const host = hostFromUrl(share.customUpstream);
-                if (host !== "") share.customMatch = host;
-              }}
-            >use host</button>
-          </p>
           <Separator />
         {/if}
 
@@ -309,33 +290,41 @@
           </p>
         {/if}
 
-        <div class="flex flex-col gap-1.5">
-          <Input label="default consumer port" bind:value={share.port} />
-          <p class="text-[11px] leading-relaxed text-muted-foreground">
-            the local port friends will use on their machines - they can change it later.
-          </p>
-        </div>
-
-        <!-- 限额收进默认折叠的 advanced options（20/80：核心字段直达） -->
-        <PressButton
-          variant="ghost"
-          class="self-start"
-          onclick={() => (showAdvanced = !showAdvanced)}
-        >
-          advanced options
-          <span class="font-mono text-[10px] text-muted-foreground" aria-hidden="true">
-            {#if showAdvanced}&#9662;{:else}&#9656;{/if}
-          </span>
-        </PressButton>
-        {#if showAdvanced}
-          <div class="flex flex-col gap-2" transition:slide={{ duration: 150 }}>
-            <div class="grid gap-3 sm:grid-cols-2">
-              <Input label="max concurrency (optional)" placeholder="unlimited" bind:value={share.limitsConcurrency} />
-              <Input label="daily requests (optional)" placeholder="unlimited" bind:value={share.limitsDaily} />
+        <!-- advanced options（M3-acceptance ③：ghost accordion，默认折叠——
+             限额 + default consumer port + 自定义 match domains；20/80 核心
+             字段直达主区） -->
+        <Accordion ghost>
+          <AccordionItem>
+            {#snippet summary()}advanced options{/snippet}
+            <div class="flex flex-col gap-3">
+              <div class="grid gap-3 sm:grid-cols-2">
+                <Input label="max concurrency (optional)" placeholder="unlimited" bind:value={share.limitsConcurrency} />
+                <Input label="daily requests (optional)" placeholder="unlimited" bind:value={share.limitsDaily} />
+              </div>
+              <div class="flex flex-col gap-1.5">
+                <Input label="default consumer port" bind:value={share.port} />
+                <p class="text-[11px] leading-relaxed text-muted-foreground">
+                  the local port friends will use on their machines - they can change it later.
+                </p>
+              </div>
+              {#if share.mode === "custom"}
+                <!-- match 仅自定义模式（预设 match 来自 preset）；留空 =
+                     提交时用 upstream host（store 组装处派生） -->
+                <div class="flex flex-col gap-1.5">
+                  <Input
+                    label="match domains (default: use the upstream host)"
+                    placeholder="auto: api.example.com"
+                    bind:value={share.customMatch}
+                  />
+                  <p class="text-[11px] leading-relaxed text-muted-foreground">
+                    requests whose host matches are captured - leave empty to use the upstream host.
+                  </p>
+                </div>
+              {/if}
+              <p class="text-[11px] text-muted-foreground">empty limits = unlimited.</p>
             </div>
-            <p class="text-[11px] text-muted-foreground">empty limits = unlimited.</p>
-          </div>
-        {/if}
+          </AccordionItem>
+        </Accordion>
 
         <!-- 密钥选择器（本地运行时/自定义也显示：可选不选）+ 连通测试 -->
         <SecretPicker value={share.secretName} onchange={(name) => (share.secretName = name)} />

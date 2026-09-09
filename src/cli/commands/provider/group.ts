@@ -16,6 +16,7 @@ const SPEC = {
 const USAGE = `usage:
   ai-fly group add <name> [--service <serviceName>]... [--max-concurrency <n>] [--daily-requests <n>] [--data <dir>]
   ai-fly group set-services <name> [--service <serviceName>]... [--data <dir>]
+  ai-fly group remove <name> [--data <dir>]
   ai-fly group list [--data <dir>]`;
 
 export async function run(argv: string[], ctx: { homedir?: string } = {}): Promise<number> {
@@ -25,9 +26,10 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
     const sub = positionals[0];
     if (sub === "add") return add(options, positionals, home);
     if (sub === "set-services") return setServices(options, positionals, home);
+    if (sub === "remove") return remove(options, positionals, home);
     if (sub === "list") return list(options, home);
     if (sub === undefined) throw new UsageError(USAGE);
-    throw new UsageError(`error: unknown group subcommand '${sub}' (known: add, set-services, list)`);
+    throw new UsageError(`error: unknown group subcommand '${sub}' (known: add, set-services, remove, list)`);
   } catch (err) {
     return reportCliError(err);
   }
@@ -75,6 +77,19 @@ function setServices(
   const group = store.setGroupServices(name, services);
   const names = group.serviceIds.map((id) => store.getService(id)?.name ?? id).join(", ");
   process.stdout.write(`group updated: ${group.name}\n  services: ${names}\n`);
+  return 0;
+}
+
+function remove(
+  options: Readonly<Record<string, OptionValue>>,
+  positionals: readonly string[],
+  home: string,
+): number {
+  const name = positionals[1];
+  if (name === undefined) throw new UsageError("error: group remove requires a <name> argument");
+  const store = openStore(resolveDataDir(str(options.data), home));
+  store.removeGroup(name);
+  process.stdout.write(`group removed: ${name}\n`);
   return 0;
 }
 

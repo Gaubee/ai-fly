@@ -96,35 +96,37 @@
     <p class="text-xs text-muted-foreground">live status, updated by engine notifications</p>
   </header>
 
-  <!-- 首屏三步可达：空数据时只有两条向导大入口，无高级设置干扰 -->
+  <!-- 首屏三步可达：空数据时只有两条向导大入口，无高级设置干扰。
+       标准形态（Owner 裁决 2026-09-10）：Card 承载信息、CardFooter 承载动作——
+       整卡不做 <a> 跳转。 -->
   {#if isEmpty}
     <div class="grid gap-4 sm:grid-cols-2" transition:slide={{ duration: 180 }}>
-      <a
-        href="#/share"
-        class="group flex min-h-44 flex-col gap-3 border border-border bg-card p-5 shadow-2xs transition-colors hover:border-primary/50"
-      >
-        <span class="font-nav text-sm uppercase tracking-[0.1em] text-primary">share my services</span>
-        <p class="text-sm leading-relaxed text-muted-foreground">
-          Pick a source, name it, send one link. Your friend's agents reach your local models or
-          subscriptions in three steps.
-        </p>
-        <span class="mt-auto font-nav text-xs uppercase tracking-[0.1em] text-foreground">
-          start sharing ->
-        </span>
-      </a>
-      <a
-        href="#/connect"
-        class="group flex min-h-44 flex-col gap-3 border border-border bg-card p-5 shadow-2xs transition-colors hover:border-primary/50"
-      >
-        <span class="font-nav text-sm uppercase tracking-[0.1em] text-primary">use a friend's link</span>
-        <p class="text-sm leading-relaxed text-muted-foreground">
-          Paste an aifly1. link, confirm local ports, pick your agent. Ready to request in three
-          steps.
-        </p>
-        <span class="mt-auto font-nav text-xs uppercase tracking-[0.1em] text-foreground">
-          start connecting ->
-        </span>
-      </a>
+      <Card title="share my services" scroll={false}>
+        <div class="flex min-h-28 flex-col gap-2 p-3">
+          <p class="text-sm leading-relaxed text-muted-foreground">
+            Pick a source, name it, send one link. Your friend's agents reach your local models or
+            subscriptions in three steps.
+          </p>
+        </div>
+        {#snippet foot()}
+          <CardFooter label="share entry actions">
+            <PressButton variant="fill" href="#/share" external={false}>start sharing -></PressButton>
+          </CardFooter>
+        {/snippet}
+      </Card>
+      <Card title="use a friend's link" scroll={false}>
+        <div class="flex min-h-28 flex-col gap-2 p-3">
+          <p class="text-sm leading-relaxed text-muted-foreground">
+            Paste an aifly1. link, confirm local ports, pick your agent. Ready to request in three
+            steps.
+          </p>
+        </div>
+        {#snippet foot()}
+          <CardFooter label="connect entry actions">
+            <PressButton variant="fill" href="#/connect" external={false}>start connecting -></PressButton>
+          </CardFooter>
+        {/snippet}
+      </Card>
     </div>
   {/if}
 

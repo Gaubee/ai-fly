@@ -139,4 +139,33 @@ describe("SecretsStore 持久化形态", () => {
     expect(store.list()).toEqual([]);
     expect(existsSync(SecretsStore.filePath(dir))).toBe(false);
   });
+
+  it("bearerPrefix（Owner 2026-09-10）：默认拼 Bearer；关闭按原样；已带前缀不重复拼", () => {
+    const store = SecretsStore.open(dir);
+    store.set("std", "sk-1");
+    store.set("raw", "sk-2", { bearerPrefix: false });
+    store.set("prefilled", "Bearer sk-3");
+    expect(store.resolve("std")).toEqual({ headerValue: "Bearer sk-1" });
+    expect(store.resolve("raw")).toEqual({ headerValue: "sk-2" });
+    expect(store.resolve("prefilled")).toEqual({ headerValue: "Bearer sk-3" });
+    // 覆写未给开关时沿用旧开关；显式给则切换
+    store.set("raw", "sk-2b");
+    expect(store.resolve("raw")).toEqual({ headerValue: "sk-2b" });
+    store.set("raw", "sk-2c", { bearerPrefix: true });
+    expect(store.resolve("raw")).toEqual({ headerValue: "Bearer sk-2c" });
+    expect(store.list().find((s) => s.name === "raw")?.bearerPrefix).toBe(true);
+  });
+
+  it("旧文件无 bearerPrefix 字段 -> 读为 true（zod default 兼容）", () => {
+    writeFileSync(
+      SecretsStore.filePath(dir),
+      JSON.stringify({
+        version: 1,
+        secrets: { legacy: { value: "sk-old", createdAt: 1, updatedAt: 1 } },
+      }),
+    );
+    const store = SecretsStore.open(dir);
+    expect(store.resolve("legacy")).toEqual({ headerValue: "Bearer sk-old" });
+    expect(store.list()[0]!.bearerPrefix).toBe(true);
+  });
 });

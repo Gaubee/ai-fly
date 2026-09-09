@@ -4,7 +4,8 @@
 // （applyAsService/services.add + 分组落位 + daemon 幂等启动 +
 // share.create → 链接 + 警示 + TTL）。选中密钥时：preset 路径传
 // secretName（服务端写 $secret:<name>）；custom 路径手组
-// rewrite.headerSet.authorization = $secret:<name>。
+// rewrite.headerSet.authorization = $secret:<name>，match 留空时由
+// upstream hostname 派生单条 exact（M3-acceptance ③）。
 // 每步可回退；成功后锁定结果视图（回退会重复建服务，故隐藏 Back）。
 import { toRpcError, type RpcError } from "$lib/rpc-client";
 import type { Preset } from "$shared/rpc-contract.ts";
@@ -20,15 +21,6 @@ export const TTL_OPTIONS: ReadonlyArray<{ label: string; ttlMs: number }> = [
   { label: "7 days", ttlMs: 7 * 86_400_000 },
   { label: "30 days", ttlMs: 30 * 86_400_000 },
 ];
-
-/** 从 upstream URL 推导默认 match 值（host，去端口）。 */
-export function hostFromUrl(raw: string): string {
-  try {
-    return new URL(raw).host;
-  } catch {
-    return "";
-  }
-}
 
 /** 正整数解析（空串/非法 → undefined；用于端口与限额输入）。 */
 export function parsePositiveInt(raw: string): number | undefined {
@@ -114,13 +106,25 @@ export function shareBack(): void {
   share.error = null;
 }
 
-/** ① → ② 校验（自定义模式：名称/upstream/match 必填——名称即 ② 的 share.name）。 */
+/** ① → ② 校验（自定义模式：名称/upstream 必填；match 可留空——提交时由
+ *  upstream host 派生（M3-acceptance ③），仅派生亦不可行时才判无效）。 */
 export function customSourceValid(): boolean {
-  return (
-    share.name.trim() !== "" &&
-    /^https?:\/\//.test(share.customUpstream.trim()) &&
-    share.customMatch.trim() !== ""
-  );
+  if (share.name.trim() === "") return false;
+  const upstream = share.customUpstream.trim();
+  if (!/^https?:\/\//.test(upstream)) return false;
+  return share.customMatch.trim() !== "" || customMatchRules() !== null;
+}
+
+/** 自定义 match 组装：手填 → suffix；留空 → new URL(upstream).hostname 单条
+ *  exact（解析失败返回 null——维持既有校验错误文案）。 */
+function customMatchRules(): Array<{ type: "exact" | "suffix"; value: string }> | null {
+  const manual = share.customMatch.trim();
+  if (manual !== "") return [{ type: "suffix", value: manual }];
+  try {
+    return [{ type: "exact", value: new URL(share.customUpstream.trim()).hostname }];
+  } catch {
+    return null;
+  }
 }
 
 /** ② → ③ 校验：名称、分组名非空；端口/限额可解析。 */
@@ -208,11 +212,17 @@ export async function generateShare(): Promise<void> {
       );
       serviceName = applied.service.name;
     } else {
+      // match：手填 suffix；留空 → upstream hostname 单条 exact（M3-acceptance ③）
+      const match = customMatchRules();
+      if (match === null) {
+        share.error = { code: "INVALID_INPUT", message: "name, https upstream and match domain are required" };
+        return;
+      }
       const added = await call((c) =>
         c.provider.services.add({
           name: share.name.trim(),
           upstream: share.customUpstream.trim(),
-          match: [{ type: "suffix", value: share.customMatch.trim() }],
+          match,
           ...(parsePositiveInt(share.port) !== undefined
             ? { defaultPort: parsePositiveInt(share.port) }
             : {}),

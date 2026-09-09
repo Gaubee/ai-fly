@@ -20,7 +20,11 @@ function captureFetch(status = 200): { calls: Captured[]; fetchImpl: typeof fetc
   return { calls, fetchImpl };
 }
 
-const SECRETS = { get: (name: string): string | undefined => (name === "ok" ? "Bearer sk-1" : undefined) };
+// bearerPrefix 语义在 store.resolve；测试假体直接给最终头值
+const SECRETS = {
+  resolve: (name: string): { headerValue: string } | undefined =>
+    name === "ok" ? { headerValue: "Bearer sk-1" } : undefined,
+};
 
 const MODELS_RAW = JSON.stringify({
   "some-llm": {
@@ -170,21 +174,46 @@ describe("testUpstream 密钥与模型缺省", () => {
     expect(result.model).toBe("m1");
   });
 
-  it("清单不可用且未指定模型 -> 结果级失败", async () => {
+  it("清单不可用且未指定模型 -> 先探测 /models，仍失败才结果级失败", async () => {
     let calls = 0;
     const fetchImpl = (async () => {
       calls += 1;
       return new Response("{}");
     }) as typeof fetch;
     const noRaw = await testUpstream({ upstream: "https://api.unknown.example", fetchImpl });
-    expect(noRaw).toMatchObject({ ok: false, error: "model list unavailable; specify a model" });
+    expect(noRaw.ok).toBe(false);
+    expect(noRaw.error).toContain("no model available");
+    expect(noRaw.error).toContain("/models probe failed");
+    expect(calls).toBe(1); // 一次探测（{} 无 data 数组 → 探测失败），零测试请求
     const unknownProvider = await testUpstream({
       upstream: "https://api.unknown.example",
       fetchImpl,
       modelsRaw: MODELS_RAW,
     });
     expect(unknownProvider.ok).toBe(false);
-    expect(calls).toBe(0);
+    expect(calls).toBe(2);
+  });
+
+  it("自定义上游探测成功 -> 首选便宜档模型发起测试", async () => {
+    const seen: string[] = [];
+    const fetchImpl = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = String(input);
+      seen.push(url);
+      if (url.endsWith("/models")) {
+        return new Response(
+          JSON.stringify({ data: [{ id: "gpt-big" }, { id: "gpt-4o-mini" }, { id: "gpt-max" }] }),
+        );
+      }
+      return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const result = await testUpstream({ upstream: "https://api.a6.example/v1", fetchImpl });
+    expect(result).toMatchObject({
+      ok: true,
+      model: "gpt-4o-mini",
+      modelSource: "upstream-probe",
+      request: { method: "POST", url: "https://api.a6.example/v1/chat/completions", model: "gpt-4o-mini" },
+    });
+    expect(seen[0]).toContain("/models");
   });
 });
 

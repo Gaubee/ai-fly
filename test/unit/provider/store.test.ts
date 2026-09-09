@@ -185,4 +185,31 @@ describe("CRUD 与加载校验", () => {
     store.setAlias("my-box");
     expect(ProviderStore.open(dir).alias).toBe("my-box");
   });
+
+describe("分组管理（Owner 2026-09-10：对齐 keys）", () => {
+  it("setGroupLimits 更新与清除限额", () => {
+    const store = ProviderStore.open(dir);
+    store.addService({ name: "s1", upstream: "http://127.0.0.1:1", match: [{ type: "suffix", value: ".a.test" }], defaultPort: 21001 });
+    store.addGroup("g", ["s1"], { maxConcurrency: 2 });
+    expect(store.setGroupLimits("g", { dailyRequests: 5 }).limits).toEqual({ dailyRequests: 5 });
+    expect(store.setGroupLimits("g", undefined).limits).toBeUndefined();
+  });
+
+  it("removeGroup：有未撤销密钥拒绝（conflict），撤销后可删", () => {
+    const store = ProviderStore.open(dir);
+    store.addService({ name: "s1", upstream: "http://127.0.0.1:1", match: [{ type: "suffix", value: ".a.test" }], defaultPort: 21001 });
+    store.addGroup("g", ["s1"]);
+    store.issueKey("g");
+    try {
+      store.removeGroup("g");
+      expect.unreachable();
+    } catch (err) {
+      expect((err as StoreError).code).toBe("conflict");
+    }
+    const key = store.listKeys().find((k) => k.group === "g")!;
+    store.revokeKey(key.keyId);
+    store.removeGroup("g");
+    expect(store.listGroups().find((g) => g.name === "g")).toBeUndefined();
+  });
+});
 });

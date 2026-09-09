@@ -45,6 +45,8 @@
     groupEdit,
     openGroupEdit,
     submitGroupEdit,
+    groupRemove,
+    removeGroup,
     keyIssue,
     issueKey,
     keyRevoke,
@@ -85,11 +87,12 @@
 
   // ── 密钥库区（M3 6.1）：页面内联卡（非 dialog）──────────────────────
   // 共享 store 只持名称名单（SecretPicker 用）；本区另持带时间戳的行
-  // （契约仅回 name/createdAt/updatedAt，值不跨 RPC 亦不回显）。
+  // （契约回 name/createdAt/updatedAt/bearerPrefix，值不跨 RPC 亦不回显）。
   interface SecretRow {
     name: string;
     createdAt: number;
     updatedAt: number;
+    bearerPrefix: boolean;
   }
   let secretRows = $state<SecretRow[]>([]);
   let secretsLoading = $state(false);
@@ -99,6 +102,8 @@
   let secretNameDraft = $state("");
   /** password 型输入，提交后即清空，永不回显。 */
   let secretValueDraft = $state("");
+  /** Bearer 开关（M3-acceptance ①）：编辑既有条目时回填该条目值。 */
+  let secretBearerPrefix = $state(true);
   /** 正在覆写的既有密钥名（编辑 = 同名 set 覆写；值不回显）。 */
   let secretEditing = $state<string | null>(null);
   /** 行内 remove 二次确认（与 services/keys 行同款切换）。 */
@@ -137,20 +142,22 @@
   function resetSecretForm(): void {
     secretNameDraft = "";
     secretValueDraft = "";
+    secretBearerPrefix = true;
     secretEditing = null;
   }
 
-  function editSecretRow(name: string): void {
-    secretEditing = name;
-    secretNameDraft = name;
+  function editSecretRow(row: SecretRow): void {
+    secretEditing = row.name;
+    secretNameDraft = row.name;
     secretValueDraft = "";
+    secretBearerPrefix = row.bearerPrefix;
   }
 
   async function submitSecret(): Promise<void> {
     const name = secretNameDraft.trim();
     if (secretBusy || !secretFormValid) return;
     secretBusy = true;
-    const ok = await setSecret(name, secretValueDraft);
+    const ok = await setSecret(name, secretValueDraft, secretBearerPrefix);
     secretBusy = false;
     if (!ok) return; // 失败已由 store toast
     await loadSecretRows();
@@ -211,6 +218,16 @@
   });
 
   const keyGroupOptions = $derived(app.groups.map((group) => ({ value: group.name, label: group.name })));
+
+  /** 分组 → 未撤销密钥数（行卡片摘要，M3-acceptance ②）。 */
+  const activeKeysByGroup = $derived.by(() => {
+    const map = new Map<string, number>();
+    for (const key of app.keys) {
+      if (key.revokedAt !== undefined) continue;
+      map.set(key.group, (map.get(key.group) ?? 0) + 1);
+    }
+    return map;
+  });
 
   /** 主题偏好同步：Advanced 里的切换同时落引擎设置（点击后读 localStorage）。 */
   function syncThemeToSettings(): void {
@@ -451,12 +468,14 @@
       </div>
     </TabsContent>
 
-    <!-- ── 分组与限额 ───────────────────────────────────────── -->
+    <!-- ── 分组与限额（M3-acceptance ②：行卡片 = 名称 + 服务 chips + 限额
+         摘要 + active keys；edit 内联改成员与限额；remove 二次确认）── -->
     <TabsContent value="groups">
       <div class="flex flex-col gap-3">
         <div class="flex items-center justify-between">
           <p class="text-xs text-muted-foreground">
-            limits are set when the group is created; members can be replaced any time.
+            members and limits can be replaced any time; a group with active keys
+            must have them revoked before removal.
           </p>
           <PressButton variant="outline" onclick={openGroupAdd}>add group</PressButton>
         </div>
@@ -469,6 +488,7 @@
           <div class="flex flex-col gap-2">
             {#each app.groups as group (group.name)}
               {@const groupServiceNames = group.serviceIds.map((id) => serviceNamesById.get(id) ?? id)}
+              {@const activeKeys = activeKeysByGroup.get(group.name) ?? 0}
               <div class="border border-border bg-card px-3 py-2.5 shadow-2xs" transition:slide={{ duration: 150 }}>
                 <div class="flex flex-wrap items-center gap-2">
                   <span class="font-mono text-xs">{group.name}</span>
@@ -481,14 +501,26 @@
                   {#if !group.limits?.maxConcurrency && !group.limits?.dailyRequests}
                     <Badge variant="outline">unlimited</Badge>
                   {/if}
+                  <Badge variant="outline">{activeKeys} active {activeKeys === 1 ? "key" : "keys"}</Badge>
                   <span class="ml-auto flex items-center gap-1.5">
                     {#if groupEdit.open === group.name}
                       <PressButton variant="ghost" onclick={() => (groupEdit.open = "")} class={groupEdit.busy ? "pointer-events-none opacity-50" : undefined}>close</PressButton>
                     {:else}
                       <PressButton
                         variant="ghost"
-                        onclick={() => openGroupEdit(group.name, groupServiceNames)}
-                      >members</PressButton>
+                        onclick={() => openGroupEdit(group.name, groupServiceNames, group.limits)}
+                      >edit</PressButton>
+                    {/if}
+                    {#if groupRemove.confirm === group.name}
+                      <PressButton
+                        variant="tonal"
+                        class="jx-pair-destructive"
+                        loading={groupRemove.busy === group.name}
+                        onclick={() => void removeGroup(group.name)}
+                      >confirm remove</PressButton>
+                      <PressButton variant="ghost" onclick={() => (groupRemove.confirm = "")}>cancel</PressButton>
+                    {:else}
+                      <PressButton variant="ghost" onclick={() => (groupRemove.confirm = group.name)}>remove</PressButton>
                     {/if}
                   </span>
                 </div>
@@ -500,8 +532,10 @@
                   {/each}
                 </div>
                 {#if groupEdit.open === group.name}
+                  <!-- 行内编辑：名称只读（行头）；成员勾选 + 限额（保存走
+                       setServices + setLimits，空限额 = 清除为无限） -->
                   <div class="mt-2 flex flex-col gap-2 border-t border-border pt-2.5" transition:slide={{ duration: 150 }}>
-                    <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">members</span>
+                    <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">members & limits</span>
                     <div class="flex flex-wrap gap-x-5 gap-y-1.5">
                       {#each app.services.map((service) => service.name) as name (name)}
                         <label class="flex items-center gap-1.5 text-xs">
@@ -524,9 +558,13 @@
                         </span>
                       {/each}
                     </div>
+                    <div class="grid gap-3 sm:grid-cols-2">
+                      <Input label="max concurrency (optional)" placeholder="unlimited" bind:value={groupEdit.limitsConcurrency} />
+                      <Input label="daily requests (optional)" placeholder="unlimited" bind:value={groupEdit.limitsDaily} />
+                    </div>
                     <div class="flex items-center gap-1.5">
                       <PressButton variant="fill" loading={groupEdit.busy} onclick={() => void submitGroupEdit()}>
-                        save members
+                        save changes
                       </PressButton>
                     </div>
                     <ErrorAlert error={groupEdit.error} />
@@ -536,6 +574,7 @@
             {/each}
           </div>
         {/if}
+        <ErrorAlert error={groupRemove.error} />
 
         {#if groupForm.open}
           <Card title="add group" scroll={false}>
@@ -684,7 +723,7 @@
                     <span class="min-w-0 truncate font-mono text-xs">{row.name}</span>
                     <span class="text-[11px] text-muted-foreground">updated {formatDate(row.updatedAt)}</span>
                     <span class="ml-auto flex items-center gap-1.5">
-                      <PressButton variant="ghost" onclick={() => editSecretRow(row.name)}>edit</PressButton>
+                      <PressButton variant="ghost" onclick={() => editSecretRow(row)}>edit</PressButton>
                       {#if secretConfirm === row.name}
                         <PressButton
                           variant="tonal"
@@ -712,15 +751,21 @@
               <Input
                 type="password"
                 label="value"
-                placeholder="Bearer sk-..."
+                placeholder="sk-..."
                 autocomplete="off"
                 bind:value={secretValueDraft}
               />
-              <p class="text-[11px] leading-relaxed text-muted-foreground">
-                the full authorization header value, e.g.
-                <code class="font-mono">Bearer sk-...</code> - it is stored locally
-                and cleared from this form after saving.
-              </p>
+              <div class="flex flex-col gap-1.5">
+                <Toggle
+                  label='add "Bearer " prefix'
+                  checked={secretBearerPrefix}
+                  onchange={(event) => (secretBearerPrefix = event.currentTarget.checked)}
+                />
+                <p class="text-[11px] leading-relaxed text-muted-foreground">
+                  most OpenAI-compatible providers expect it; turn off for raw keys -
+                  the value is stored locally and cleared from this form after saving.
+                </p>
+              </div>
               <div class="flex items-center gap-2">
                 <PressButton
                   variant="fill"

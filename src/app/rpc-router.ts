@@ -14,7 +14,7 @@ import { buildShareLink, previewShareLink, SHARE_TTL_DEFAULT_MS } from "../provi
 import { parseUpstreamUrl } from "../provider/store.ts";
 import type { KeyRecord, ServiceConfig, ServiceInput } from "../provider/store.ts";
 import { SecretsStore } from "../provider/secrets.ts";
-import { testUpstream } from "../provider/upstream-test.ts";
+import { probeUpstreamModels, testUpstream } from "../provider/upstream-test.ts";
 import { importLink, joinDevice, addKey } from "../consumer/join.ts";
 import { listKeyrings, removeKeyring, setPort } from "../consumer/store.ts";
 import { applyWriter, previewWriter } from "./writers/index.ts";
@@ -184,6 +184,14 @@ export function createRpcRouter(deps: RpcRouterDeps) {
           const group = host.providerStore().setGroupServices(input.name, input.serviceNames);
           return { group };
         }),
+        setLimits: rpc.provider.groups.setLimits.handler(({ input }) => {
+          const group = host.providerStore().setGroupLimits(input.name, input.limits);
+          return { group };
+        }),
+        remove: rpc.provider.groups.remove.handler(({ input }) => {
+          host.providerStore().removeGroup(input.name);
+          return { removed: true as const };
+        }),
       },
       keys: {
         issue: rpc.provider.keys.issue.handler(({ input }) =>
@@ -197,13 +205,15 @@ export function createRpcRouter(deps: RpcRouterDeps) {
         })),
       },
       // 密钥库（provider-local；直连 SecretsStore——无内存态，daemon 运行时写入即刻
-      // 生效。remove 未命中 StoreError(not-found) -> NOT_FOUND；list 只投影名称与时间戳）。
+      // 生效。remove 未命中 StoreError(not-found) -> NOT_FOUND；list 投影名称/开关/时间戳）。
       secrets: {
         list: rpc.provider.secrets.list.handler(() => ({
           secrets: SecretsStore.open(host.providerDataDir).list(),
         })),
         set: rpc.provider.secrets.set.handler(({ input }) => ({
-          secret: SecretsStore.open(host.providerDataDir).set(input.name, input.value),
+          secret: SecretsStore.open(host.providerDataDir).set(input.name, input.value, {
+            ...(input.bearerPrefix !== undefined ? { bearerPrefix: input.bearerPrefix } : {}),
+          }),
         })),
         remove: rpc.provider.secrets.remove.handler(({ input }) => {
           SecretsStore.open(host.providerDataDir).remove(input.name);
@@ -413,6 +423,23 @@ export function createRpcRouter(deps: RpcRouterDeps) {
       // 命中），长尾 presetId 即 models.dev provider id。缓存未命中/过期先刷新
       // （modelsDevEnabled 关闭时不发网络，只读缓存），失败回退缓存并附错误说明。
       models: rpc.presets.models.handler(async ({ input }) => {
+        // 自定义上游（无 presetId）：实时探测 {upstream}/models（OpenAI 兼容中转站
+        // 不在 models.dev 覆盖内；Owner 2026-09-10 验收场景）。便宜档启发式排前。
+        if (input.upstream !== undefined) {
+          parseUpstreamUrl(input.upstream);
+          const ids = await probeUpstreamModels({
+            upstream: input.upstream,
+            ...(input.secretName !== undefined ? { secretName: input.secretName } : {}),
+            secretsStore: SecretsStore.open(host.providerDataDir),
+          });
+          if (ids === undefined) {
+            return {
+              models: [],
+              error: "upstream /models probe failed - check the api key and network, or pick a model manually",
+            };
+          }
+          return { models: ids.map((id) => ({ id, priced: false, chat: true })) };
+        }
         const cachePath = modelsDevCachePath(home());
         let raw: string | undefined;
         let error: string | undefined;
@@ -430,7 +457,8 @@ export function createRpcRouter(deps: RpcRouterDeps) {
         if (raw === undefined) {
           return { models: [], ...(error !== undefined ? { error } : {}) };
         }
-        const preset = loadCuratedPresets().find((p) => p.id === input.presetId);
+        const presetId = input.presetId!;
+        const preset = loadCuratedPresets().find((p) => p.id === presetId);
         const keys =
           preset !== undefined
             ? [
@@ -439,7 +467,7 @@ export function createRpcRouter(deps: RpcRouterDeps) {
                   ? [preset.iconId]
                   : []),
               ]
-            : [input.presetId];
+            : [presetId];
         let models: ModelCatalogEntry[] | undefined;
         for (const key of keys) {
           models = deriveModels(raw, key);
@@ -448,7 +476,7 @@ export function createRpcRouter(deps: RpcRouterDeps) {
         if (models === undefined) {
           return {
             models: [],
-            error: error ?? `no models.dev catalog for '${input.presetId}'`,
+            error: error ?? `no models.dev catalog for '${presetId}'`,
           };
         }
         return { models, ...(error !== undefined ? { error } : {}) };

@@ -1,0 +1,21 @@
+@layer theme, base, components, utilities;
+
+/* jixoai accordion (group) — D1-exempt residue (tw4, 2026-08-24):
+ * ONLY the sibling seam (a `> * + *` boundary — utilities never own
+ * descendant/sibling selector architecture) and the @supports gate
+ * that enables height:auto disclosure animation on engines that can
+ * interpolate it (inherited by the items; the item file owns the
+ * actual ::details-content rules). The frame and ghost paint live as
+ * token utilities in the markup. Static residue, @layer components. */
+
+@layer components {
+  /* the 1px seam between items — shared frame, no double borders */
+  :where(.jx-accordion) > * + * {
+    border-top: 1px solid var(--border);
+  }
+  @supports selector(::details-content) and (interpolate-size: allow-keywords) {
+    :where(.jx-accordion) {
+      interpolate-size: allow-keywords;
+    }
+  }
+}

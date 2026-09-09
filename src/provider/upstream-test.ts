@@ -1,10 +1,10 @@
 // 上游连通性测试（provider-local）：对「草稿或已存服务形状」（upstream、apiForm、
-// secretName、model?）发一次最小单轮请求，报告 ok/httpStatus/latencyMs/model。
+// secretName、model?）发一次最小单轮请求，报告 ok/httpStatus/latencyMs/model/request。
 // 正交意图（本文件不实现）：
-// - 密钥库存取（secrets.ts；本文件只按 secretName 取值并注入请求头——与转发路径
-//   同源的完整头值语义，如 "Bearer sk-…"）；
+// - 密钥库存取（secrets.ts；本文件只按 secretName resolve 出最终头值——bearerPrefix
+//   默认拼 "Bearer "，Owner 裁决 2026-09-10：密钥值默认是裸 key）；
 // - 模型清单解析（presets/models-dev.ts；model 缺省时按 upstream 定位 provider
-//   取 priced chat 最低价模型）；
+//   取 priced chat 最低价模型；api.json 不覆盖的自定义上游回退探测 {upstream}/models）；
 // - 转发/限额/fabric（测试 MUST provider-local：不落盘、不计限额、不经 fabric——
 //   本模块是纯函数级一次 fetch，无任何引擎状态）。
 // 失败语义：全部以结果对象返回（ok=false + error），绝不抛——RPC 面直接透出。
@@ -15,7 +15,7 @@ import { deriveModels, findModelsDevProviderKey } from "../../presets/models-dev
 
 /** 密钥读取面（SecretsStore 的结构子集；测试可注入内存假体）。 */
 export interface UpstreamTestSecrets {
-  get(name: string): string | undefined;
+  resolve(name: string): { headerValue: string } | undefined;
 }
 
 export interface UpstreamTestInput {
@@ -23,9 +23,9 @@ export interface UpstreamTestInput {
   upstream: string;
   /** API 形态（缺省 openai-completions）。 */
   apiForm?: ApiForm | undefined;
-  /** 密钥库名（给定则从 secretsStore 取完整头值注入；缺密钥 = 结果级失败）。 */
+  /** 密钥库名（给定则从 secretsStore resolve 最终头值注入；缺密钥 = 结果级失败）。 */
   secretName?: string | undefined;
-  /** 显式模型（缺省按 modelsRaw 选 priced chat 最低价）。 */
+  /** 显式模型（缺省按 modelsRaw 选 priced chat 最低价；再缺则探测 /models）。 */
   model?: string | undefined;
   fetchImpl?: typeof fetch | undefined;
   secretsStore?: UpstreamTestSecrets | undefined;
@@ -42,10 +42,15 @@ export interface UpstreamTestResult {
   latencyMs: number;
   model: string;
   error?: string;
+  /** 请求详情（发起过请求即有；UI 呈现「发了什么」——Owner 2026-09-10 验收要求）。 */
+  request?: { method: "POST"; url: string; model: string };
+  /** 模型选择来源（models.dev 缓存 / 上游 /models 探测 / 显式指定）。 */
+  modelSource?: "models.dev" | "upstream-probe" | "explicit";
 }
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const ERROR_SUMMARY_MAX = 200;
+const BODY_EXCERPT_MAX = 300;
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
@@ -79,6 +84,49 @@ function pickDefaultModel(modelsRaw: string | undefined, upstream: string): stri
 }
 
 /**
+ * 探测 OpenAI 兼容上游的模型清单（GET {upstream}/models，带密钥）：自定义中转站
+ * 不在 models.dev 覆盖内的回退路径。返回 id 列表（尽量挑便宜档：mini/flash/
+ * small/lite 优先）；失败返回 undefined（原因不抛出，由调用方组合错误文本）。
+ */
+export async function probeUpstreamModels(input: {
+  upstream: string;
+  secretName?: string | undefined;
+  secretsStore?: UpstreamTestSecrets | undefined;
+  fetchImpl?: typeof fetch | undefined;
+  timeoutMs?: number | undefined;
+}): Promise<string[] | undefined> {
+  const fetchFn = input.fetchImpl ?? fetch;
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (input.secretName !== undefined) {
+    const resolved = input.secretsStore?.resolve(input.secretName);
+    if (resolved === undefined) return undefined;
+    headers.authorization = resolved.headerValue;
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  try {
+    const response = await fetchFn(`${trimTrailingSlash(input.upstream)}/models`, {
+      headers,
+      signal: ctrl.signal,
+    });
+    if (!(response.status >= 200 && response.status < 300)) return undefined;
+    const parsed = (await response.json()) as { data?: Array<{ id?: unknown }> };
+    if (!Array.isArray(parsed?.data)) return undefined;
+    const ids = parsed.data
+      .map((m) => (typeof m?.id === "string" ? m.id : undefined))
+      .filter((id): id is string => id !== undefined);
+    if (ids.length === 0) return undefined;
+    // 便宜档优先（无价格信息，按命名启发式）；保持上游相对顺序稳定。
+    const cheap = ids.filter((id) => /mini|flash|small|lite|nano|turbo/i.test(id));
+    return [...cheap, ...ids.filter((id) => !cheap.includes(id))];
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * 执行一次最小连通测试。三个 apiForm 的请求形状（spec「上游连通性测试」）：
  * - openai-completions: POST {upstream}/chat/completions，max_tokens:1，authorization 头
  * - anthropic-messages: POST {upstream}/v1/messages，max_tokens:1，authorization +
@@ -90,23 +138,47 @@ export async function testUpstream(input: UpstreamTestInput): Promise<UpstreamTe
   const fetchFn = input.fetchImpl ?? fetch;
   const now = input.now ?? Date.now;
 
-  // 1) 密钥解析：缺失/空值 = 结果级失败（不抛、零网络）。
+  // 1) 密钥解析（bearerPrefix 语义在 resolve 内）：缺失/空值 = 结果级失败（不抛、零网络）。
   let secretValue: string | undefined;
   if (input.secretName !== undefined) {
-    secretValue = input.secretsStore?.get(input.secretName);
+    secretValue = input.secretsStore?.resolve(input.secretName)?.headerValue;
     if (secretValue === undefined || secretValue === "") {
       return { ok: false, latencyMs: 0, model: input.model ?? "", error: "secret not found" };
     }
   }
 
-  // 2) 模型：显式优先；缺省从 api.json 清单取 priced chat 最低价；清单不可用即失败。
+  // 2) 模型：显式 > models.dev 缓存（priced chat 最低价）> 上游 /models 探测（便宜档启发式）。
   let model = input.model;
-  if (model === undefined) {
-    const chosen = pickDefaultModel(input.modelsRaw, input.upstream);
-    if (chosen === undefined) {
-      return { ok: false, latencyMs: 0, model: "", error: "model list unavailable; specify a model" };
+  let modelSource: UpstreamTestResult["modelSource"];
+  if (model !== undefined) {
+    modelSource = "explicit";
+  } else {
+    const fromCache = pickDefaultModel(input.modelsRaw, input.upstream);
+    if (fromCache !== undefined) {
+      model = fromCache;
+      modelSource = "models.dev";
+    } else {
+      const probed = await probeUpstreamModels({
+        upstream: input.upstream,
+        secretName: input.secretName,
+        secretsStore: input.secretsStore,
+        fetchImpl: fetchFn,
+        timeoutMs: input.timeoutMs,
+      });
+      if (probed !== undefined && probed.length > 0) {
+        model = probed[0]!;
+        modelSource = "upstream-probe";
+      }
     }
-    model = chosen;
+    if (model === undefined) {
+      return {
+        ok: false,
+        latencyMs: 0,
+        model: "",
+        error:
+          "no model available: this upstream is not in the models.dev catalog and its /models probe failed - pick a model explicitly or check the api key and network",
+      };
+    }
   }
 
   // 3) 按 apiForm 构造最小请求（单轮 "ping"、最小 max tokens、JSON 正文）。
@@ -138,11 +210,12 @@ export async function testUpstream(input: UpstreamTestInput): Promise<UpstreamTe
     if (secretValue !== undefined) headers["x-goog-api-key"] = secretValue;
   }
 
-  // 4) 发送（整体超时 AbortController；结果级返回）。
+  // 4) 发送（整体超时 AbortController；结果级返回 + 请求详情与非 2xx 正文摘录）。
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const startedAt = now();
+  const requestDetail = { method: "POST" as const, url, model };
   try {
     const response = await fetchFn(url, {
       method: "POST",
@@ -151,16 +224,29 @@ export async function testUpstream(input: UpstreamTestInput): Promise<UpstreamTe
       signal: ctrl.signal,
     });
     const latencyMs = now() - startedAt;
-    void response.body?.cancel().catch(() => undefined); // 不消费正文：释放连接
     if (response.status >= 200 && response.status < 300) {
-      return { ok: true, httpStatus: response.status, latencyMs, model };
+      void response.body?.cancel().catch(() => undefined); // 不消费正文：释放连接
+      return { ok: true, httpStatus: response.status, latencyMs, model, request: requestDetail, ...(modelSource !== undefined ? { modelSource } : {}) };
     }
+    // 非 2xx：读正文摘录（上游错误体是排障第一现场——Owner 2026-09-10 验收要求）
+    let excerpt = "";
+    try {
+      excerpt = (await response.text()).replace(/\s+/g, " ").trim().slice(0, BODY_EXCERPT_MAX);
+    } catch {
+      // 正文读失败不掩盖状态码
+    }
+    if (secretValue !== undefined && excerpt.includes(secretValue)) excerpt = "(redacted)";
     return {
       ok: false,
       httpStatus: response.status,
       latencyMs,
       model,
-      error: `upstream returned HTTP ${response.status}`,
+      request: requestDetail,
+      ...(modelSource !== undefined ? { modelSource } : {}),
+      error:
+        excerpt !== ""
+          ? `upstream returned HTTP ${response.status}: ${excerpt}`
+          : `upstream returned HTTP ${response.status}`,
     };
   } catch (err) {
     const latencyMs = now() - startedAt;
@@ -169,6 +255,8 @@ export async function testUpstream(input: UpstreamTestInput): Promise<UpstreamTe
       ok: false,
       latencyMs,
       model,
+      request: requestDetail,
+      ...(modelSource !== undefined ? { modelSource } : {}),
       error: timedOut ? "request timed out" : summarizeError(err, secretValue),
     };
   } finally {

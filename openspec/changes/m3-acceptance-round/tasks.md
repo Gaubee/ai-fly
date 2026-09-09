@@ -43,3 +43,13 @@
 - [x] 7.1 全量电池（vitest/integration/e2e/typecheck/build）绿
 - [x] 7.2 视觉验收：daemon 实机四路由 + 安全区/拖拽 + 面板/测试截图复核
 - [x] 7.3 README 手工回归清单增补（安全区/密钥面板/测试）；tasks 全勾；归档
+
+## 8. Owner 第二轮验收（2026-09-10）
+
+- [x] 8.1 密钥值语义：默认裸 key 自动拼 "Bearer "（bearerPrefix 开关，per-secret；旧文件兼容 true）
+- [x] 8.2 group 管理对齐 keys：列表行卡片 + edit（服务/限额）+ remove（有未撤销密钥 CONFLICT）+ CLI group remove/set-services
+- [x] 8.3 向导②advanced options 换标准 accordion（vendor）；default consumer port 与 match domains 移入；custom match 默认 use host（留空派生）
+- [x] 8.4 连通测试：custom 上游探测 {upstream}/models（便宜档启发式）回退；结果带 request 详情与上游正文摘录（modelSource 三源）
+- [x] 8.5 Dashboard 空态入口卡改标准 Card + CardFooter（整卡 <a> 违例）
+- [x] 8.6 dev 形态双坑：vite 显式绑 127.0.0.1（v8 默认仅 ::1）+ token 门禁 vite 中间件代赎
+- [x] 8.7 安全区消费面重构：inset-left/right 只属标题带矩形（header 承接，整列摊派违例）
