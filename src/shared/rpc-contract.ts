@@ -146,6 +146,8 @@ export const PRESET_SCHEMA = z.strictObject({
   label: z.string().min(1).max(256),
   apiForm: API_FORM_SCHEMA,
   baseUrl: z.string().min(1).max(2048),
+  /** 图标源 id（models.dev logos 覆写；缺省取 id）。 */
+  iconId: z.string().min(1).max(128).optional(),
   /** 惯用环境变量名（仅用于 $env 注入建议与文档；本地运行时模板无此字段）。 */
   keyEnv: z.string().min(1).max(256).optional(),
   /** 使用方本地端口建议（避开 <1024 特权段）。 */
@@ -157,6 +159,28 @@ export const PRESET_SCHEMA = z.strictObject({
   source: z.string().min(1).max(512),
   /** apiForm 未经厂商文档核实（models.dev npm 推断）时长尾条目置 true。 */
   unverified: z.boolean().optional(),
+});
+
+/** 预设图标地址（models.dev logos；iconId 缺省取 id）。UI 端 onerror 回退首字母 tile。 */
+export function presetLogoUrl(preset: Pick<Preset, "id" | "iconId">): string {
+  return `https://models.dev/logos/${encodeURIComponent(preset.iconId ?? preset.id)}.svg`;
+}
+
+// ---------------------------------------------------------------------------
+// 密钥库（provider-local；值绝不进契约输出）
+// ---------------------------------------------------------------------------
+
+export const SECRET_NAME_SCHEMA = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-z0-9][a-z0-9._-]*$/, "lowercase letters, digits, dot, dash, underscore");
+
+/** 密钥库清单条目（仅名称——值由设计不跨 RPC）。 */
+export const SECRET_ENTRY_SCHEMA = z.strictObject({
+  name: SECRET_NAME_SCHEMA,
+  createdAt: z.number().int().min(0),
+  updatedAt: z.number().int().min(0),
 });
 
 // ---------------------------------------------------------------------------
@@ -215,6 +239,8 @@ const PRESET_APPLY_INPUT_SCHEMA = z.strictObject({
   name: z.string().min(1).max(256).optional(),
   /** 显式端口（缺省取 preset.defaultPort；上游特权端口时必填——store 校验兜底）。 */
   port: z.number().int().min(1).max(65535).optional(),
+  /** 密钥库名（选中时 rewrite 写入 $secret:<name>，优先于 keyEnv）。 */
+  secretName: SECRET_NAME_SCHEMA.optional(),
   /** 注入建议的 $env 变量名（缺省取 preset.keyEnv；无 keyEnv 且未显式给出则不注入）。 */
   keyEnv: z.string().min(1).max(256).optional(),
 });
@@ -253,6 +279,42 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
       /** 删除服务（连带清出分组引用）。 */
       remove: oc
         .input(z.strictObject({ name: z.string().min(1).max(256) }))
+        .output(z.object({ removed: z.literal(true) })),
+      /** 上游连通性测试（草稿或已存服务形状；provider-local、不落盘、不计限额）。 */
+      test: oc
+        .input(
+          z.strictObject({
+            upstream: z.string().min(1).max(2048),
+            apiForm: API_FORM_SCHEMA.optional(),
+            secretName: SECRET_NAME_SCHEMA.optional(),
+            model: z.string().min(1).max(256).optional(),
+          }),
+        )
+        .output(
+          z.strictObject({
+            ok: z.boolean(),
+            httpStatus: z.number().int().min(0).max(599).optional(),
+            latencyMs: z.number().int().min(0),
+            model: z.string(),
+            error: z.string().optional(),
+          }),
+        ),
+    },
+    secrets: {
+      /** 密钥库清单（仅名称与时间戳；值由设计不跨 RPC）。 */
+      list: oc.input(z.object({})).output(z.object({ secrets: z.array(SECRET_ENTRY_SCHEMA) })),
+      /** 新增/覆写（value 为完整头值，如 "Bearer sk-…"）。 */
+      set: oc
+        .input(
+          z.strictObject({
+            name: SECRET_NAME_SCHEMA,
+            value: z.string().min(1).max(8192),
+          }),
+        )
+        .output(z.object({ secret: SECRET_ENTRY_SCHEMA })),
+      /** 删除（不存在报 NOT_FOUND）。 */
+      remove: oc
+        .input(z.strictObject({ name: SECRET_NAME_SCHEMA }))
         .output(z.object({ removed: z.literal(true) })),
     },
     groups: {
@@ -442,6 +504,27 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
           service: SERVICE_SCHEMA,
           /** $env 注入建议（导出提示；值需含完整 header 形态如 "Bearer <key>"）。 */
           envHint: z.string().optional(),
+        }),
+      ),
+    /** 模型清单（models.dev 缓存；按价格升序，chat 优先，未知价尾排）。 */
+    models: oc
+      .input(z.strictObject({ presetId: z.string().min(1).max(128) }))
+      .output(
+        z.strictObject({
+          models: z.array(
+            z.strictObject({
+              id: z.string().min(1).max(256),
+              name: z.string().max(512).optional(),
+              /** input+output 合计 USD/Mtok；未知价省略。 */
+              pricePerMTok: z.number().min(0).optional(),
+              /** 价格已知（排序依据；未知价条目 false）。 */
+              priced: z.boolean(),
+              /** false = embed/image/tts 等非对话模型（id 启发式）。 */
+              chat: z.boolean(),
+            }),
+          ),
+          /** 清单不可用原因（无缓存且拉取失败等）。 */
+          error: z.string().optional(),
         }),
       ),
   },

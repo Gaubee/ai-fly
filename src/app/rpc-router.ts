@@ -122,6 +122,10 @@ export function createRpcRouter(deps: RpcRouterDeps) {
   return rpc.use(domainErrorBoundary).router({
     provider: {
       services: {
+        // 占位：m3 MODELS-TEST 车道替换为真实实现（密钥解析 + 三 apiForm 最小请求）
+        test: rpc.provider.services.test.handler(() => {
+          throw new DomainError("INVALID_STATE", "connectivity test is not wired yet");
+        }),
         list: rpc.provider.services.list.handler(() => ({
           services: host.providerStore().listServices(),
         })),
@@ -164,6 +168,18 @@ export function createRpcRouter(deps: RpcRouterDeps) {
         revoke: rpc.provider.keys.revoke.handler(({ input }) => ({
           key: keyView(host.providerStore().revokeKey(input.keyId)),
         })),
+      },
+      // 占位：m3 SECRETS 车道替换为真实实现（secrets.json store；list 只回名称）
+      secrets: {
+        list: rpc.provider.secrets.list.handler(() => {
+          throw new DomainError("INVALID_STATE", "secrets store is not wired yet");
+        }),
+        set: rpc.provider.secrets.set.handler(() => {
+          throw new DomainError("INVALID_STATE", "secrets store is not wired yet");
+        }),
+        remove: rpc.provider.secrets.remove.handler(() => {
+          throw new DomainError("INVALID_STATE", "secrets store is not wired yet");
+        }),
       },
       share: {
         create: rpc.provider.share.create.handler(async ({ input }) => {
@@ -362,6 +378,10 @@ export function createRpcRouter(deps: RpcRouterDeps) {
         const { serviceInput, envHint } = presetToServiceInput(preset, input);
         const service: ServiceConfig = host.providerStore().addService(serviceInput);
         return { service, ...(envHint !== undefined ? { envHint } : {}) };
+      }),
+      // 占位：m3 MODELS-TEST 车道替换为真实实现（models.dev models 解析 + 价格排序）
+      models: rpc.presets.models.handler(() => {
+        throw new DomainError("INVALID_STATE", "model catalog is not wired yet");
       }),
     },
     writers: {
