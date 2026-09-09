@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="ai-fly tray">
+  <!-- Monochrome (black on transparent) template variant of resources/icon.svg.
+       macOS menu-bar template icon: rendered to tray-icon.png by app:icons and
+       declared isTemplate so the system inverts it for light/dark appearances. -->
+  <path d="M 716 192 L 256 448 L 416 500 Z" fill="#000000"/>
+  <path d="M 716 192 L 440 520 L 492 628 Z" fill="#000000"/>
+  <path d="M 340 856 A 172 172 0 0 1 684 856" fill="none" stroke="#000000"
+        stroke-width="96" stroke-linecap="round"/>
+</svg>

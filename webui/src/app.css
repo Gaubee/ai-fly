@@ -1,3 +1,34 @@
 @import 'tailwindcss';
 /* jixoai-theme 项会落 $lib/jixoai.css（含 --brand-hue: 95 品牌琥珀），
- * 组件自身按需引其 css；此处只做 tailwind 扇入（A4）。 */
+ * jx-pure 提供裸元素面（Part B 挂在根容器 .jx-pure 作用域上）；
+ * 组件自身按需引其 css；此处做 tailwind + 主题令牌扇入（A4/B3.1）。 */
+@import './lib/jixoai.css';
+@import './lib/jx-pure.css';
+
+@theme inline {
+  --radius-*: initial;
+  --radius: var(--radius);
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+}
+
+/* 统一 diff 等宽块（向导第③步 / 高级设置 detail 共用） */
+.diff-block {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  margin: 0;
+}

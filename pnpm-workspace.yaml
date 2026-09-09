@@ -4,5 +4,7 @@ packages:
   - webui
 allowBuilds:
   esbuild: true
+  # sharp 0.33 经 @img/* optional 依赖携带预编译二进制，安装脚本无需执行
+  sharp: false
 onlyBuiltDependencies:
   - esbuild

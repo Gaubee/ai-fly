@@ -5,3 +5,6 @@ coverage/
 .DS_Store
 .env
 .env.*
+
+# 生成的应用图标（app:icons 可重建）
+resources/app-icons/

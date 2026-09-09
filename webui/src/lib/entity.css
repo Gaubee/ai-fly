@@ -1,0 +1,63 @@
+/*
+ * The entity law's paint projections (registry/files/lib/entity.css,
+ * 2026-09-01; recalibrated 2026-09-03 r14-12 — Owner: "DialogBody 里的
+ * input 完全看不到边框，只看到内阴影，这很奇怪"). Border is
+ * objecthood; inside an entity most borders should not exist. Keyed on
+ * the REAL DOM hook the context stamps (data-jx-entity={depth}) and
+ * the REAL hooks of the form-shell family — see entity.svelte.ts for
+ * the depth mathematics.
+ *
+ * THE r14-12 RECALIBRATION — the well edge is STRUCTURE, not
+ * objecthood: a boundary must never ride on the shadow alone. A form
+ * control inside an entity is an engraved WELL of the entity's surface
+ * (a sink basin): the basin's EDGE stays crisp (the hairline carries
+ * the field's extent — the separator law's own category: a 1px
+ * structural rule organizes, it does not objectify), the basin's
+ * INTERIOR shows the entity's ground (the background dissolves — one
+ * solid object, no second fill), and the well inset carries the depth.
+ * The old dissolve over-rotated: it removed every hard cue and left
+ * the affordance to a soft gradient the eye cannot read as a boundary.
+ *
+ *   depth 0    page level — edge + ground (the shell's own law)
+ *   depth ≥1   the GROUND dissolves; the shell's own 1px var(--border)
+ *              edge paints through untouched
+ *   force      [data-assert-border] spends the budget early — the
+ *              GROUND back at any depth (the edge is already there)
+ *   opt-out    [data-dissolve-border] keeps the old full dissolve —
+ *              edge transparent too — for flush edge-to-edge fields
+ *              (the palette's head: drawing the edge there would
+ *              double the panel's own border)
+ *
+ * Specificity is deliberate here (NOT :where): the ground-dissolve
+ * must beat the shells' own paint regardless of sheet order, and the
+ * two overrides outrank it by one class of specificity.
+ */
+@layer theme, base, components, utilities;
+
+@layer components {
+  /* ── depth ≥1: the GROUND dissolves — the entity's surface IS the
+     well's interior. The shell's own border (jixoai.css: 1px solid
+     var(--border)) paints through untouched; the well inset still
+     carries the depth; hover deepens it; the focus tint still wins
+     the border through the shells' own :has(:focus) rule ── */
+  [data-jx-entity] .jx-html-control-shell,
+  [data-jx-entity] [data-jx-igroup] {
+    background: transparent;
+  }
+
+  /* ── the force-spend: [data-assert-border] spends the entity budget
+     early — the GROUND back at any depth (r14-12: the edge no longer
+     needs restoring, it never leaves) ── */
+  [data-jx-entity] [data-assert-border].jx-html-control-shell,
+  [data-jx-entity] [data-assert-border][data-jx-igroup] {
+    background: var(--background);
+  }
+
+  /* ── the opt-out: [data-dissolve-border] keeps the FULL dissolve —
+     edge transparent, the well inset alone — for flush edge-to-edge
+     fields. The :not(:focus) guard keeps the focus tint supreme ── */
+  [data-jx-entity] [data-dissolve-border].jx-html-control-shell:not(:has(:focus)),
+  [data-jx-entity] [data-dissolve-border][data-jx-igroup]:not(:has(:focus)) {
+    border-color: transparent;
+  }
+}
