@@ -64,9 +64,11 @@ Node >= 20. License: MIT OR Apache-2.0. The fabric dependency
 ## Manual regression checklist
 
 Desktop-shell behaviors that automated suites do not cover. Run before any
-release build (`pnpm app:dev`, or `pnpm app:build` + `pnpm app:start` for the
-packaged form). Each line is pass/fail; English strings below are exactly what
-the UI shows.
+release build. Dev form takes **two terminals**: `pnpm webui:dev` (vite on
+127.0.0.1:5190, proxying `/ws` and the token gate to the UI daemon) AND
+`pnpm app:dev` (tray + window; the window loads the vite entry). Packaged
+form: `pnpm app:build` + `pnpm app:start`. Each line is pass/fail; English
+strings below are exactly what the UI shows.
 
 1. **Tray & window** — app starts with a tray icon; the tray menu's primary
    item toggles the window (Open/Hide); `Quit ai-fly` exits cleanly (tray icon
