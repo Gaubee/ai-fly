@@ -85,30 +85,35 @@ function scheduleFlush(): void {
   }
 }
 
-/** 立即冲刷挂起的脏区（向导等需要同步结果的场景）。 */
-export function flushNow(): void {
+/** 立即冲刷挂起的脏区（向导等需要同步结果的场景）；返回的 Promise 在
+    本轮（含去重续拉）全部落定后 resolve——`await refresh()` 由此变为真等待。 */
+export function flushNow(): Promise<void> {
   if (flushTimer !== null) {
     clearTimeout(flushTimer);
     flushTimer = null;
   }
-  void flush();
+  return flush();
 }
 
-/** 显式请求某区刷新（按钮触发 RPC 后调用；引擎通知也会到，双保险）。 */
-export function refresh(...sections: Section[]): void {
+/** 显式请求某区刷新（按钮触发 RPC 后调用；引擎通知也会到，双保险）。
+    可等待：resolve 时请求的区已反映最新引擎状态（在途去重的续拉也收敛）。 */
+export function refresh(...sections: Section[]): Promise<void> {
   markDirty(...sections);
-  flushNow();
+  return flushNow();
 }
+
+const inflight = new Map<Section, Promise<void>>();
 
 async function pull(section: Section): Promise<void> {
-  if (app.busy[section]) {
-    // 在途去重但不丢更新：重新标脏，下一轮 flush 再拉
+  const running = inflight.get(section);
+  if (running !== undefined) {
+    // 在途去重但不丢更新：重新标脏并等在途结束，由本轮 flush 的续拉消费
     dirty.add(section);
-    scheduleFlush();
+    await running;
     return;
   }
   app.busy[section] = true;
-  try {
+  const task = (async () => {
     switch (section) {
       case "provider":
         app.provider = await connection.call((c) => c.provider.status({}));
@@ -132,10 +137,15 @@ async function pull(section: Section): Promise<void> {
         app.settings = await connection.call((c) => c.system.settings.get({}));
         break;
     }
+  })();
+  inflight.set(section, task);
+  try {
+    await task;
   } catch (error) {
     // 后台拉取失败静默（断连时横幅已表达；恢复后 __reconcile 会补拉）
     void toRpcError(error);
   } finally {
+    inflight.delete(section);
     app.busy[section] = false;
   }
 }
@@ -145,6 +155,8 @@ async function flush(): Promise<void> {
   dirty.clear();
   await Promise.allSettled(sections.map((section) => pull(section)));
   if (sections.length > 0) app.ready = true;
+  // 在途去重重排的脏区就地续拉（pull 已 await 在途者，无自旋）
+  if (dirty.size > 0) await flush();
 }
 
 /** 通知事件 → toast（警示类）或标脏（状态类）。 */
@@ -178,7 +190,7 @@ export function startApp(): void {
   });
   connection.subscribeNotify(onNotifyEvent);
   markDirty(...ALL_SECTIONS);
-  flushNow();
+  void flushNow();
 }
 
 // ---------------------------------------------------------------------------

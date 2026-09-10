@@ -45,7 +45,7 @@ export const share = $state({
   port: "",
   groupName: "",
   /** false = 从既有分组选择；true = 新建。 */
-  groupNew: true,
+  groupNew: false, // 退役：新建走 GroupsDialog（M3-r3 ①）；保留字段避免历史状态迁移
   limitsConcurrency: "",
   limitsDaily: "",
   /** 密钥库选择（undefined = 不注入 authorization；本地运行时可留空）。 */
@@ -69,7 +69,7 @@ export function resetShare(): void {
   share.name = "";
   share.port = "";
   share.groupName = "";
-  share.groupNew = true;
+  share.groupNew = false;
   share.limitsConcurrency = "";
   share.limitsDaily = "";
   share.secretName = undefined;
@@ -174,7 +174,6 @@ async function ensureGroupWithService(serviceName: string): Promise<void> {
       c.provider.groups.add({
         name: share.groupName,
         serviceNames: [serviceName],
-        ...(limitsInput() !== undefined ? { limits: limitsInput()! } : {}),
       }),
     );
     return;

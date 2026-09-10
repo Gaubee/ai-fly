@@ -23,6 +23,7 @@
   import ErrorAlert from "../components/ErrorAlert.svelte";
   import CopyField from "../components/CopyField.svelte";
   import SecretPicker from "../components/SecretPicker.svelte";
+  import GroupPicker from "../components/GroupPicker.svelte";
   import TestConnection from "../components/TestConnection.svelte";
   import {
     app,
@@ -85,26 +86,7 @@
     failedLogos = new Set([...failedLogos, presetId]);
   }
 
-  const groupOptions = $derived([
-    { value: "__new__", label: "new group..." },
-    ...app.groups.map((group) => ({ value: group.name, label: group.name })),
-  ]);
-
-  // Select 只支持 bind:value（无 onchange prop）：本地 $state + 受保护双向 effect 桥接
-  let groupSel = $state(share.groupNew ? "__new__" : share.groupName);
-  $effect(() => {
-    const v = share.groupNew ? "__new__" : share.groupName;
-    if (v !== groupSel) groupSel = v;
-  });
-  $effect(() => {
-    if (groupSel === "__new__") {
-      if (!share.groupNew) share.groupNew = true;
-    } else if (share.groupNew || share.groupName !== groupSel) {
-      share.groupNew = false;
-      share.groupName = groupSel;
-    }
-  });
-
+  // 分组选择/新建已收敛进 GroupPicker + GroupsDialog（M3-r3 ①）；此处仅留 TTL 桥接
   let ttlSel = $state(String(share.ttlMs));
   $effect(() => {
     if (String(share.ttlMs) !== ttlSel) ttlSel = String(share.ttlMs);
@@ -273,34 +255,25 @@
           bind:value={share.name}
         />
 
-        <div class="grid gap-3 sm:grid-cols-2">
-          <!-- Select 只支持 bind:value（无 onchange prop）：groupSel/ttlSel 为 derived get/set 桥接 -->
-          <Select label="group" options={groupOptions} bind:value={groupSel} />
-          <Input
-            label={share.groupNew ? "new group name" : "selected group"}
-            placeholder="friends"
-            disabled={!share.groupNew}
-            bind:value={share.groupName}
-          />
-        </div>
-        {#if !share.groupNew}
+        <!-- 分组选择器（M3-r3 ①）：manage groups… 弹窗承载新建/编辑/删除，
+             替换原先的「下拉 + NEW GROUP NAME 输入」临时体验 -->
+        <GroupPicker value={share.groupName || undefined} onchange={(name) => (share.groupName = name ?? "")} />
+        {#if share.groupName !== ""}
           <p class="text-[11px] text-muted-foreground">
-            the service will be added to the existing group (limits stay as created -
-            <a class="text-primary underline-offset-2 hover:underline" href="#/advanced">edit in Advanced</a>).
+            the service will be added to group
+            <code class="font-mono">{share.groupName}</code>
+            (limits stay as created - edit them in manage groups).
           </p>
         {/if}
 
         <!-- advanced options（M3-acceptance ③：ghost accordion，默认折叠——
-             限额 + default consumer port + 自定义 match domains；20/80 核心
+             default consumer port + 自定义 match domains；20/80 核心
              字段直达主区） -->
         <Accordion ghost>
           <AccordionItem>
             {#snippet summary()}advanced options{/snippet}
             <div class="flex flex-col gap-3">
-              <div class="grid gap-3 sm:grid-cols-2">
-                <Input label="max concurrency (optional)" placeholder="unlimited" bind:value={share.limitsConcurrency} />
-                <Input label="daily requests (optional)" placeholder="unlimited" bind:value={share.limitsDaily} />
-              </div>
+              <!-- 分组限额已归口 GroupsDialog（M3-r3 ①）；此处仅端口与 match -->
               <div class="flex flex-col gap-1.5">
                 <Input label="default consumer port" bind:value={share.port} />
                 <p class="text-[11px] leading-relaxed text-muted-foreground">
@@ -321,7 +294,6 @@
                   </p>
                 </div>
               {/if}
-              <p class="text-[11px] text-muted-foreground">empty limits = unlimited.</p>
             </div>
           </AccordionItem>
         </Accordion>

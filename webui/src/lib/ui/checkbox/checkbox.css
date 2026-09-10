@@ -1,0 +1,26 @@
+@layer theme, base, components, utilities;
+@layer components {
+  /* the activation lane (restored 2026-08-29, merge-alignment D5
+     diagnosis): the V3 class-mount migration (226a699) deleted this
+     sheet wholesale and silently lost the lane + label law with it —
+     the hit row collapsed to text flow (27px, labels at the browser
+     default 16px). The input law moved to css-laws; THIS is the
+     component's structural paint (flat css — the @apply chain is
+     retired). Shared by radio (same .jx-check-lane contract). */
+  :where(.jx-check-lane) {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    min-block-size: var(--jx-hit);
+    gap: var(--jx-gap);
+  }
+  :where(.jx-check-lane[data-jx-check-left]) {
+    flex-direction: row-reverse;
+  }
+  :where([data-jx-check-label]) {
+    cursor: pointer;
+    color: var(--foreground);
+    font-size: var(--jx-text);
+    line-height: var(--jx-line);
+  }
+}
