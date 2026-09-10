@@ -127,12 +127,19 @@
 
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import type { Attachment } from 'svelte/attachments';
   import type { HTMLAttributes } from 'svelte/elements';
   import { getContext } from 'svelte';
   import { cn } from '$lib/utils';
   import { TABS_KEY, type TabsApi } from './tabs.svelte';
   import ScrollChrome from '../scroll-run/scroll-chrome.svelte';
   import { createScrollStamp, nudgeRun, isRtlElement, type ScrollStamp } from '../scroll-run/scroll-run.svelte';
+  // the glass/liquid materials ride the SHARED stamp channel
+  // (glass-effect design §6): ONE effect object per material through
+  // ONE channel, painted by the glass law sheet
+  import { blur, liquid } from '../glass/glass';
+  import { liquidGlass } from '../glass/liquid-glass.svelte';
+  import '../glass/glass.css';
 
   interface Props extends HTMLAttributes<HTMLDivElement> {
     /** axis of travel: horizontal ←/→ · vertical ↑/↓ (layout is yours) */
@@ -174,6 +181,35 @@
   const material = $derived(isIndicatorSnippet(indicator) ? 'custom' : indicator);
 
   const tabs = getContext<TabsApi>(TABS_KEY);
+
+  /** glass/liquid effect objects (glass-effect design §6): ONE object
+   *  through ONE channel — glass is the blur() frost member stamped in
+   *  markup (zero-JS), liquid is the lens member mounted by the shared
+   *  attachment. Values are the retired hand-tuned formulas verbatim
+   *  (computed-equivalence). */
+  const glassFx = $derived(
+    material === 'glass'
+      ? blur({
+          radius: '10px',
+          saturate: 1.5,
+          fill: 'color-mix(in oklab, var(--background) 40%, transparent)',
+        })
+      : null,
+  );
+  const liquidFx = $derived(material === 'liquid' ? liquid({ radius: '2px', saturate: 1.6 }) : null);
+
+  /** the indicator's own material mount (r4, effect-attachments §12:
+   *  the indicator is the component's OWN material business — no
+   *  consumer record path): liquidGlass(fx) is already the attachment
+   *  FACTORY (Lane A), so the component's own material derive collapses
+   *  to the factory call plus the null guard the retired liquidMount
+   *  action carried internally (every non-liquid material mounts
+   *  nothing — the undefined arm skips, never a crash). A material
+   *  flip rides the same channel: the fresh internalMount() replaces
+   *  the old (identity remount, teardown + rebuild) */
+  function internalMount(): Attachment<HTMLSpanElement> | null {
+    return liquidFx ? liquidGlass(liquidFx) : null;
+  }
 
   /** the component root — the one-cell grid HOST carrying the overlays
    *  (the tablist scroller scrolls its own children; overlays must not
@@ -378,28 +414,25 @@
     if (runEl) nudgeRun(runEl, direction);
   }
 
-  /** liquid needs its displacement filter referenced from the list (the
-   *  indicator span inherits the custom property); the effect knobs land
-   *  beside it on the HOST (the overlays are the run's siblings — a var
-   *  on the run never reaches them); a consumer style APPENDS (merge
-   *  law, alert-dialog dialect — never clobber) */
+  /** the effect-builder knobs land on the HOST (the overlays are the
+   *  run's siblings — a var on the run never reaches them); a consumer
+   *  style APPENDS (merge law, system-dialog dialect — never clobber).
+   *  (liquid's old host-carried backdrop formula RETIRED with the
+   *  inline displacement svg — the lens rides the liquidGlass mount
+   *  now, glass-effect design §6) */
   const hostStyle = $derived.by(() => {
-    const parts = [
-      material === 'liquid' ? `--jx-tabs-liquid-bf: url('#${tabs.uid}-liquid') blur(2px) saturate(1.6)` : '',
-      '',
-    ];
+    const parts: string[] = [];
     switch (scrollEffect.type) {
       case 'ramp':
         // round 3: the ramp's magnitudes are CHROME-OWNED (ScrollChrome
         // stamps --jx-scroll-edge-slide/blur on the run from the
         // builder's distance/radius) — the host carries no edge vars
-        parts[1] = '';
         break;
       case 'progressBlur':
       case 'shadow':
         // the builder's width overrides the band-width default (inline
         // beats the stylesheet)
-        parts[1] = scrollEffect.width ? `--jx-scroll-veil: ${scrollEffect.width}` : '';
+        if (scrollEffect.width) parts.push(`--jx-scroll-veil: ${scrollEffect.width}`);
         break;
       default:
         break;
@@ -493,28 +526,33 @@
 </script>
 
 {#snippet runTail()}
-  {#if material === 'liquid'}
-    <!-- zero-size SVG carrying the displacement filter the liquid
-         backdrop references by fragment id -->
-    <svg aria-hidden="true" class="absolute h-0 w-0">
-      <filter id="{tabs.uid}-liquid" x="-20%" y="-20%" width="140%" height="140%">
-        <feTurbulence type="fractalNoise" baseFrequency="0.012 0.012" numOctaves="2" seed="7" />
-        <feDisplacementMap in="SourceGraphic" scale="14" xChannelSelector="R" yChannelSelector="G" />
-      </filter>
-    </svg>
-  {/if}
   {#if material !== 'none'}
     <!-- the engine-owned wrapper: geometry lands here, a custom
-         snippet paints inside it -->
+         snippet paints inside it. glass/liquid paint through the
+         SHARED stamp channel — glass carries the blur() markup stamps,
+         liquid the liquidGlass attachment (the kernel stamps itself —
+         the component's OWN material mount, r4). data-jx-attach=
+         "indicator" is the OPTIONAL named mounting-point stamp
+         (queryable, contract-naming), never a forwarding mechanism.
+         Geometry rides INDIVIDUAL style properties on purpose: a
+         whole-attribute style write on every selection move would
+         clobber the mount's --jx-glass-* vars (and the lens pointer
+         var) — property-scoped writes never touch them -->
     <span
       bind:this={indEl}
       data-jx-tabs-ind=""
+      data-jx-attach="indicator"
       data-material={material}
+      data-jx-effect={glassFx ? 'blur' : undefined}
       aria-hidden="true"
       hidden={geo === null}
-      style={geo === null
-        ? undefined
-        : `transform: translate(${geo.x}px, ${geo.y}px); width: ${geo.w}px; height: ${geo.h}px`}
+      {@attach internalMount()}
+      style:transform={geo === null ? undefined : `translate(${geo.x}px, ${geo.y}px)`}
+      style:width={geo === null ? undefined : `${geo.w}px`}
+      style:height={geo === null ? undefined : `${geo.h}px`}
+      style:--jx-glass-radius={glassFx?.radius}
+      style:--jx-glass-saturate={glassFx ? `${glassFx.saturate}` : undefined}
+      style:--jx-glass-fill={glassFx?.fill}
     >
       {#if indicatorSnippet && geo}{@render indicatorSnippet(geo)}{/if}
     </span>

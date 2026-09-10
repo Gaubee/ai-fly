@@ -64,13 +64,15 @@
     start?: Snippet;
     /** Raw inline-end text — replaces the grouped arrangement. */
     end?: Snippet;
-    /** The ButtonGroup's accessible name. */
+    /** The ButtonGroup's accessible name (neutral since
+        card-surface-kernel: the footer family serves every carrier —
+        planar cards and floating interiors alike). */
     label?: string;
     /** The action buttons — auto-joined in one edge-riding group. */
     children?: Snippet;
   }
 
-  let { start, end, label = 'Card footer', children }: Props = $props();
+  let { start, end, label = 'Actions', children }: Props = $props();
 </script>
 
 <div class="jx-card-foot-grid">

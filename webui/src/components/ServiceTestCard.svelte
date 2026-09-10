@@ -14,6 +14,7 @@
   import { untrack } from "svelte";
   import { PROTOCOL_OPTIONS, type ServiceRouteView, type RouteTestOutput } from "../stores/connect-wizard.svelte.ts";
   import type { RouteForm } from "$shared/rpc-contract.ts";
+  import { t } from "$lib/i18n.svelte.ts";
 
   interface Props {
     /** 服务的声明路由（空 = legacy 透传，端点退根）。 */
@@ -67,7 +68,7 @@
           : ` → ${upstream.replace(/\/+$/, "")}${route.upstreamPrefix ?? ""}/*`;
       return { value: local, label: `${local}${target}` };
     });
-    if (options.length === 0) options.push({ value: "", label: "root (passthrough)" });
+    if (options.length === 0) options.push({ value: "", label: t("testcard.rootPassthrough") });
     return options;
   });
 
@@ -118,12 +119,12 @@
 
 <div class="flex flex-col gap-3">
   <div class="grid gap-3 sm:grid-cols-2">
-    <NativeSelect label="protocol" value={protocol} onchange={handleProtocolChange}>
+    <NativeSelect label={t("testcard.protocol")} value={protocol} onchange={handleProtocolChange}>
       {#each PROTOCOL_OPTIONS as option (option.value)}
         <option value={option.value}>{option.label}</option>
       {/each}
     </NativeSelect>
-    <NativeSelect label="endpoint" value={endpoint ?? ""} onchange={handleEndpointChange}>
+    <NativeSelect label={t("testcard.endpoint")} value={endpoint ?? ""} onchange={handleEndpointChange}>
       {#each endpointOptions as option (option.value)}
         <option value={option.value}>{option.label}</option>
       {/each}
@@ -133,7 +134,7 @@
   <!-- 单轮聊天面板：一个输入框（默认 hi）+ 发送 -->
   <div class="flex flex-col gap-2 border border-border/70 p-3">
     <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-      send a request
+      {t("testcard.sendRequest")}
     </span>
     <div class="flex flex-wrap items-center gap-2">
       <div class="min-w-48 flex-1">
@@ -144,10 +145,10 @@
         loading={busy}
         class={disabled ? "pointer-events-none opacity-50" : undefined}
         onclick={send}
-      >send</PressButton>
+      >{t("testcard.send")}</PressButton>
     </div>
     <p class="text-[11px] text-muted-foreground">
-      single-turn only - one request, one response. the model is picked automatically.
+      {t("testcard.singleTurn")}
     </p>
   </div>
 
@@ -155,7 +156,7 @@
   {#if result !== null}
     <div class="flex flex-col gap-1.5 border border-border/70 p-3" transition:slide={{ duration: 150 }}>
       <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-        response
+        {t("testcard.response")}
       </span>
       {#if result.ok}
         <p class="font-mono text-[11px] text-[color:var(--success)]">

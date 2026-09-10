@@ -14,6 +14,7 @@
   import { router, type RouteId } from "$lib/router.svelte.ts";
   import { startOverlay, beginWindowDrag } from "$lib/overlay.svelte.ts";
   import { rpcState } from "./stores/rpc.svelte.ts";
+  import { locale, setLocale, t, type Locale } from "$lib/i18n.svelte.ts";
   import { startApp } from "./stores/app.svelte.ts";
   import { toast } from "./stores/toast.svelte.ts";
   // app 图标：直接引仓库 resources/icon.svg（app:icons 同一源，vite asset
@@ -31,10 +32,10 @@
   });
 
   const NAV: ReadonlyArray<{ id: RouteId; label: string; hint: string }> = [
-    { id: "dashboard", label: "Dashboard", hint: "status of both roles" },
-    { id: "share", label: "Share", hint: "share my services (3 steps)" },
-    { id: "connect", label: "Connect", hint: "use a friend's link (3 steps)" },
-    { id: "advanced", label: "Advanced", hint: "services, groups, keys, relay" },
+    { id: "dashboard", label: "shell.nav.dashboard", hint: "shell.nav.dashboard.hint" },
+    { id: "share", label: "shell.nav.share", hint: "shell.nav.share.hint" },
+    { id: "connect", label: "shell.nav.connect", hint: "shell.nav.connect.hint" },
+    { id: "advanced", label: "shell.nav.advanced", hint: "shell.nav.advanced.hint" },
   ];
 
   const disconnected = $derived(rpcState.status !== "open");
@@ -61,9 +62,19 @@
     <div class="flex min-w-0 items-center gap-2">
       <img src={iconUrl} alt="" class="size-[22px] flex-none" />
       <span class="flex-none font-nav text-sm leading-none tracking-[0.08em]">ai-fly</span>
-      <span class="truncate text-[10px] leading-none text-muted-foreground">share services, simply</span>
+      <span class="truncate text-[10px] leading-none text-muted-foreground">{t("shell.tagline")}</span>
     </div>
     <div class="flex flex-none items-center gap-3">
+      <label class="sr-only" for="app-locale">language</label>
+      <select
+        id="app-locale"
+        class="cursor-pointer border-none bg-transparent font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground focus:outline-none"
+        value={locale()}
+        onchange={(event) => setLocale((event.currentTarget as HTMLSelectElement).value as Locale)}
+      >
+        <option value="en">EN</option>
+        <option value="zh">中文</option>
+      </select>
       <span
         class="flex items-center gap-1.5 font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground"
         role="status"
@@ -75,7 +86,7 @@
             : 'bg-primary'}"
           aria-hidden="true"
         ></span>
-        {disconnected ? (rpcState.status === "connecting" ? "connecting" : "reconnecting") : "online"}
+        {t(disconnected ? (rpcState.status === "connecting" ? "shell.status.connecting" : "shell.status.reconnecting") : "shell.status.online")}
       </span>
       <ThemeToggle variant="compact" />
     </div>
@@ -94,8 +105,8 @@
                 : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground'}"
             aria-current={router.current === item.id ? "page" : undefined}
           >
-            <span class="font-nav text-xs uppercase tracking-[0.1em]">{item.label}</span>
-            <span class="text-[10px] leading-tight">{item.hint}</span>
+            <span class="font-nav text-xs uppercase tracking-[0.1em]">{t(item.label)}</span>
+            <span class="text-[10px] leading-tight">{t(item.hint)}</span>
           </a>
         {/each}
       </div>

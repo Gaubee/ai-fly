@@ -19,6 +19,7 @@
   import ErrorAlert from "../components/ErrorAlert.svelte";
   import CopyField from "../components/CopyField.svelte";
   import ServiceTestCard from "../components/ServiceTestCard.svelte";
+  import { t } from "$lib/i18n.svelte.ts";
   import { connection } from "../stores/rpc.svelte.ts";
   import {
     connectW,
@@ -87,16 +88,16 @@
 
 <div class="mx-auto flex max-w-3xl flex-col gap-4 p-4 md:p-6">
   <header class="flex flex-col gap-2">
-    <h1 class="font-nav text-base uppercase tracking-[0.1em]">Connect to a friend</h1>
-    <StepHeader step={connectW.step} titles={["paste link", "ports", "test"]} />
+    <h1 class="font-nav text-base uppercase tracking-[0.1em]">{t("connect.title")}</h1>
+    <StepHeader step={connectW.step} titles={[t("connect.step1"), t("connect.step2"), t("connect.step3")]} />
   </header>
 
   <!-- ① 粘贴链接 -->
   {#if connectW.step === 1}
-    <Card title="paste the share link" scroll={false}>
+    <Card title={t("connect.paste.title")} scroll={false}>
       <div class="flex flex-col gap-3 p-3">
         <Input
-          label="aifly1. link"
+          label={t("connect.paste.label")}
           placeholder="aifly1..."
           bind:value={connectW.link}
           onkeydown={(event) => {
@@ -112,16 +113,16 @@
           <div class="flex flex-col gap-2 border border-border/70 p-3" transition:slide={{ duration: 150 }}>
             <div class="flex flex-wrap items-center gap-2 text-xs">
               <span class="font-mono">{connectW.preview.alias}</span>
-              <Badge variant="tonal" class="jx-hue-success">preview ok</Badge>
-              <span class="text-muted-foreground">group</span>
+              <Badge variant="tonal" class="jx-hue-success">{t("connect.paste.previewOk")}</Badge>
+              <span class="text-muted-foreground">{t("connect.paste.group")}</span>
               <code class="font-mono">{connectW.preview.group}</code>
             </div>
             <table class="w-full text-xs">
               <thead>
                 <tr class="border-b border-border text-left font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
-                  <th class="py-1.5 font-normal">service</th>
-                  <th class="py-1.5 font-normal">default port</th>
-                  <th class="py-1.5 font-normal">match rules</th>
+                  <th class="py-1.5 font-normal">{t("common.service")}</th>
+                  <th class="py-1.5 font-normal">{t("connect.paste.table.defaultPort")}</th>
+                  <th class="py-1.5 font-normal">{t("connect.paste.table.matchRules")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -143,17 +144,17 @@
       </div>
       {#snippet foot()}
         <CardFooter label="connect wizard actions">
-          <PressButton variant="ghost" onclick={() => resetConnect()}>clear</PressButton>
+          <PressButton variant="ghost" onclick={() => resetConnect()}>{t("connect.paste.clear")}</PressButton>
           <PressButton
             variant="fill"
             loading={connectW.previewBusy}
             class={connectW.link.trim() === "" ? "pointer-events-none opacity-50" : undefined}
             onclick={() => void previewLink()}
           >
-            preview link
+            {t("connect.paste.preview")}
           </PressButton>
           {#if connectW.preview !== null}
-            <PressButton variant="outline" onclick={previewNext}>continue</PressButton>
+            <PressButton variant="outline" onclick={previewNext}>{t("common.continue")}</PressButton>
           {/if}
         </CardFooter>
       {/snippet}
@@ -162,7 +163,7 @@
 
   <!-- ② 端口确认 -->
   {:else if connectW.step === 2}
-    <Card title="confirm local ports" scroll={false}>
+    <Card title={t("connect.ports.title")} scroll={false}>
       <div class="flex flex-col gap-3 p-3">
         {#if connectW.applied === null}
           {#if connectW.applyBusy}
@@ -189,23 +190,23 @@
         {:else}
           <div class="flex flex-wrap items-center gap-2 text-xs" transition:slide={{ duration: 180 }}>
             <span class="font-mono">{connectW.applied.alias}</span>
-            <Badge variant="tonal" class="jx-hue-success">imported</Badge>
+            <Badge variant="tonal" class="jx-hue-success">{t("connect.ports.imported")}</Badge>
             {#if connectW.applied.redeemed}
-              <Badge variant="outline">token redeemed</Badge>
+              <Badge variant="outline">{t("connect.ports.tokenRedeemed")}</Badge>
             {/if}
             {#if connectW.gatewayStarted}
-              <Badge variant="tonal" class="jx-hue-success">gateway running</Badge>
+              <Badge variant="tonal" class="jx-hue-success">{t("connect.ports.gatewayRunning")}</Badge>
             {:else}
-              <Badge variant="tonal" class="jx-hue-warning">gateway not running</Badge>
+              <Badge variant="tonal" class="jx-hue-warning">{t("connect.ports.gatewayNotRunning")}</Badge>
             {/if}
           </div>
           <table class="w-full text-xs">
             <thead>
               <tr class="border-b border-border text-left font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
-                <th class="py-1.5 font-normal">service</th>
+                <th class="py-1.5 font-normal">{t("common.service")}</th>
                 <th class="py-1.5 font-normal">default</th>
-                <th class="py-1.5 font-normal">actual port</th>
-                <th class="py-1.5 font-normal">set</th>
+                <th class="py-1.5 font-normal">{t("connect.ports.table.actual")}</th>
+                <th class="py-1.5 font-normal">{t("connect.ports.set")}</th>
               </tr>
             </thead>
             <tbody>
@@ -217,10 +218,10 @@
                     <span class="flex flex-wrap items-center gap-1.5">
                       <span class="font-mono">{row.port}</span>
                       {#if row.autoShifted}
-                        <Badge variant="tonal" class="jx-hue-warning">auto-shifted</Badge>
+                        <Badge variant="tonal" class="jx-hue-warning">{t("connect.ports.autoShifted")}</Badge>
                       {/if}
                       {#if row.pinned}
-                        <Badge variant="outline">pinned</Badge>
+                        <Badge variant="outline">{t("connect.ports.pinned")}</Badge>
                       {/if}
                     </span>
                     {#if row.autoShifted}
@@ -257,13 +258,13 @@
       </div>
       {#snippet foot()}
         <CardFooter label="connect wizard actions">
-          <PressButton variant="ghost" onclick={connectBack} class={connectW.applyBusy ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
+          <PressButton variant="ghost" onclick={connectBack} class={connectW.applyBusy ? "pointer-events-none opacity-50" : undefined}>{t("common.back")}</PressButton>
           {#if connectW.applied === null}
             <PressButton variant="fill" loading={connectW.applyBusy} onclick={() => void applyImport()}>
-              import & start
+              {t("connect.ports.importStart")}
             </PressButton>
           {:else}
-            <PressButton variant="fill" onclick={portsNext}>continue</PressButton>
+            <PressButton variant="fill" onclick={portsNext}>{t("common.continue")}</PressButton>
           {/if}
         </CardFooter>
       {/snippet}
@@ -274,7 +275,7 @@
        选端点、单输入框发真实 AI 请求；不写任何 agent 配置。协议/端点/输入框
        在共享 ServiceTestCard（Advanced services 行内同形）） -->
   {:else}
-    <Card title="test" scroll={false}>
+    <Card title={t("connect.test.title")} scroll={false}>
       <div class="flex flex-col gap-3 p-3">
         {#if serviceOptions.length > 1}
           <NativeSelect label="service" bind:value={serviceSel} onchange={handleServiceChange}>
@@ -296,7 +297,7 @@
       </div>
       {#snippet foot()}
         <CardFooter label="connect wizard actions">
-          <PressButton variant="ghost" onclick={connectBack}>back</PressButton>
+          <PressButton variant="ghost" onclick={connectBack}>{t("common.back")}</PressButton>
           <PressButton variant="fill" href="#/dashboard" external={false} onclick={() => finishConnect()}>
             finish - go to dashboard
           </PressButton>

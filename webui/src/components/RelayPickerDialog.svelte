@@ -4,7 +4,8 @@
      保存即 system.settings.set relayUrls；fabric 侧生效需 app 重启（引擎
      启动时读 settings——footer 明示，不静默）。 -->
 <script lang="ts">
-  import Dialog, { DialogFooter } from "$lib/ui/dialog";
+  import Dialog from "$lib/ui/dialog";
+  import { CardFooter } from "$lib/ui/card";
   import PressButton from "$lib/ui/press-button";
   import Separator from "$lib/ui/separator";
   import { untrack } from "svelte";
@@ -136,7 +137,7 @@
     </p>
   </div>
   {#snippet footer()}
-    <DialogFooter label="relay server actions">
+    <CardFooter label="relay server actions">
       <PressButton variant="ghost" onclick={() => (open = false)}>cancel</PressButton>
       <PressButton
         variant="fill"
@@ -144,6 +145,6 @@
         class={customProblem !== null ? "pointer-events-none opacity-50" : undefined}
         onclick={() => void save()}
       >save</PressButton>
-    </DialogFooter>
+    </CardFooter>
   {/snippet}
 </Dialog>

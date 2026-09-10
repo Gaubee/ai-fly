@@ -1,33 +1,23 @@
 @layer theme, base, components, utilities;
 
-/* jxoai dialog css — TWO residents, one sheet:
+/* jixoai dialog css — THE MECHANISM'S RESIDUE ONLY
+ * (card-surface-kernel, 2026-09-09): the structural flesh — the row
+ * ruler, the band placements, the head/foot slot grids, the separator
+ * tracks — RETIRED with the Card dialect: the interior host stamps
+ * `data-jx-card` and card.css's whole rule set applies (five named
+ * columns, three integer bands with edge-riding separators, the
+ * jx-card container carrying the 15rem footer reversal). What stays
+ * here is the floating mechanism's own:
  *
- * 1. THE ROW RULER (r13 + the r14 tuning): the scroll ring
- *    ([data-jx-dialog-scroll], head/body/foot's common parent) is a
- *    single-column grid whose NAMED ROWS carry the dividing lines —
- *    Separator instances sit in explicit 1px tracks (grid-placed, the
- *    borders they replaced are still dead). Presence is STAMPED by
- *    the component (data-sep-head / data-sep-foot on the host) — css
- *    paints stamps only, never infers from descendant context.
- *
- *    THE r14 TUNING (Owner): the --jx-dialog-inset token and its
- *    [inset 1fr inset] column ruler RETIRED — the variable mediated
- *    every zone's layout while the real content already owns its own
- *    geometry (the head's Input provides the row's height and padding;
- *    the body/foot pad themselves with plain utilities). A single
- *    column of stacked zones needs no subgrid rental; the separators
- *    keep their tracks. The head zone is FLUSH by default — a consumer
- *    head snippet (the palette's Input) spans edge-to-edge; the
- *    default title row carries its own px/py utilities.
- *
- *      rows   [head] auto            ← flush zone; content pads itself
- *             [sep-head] 1px         ← <Separator> edge-to-edge
- *             [body] minmax(0,1fr)   ← THE ONLY SCROLL TRACK (r14-3:
- *                                    Owner: the panel never scrolls;
- *                                    the body's content cell is the
- *                                    ring — head/foot stay pinned)
- *             [sep-foot] 1px         ← stamped-present only
- *             [foot] auto
+ * 1. THE HEIGHT CONTINUITY (bug fix, Owner 2026-09-04: the search
+ *    palette overflowed the window): a consumer's max-h lands on the
+ *    PLATFORM element (platformClass) while the scroll ring lives two
+ *    wrappers down — the platform and the surface body become flex
+ *    columns so the platform's ceiling REACHES the ring; the grid
+ *    host under them needs the flex-child min-height floor removed so
+ *    its absorbing body row can actually constrain (the kernel's grid
+ *    takes it from here). The body cell stays the only scroller
+ *    (r14-3, unchanged — the law now lives in card-body.svelte).
  *
  * 2. THE D1-EXEMPT RESIDUE (tw4, 2026-08-24): ONLY the ::backdrop
  *    scrim (a pseudo the WAAPI kernel cannot reach for PAINT — its
@@ -38,102 +28,8 @@
  *    intact). */
 
 @layer components {
-  /* ── the row ruler: named rows, separator tracks, one column ──── */
-  :where([data-jx-dialog-scroll]) {
-    display: grid;
-    grid-template-rows:
-      [head] auto
-      [sep-head] 1px
-      [body] minmax(0, 1fr);
-  }
-  /* the foot matrix (stamped presence): two more explicit tracks */
-  :where([data-jx-dialog-scroll][data-sep-foot]) {
-    grid-template-rows:
-      [head] auto
-      [sep-head] 1px
-      [body] minmax(0, 1fr)
-      [sep-foot] 1px
-      [foot] auto;
-  }
-  :where([data-jx-dialog-head]) {
-    grid-row: head;
-  }
-  /* THE SCROLL LAW (r14-3, Owner): the panel never scrolls — the body
-     ZONE is the only ring. min-height:0 kills the grid item's implicit
-     auto floor so the 1fr row can actually constrain it; overflow-y
-     owns the scroll; the scrollbar rides the zone's edge (the padded
-     cell scrolls inside it). BOTH-EDGES (Owner, r14-14): the gutter
-     reserves symmetric space — a stable gutter on the scrollbar side
-     alone shifts the content optically off-center */
-  :where([data-jx-dialog-body]) {
-    grid-row: body;
-    min-height: 0;
-    overflow-y: auto;
-    scrollbar-gutter: stable both-edges;
-  }
-  /* THE DECLARED NON-SCROLLER (r14-15, Owner): scroll={false} asserts
-     the body fits — the scroll authority and the gutter reservation
-     retire TOGETHER (the gutter exists only FOR the scrollbar; a
-     declared non-scroller keeps the full content width). Mis-declared
-     overflow paints out honestly (visible) rather than hiding */
-  :where([data-jx-dialog-body][data-jx-scroll='off']) {
-    overflow-y: visible;
-    scrollbar-gutter: auto;
-  }
-  :where([data-jx-dialog-foot]) {
-    grid-row: foot;
-  }
-  /* the Separator instances ride their 1px tracks, spanning the
-     panel edge-to-edge — the retired borders' exact extent */
-  :where([data-jx-dialog-sep='head']) {
-    grid-row: sep-head;
-  }
-  :where([data-jx-dialog-sep='foot']) {
-    grid-row: sep-foot;
-  }
-
-  /* ── the head/foot slot grids (r14 tuning 2, Owner) ──────────────
-     NO zone padding: the grids control dimensions. Tracks are
-     content-sized at the inline end (the button stretches its slot
-     open — nothing pre-reserved), the leading/content side rides
-     minmax(0,1fr) and pads itself. */
-  :where(.jx-dialog-head-grid) {
-    display: grid;
-    grid-template-columns:
-      [content] minmax(0, 1fr)
-      [inline-end-action-slot] auto;
-    align-items: start;
-  }
-  :where(.jx-dialog-head-content) {
-    grid-column: content;
-    min-inline-size: 0;
-  }
-  :where(.jx-dialog-end-action-slot) {
-    grid-column: inline-end-action-slot;
-    justify-self: end;
-    align-self: start;
-  }
-  /* the FOOT GRID moved to dialog-footer.css (r14-9): the foot's
-     button economy is the DialogFooter component's — Dialog renders
-     the footer snippet RAW inside the zone */
-
-  /* ── THE HEIGHT CONTINUITY (bug fix, Owner 2026-09-04: the search
-     palette overflowed the window) ─────────────────────────────────
-     A consumer's max-h lands on the PLATFORM element (platformClass)
-     while the scroll ring lives two wrappers down — and the surface
-     body between them is a plain block that transmits no ceiling. The
-     offset palette capped its platform at 100dvh-14vh-2rem while the
-     ring still wanted its own 100dvh-2rem: the taller ring overflowed
-     the capped platform and painted past the window's bottom edge —
-     the body zone scrolled, but its visible region sat below the
-     viewport (measured broken: ring bottom 880 in an 800 window; the
-     platform itself paints nothing visible out — its overflow stays
-     visible, only the shadow's 6px bleed reports in scrollHeight). The
-     platform and the surface body become flex columns so the
-     platform's ceiling REACHES the ring; the ring's own max-h keeps
-     guarding the centered default case. The body zone stays the only
-     scroller (r14-3, unchanged). */
-  /* OPEN dialogs only (2026-09-05): an author display declaration —
+  /* ── THE HEIGHT CONTINUITY (see the header note) ─────────────────
+     OPEN dialogs only (2026-09-05): an author display declaration —
      even :where() zero-specificity — outranks the UA sheet's
      dialog:not([open]) { display: none } (author > UA origin), so the
      ungated flex rendered every CLOSED dialog as an invisible
@@ -143,18 +39,31 @@
      non-scroller chrome slid the whole shell up with blank below.
      The jx-waapi allow-discrete display transition still owns the
      exit window on close ([open] removal flips the match, the discrete
-     flip lands at delay + 50%). */
+     flip lands at delay + 50%).
+     THE AXIS IS UNCONDITIONAL (2026-09-09, the exit width-collapse
+     fix): the discrete window holds ONLY `display` — a [open]-gated
+     flex-direction flips to `row` the instant close() drops the
+     attribute, and the held-flex panel collapses its surface to
+     content width for the whole exit run (the Owner-reported glitch:
+     关闭动画期间宽度瞬间失去支撑). Under display:none the declaration
+     is inert — the phantom-box law above only ever concerned display */
+  :where(.jx-dialog) {
+    flex-direction: column;
+  }
   :where(.jx-dialog[open]),
   :where(.jx-dialog:popover-open) {
     display: flex;
-    flex-direction: column;
   }
   :where([data-jx-dialog-surface]) {
     display: flex;
     flex-direction: column;
     min-height: 0;
   }
-  :where([data-jx-dialog-scroll]) {
+  /* the structural sticker host (the former [data-jx-dialog-scroll]):
+     the flex-child floor must go so the kernel's absorbing body row
+     constrains under the conducted ceiling — scoped to THIS surface's
+     child (a planar Card never sees this rule) */
+  :where([data-jx-dialog-surface]) > :where([data-jx-card]) {
     min-height: 0;
   }
 

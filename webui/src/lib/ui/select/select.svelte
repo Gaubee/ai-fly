@@ -82,7 +82,11 @@
   import { SelectDefaults } from './select-defaults.svelte';
   import './select.css';
 
-  interface Props extends HTMLButtonAttributes {
+  // 'onchange' is OMITTED from the rest lane ON PURPOSE (issue #6): the
+  // native change event never fires on the trigger BUTTON, so a rest-
+  // forwarded handler was a silently dead binding — the prop below is
+  // the sugar that fires on the component's own commit path
+  interface Props extends Omit<HTMLButtonAttributes, 'onchange'> {
     /** the full option list (order = panel order) */
     options: SelectOption[];
     /** density policy: explicit, inherited, then default */
@@ -107,6 +111,12 @@
         the environment asks for reduced transparency; the bezel fill
         follows the variant through the jx-surface fill props) */
     variant?: 'solid' | 'acrylic' | 'auto';
+    /** COMMIT HOOK (issue #6): fires with the newly committed value on
+        the selection commit path — click, Enter, Space — alongside the
+        bind:value write. Sugar over bind:value; the native change
+        event never fires on the trigger button, so this prop owns the
+        channel outright */
+    onchange?: (value: string) => void;
   }
 
   // $props.id() must live in its own top-level initializer (compiler law)
@@ -125,6 +135,7 @@
     disabled = false,
     multiple = false,
     variant = 'auto',
+    onchange,
     class: className = '',
     ...rest
   }: Props = $props();
@@ -200,6 +211,8 @@
   function choose(option: SelectOption): void {
     if (option.disabled) return; // a disabled row neither selects nor closes
     value = option.value;
+    onchange?.(value); // the commit hook (issue #6) — every commit path
+    // funnels here: click, Enter, Space
     panelEl?.hidePopover(); // the toggle handler restitutes focus
   }
 

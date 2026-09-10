@@ -1,86 +1,70 @@
 /*
   jixoai ripple runtime (registry/files/ui/press-button/ripple.svelte.ts).
-  The ink loop shared by every ripple-bearing control: spawn geometry
-  (pointer origin, or the center for keyboard activation — click with
-  detail 0), the WAAPI lifecycle (the dot expands by script and leaves
-  the DOM when the animation finishes; destroy cancels), and the
-  reduced-motion gate (the ink skips when the user asks for stillness —
-  the anchored press already answers the pointer).
+  The settle contract of the svg ink engine (r4, Owner ruling
+  2026-09-10 — effect-attachments design §12.6; r5 the same day: the
+  animation itself moved to CSS): the ink node is a <circle>/<path>
+  inside the host's viewBox-free <svg> seat, and the law sheet's
+  jx-ripple-ink keyframes drive scale (transform-box: fill-box) and
+  opacity off the SAME progress — the ink is fading from the first
+  frame of its expansion, svg-animation in the Owner's sense: CSS on
+  the svg node, zero script-side animate() calls (the battery pins
+  that zero at the source). The node leaves the DOM when the
+  animation ends.
 
-  Extracted verbatim from press-button.svelte (2026-08-26) when Chip
-  needed the same loop — behavior byte-equal. The visual halves
-  (.jx-ripple-layer/dot/flat) stay in press-button.css; every host
-  imports that sheet.
+  The settle is the platform's own event pair: animationend (the
+  timeline finished) and animationcancel (the sheet changed under the
+  node — display:none under reduced motion — or it left the document)
+  BOTH settle, so no ink can outlive its layer. destroy unlistens and
+  removes the node directly — the teardown path; a destroyed layer
+  never plays another frame.
+
+  The spawn geometry + the per-layer defs pair (the silhouette
+  clipPath and the feGaussianBlur soft edge) live in
+  press-effect-runtime.ts (the attachment's own gesture surface:
+  pointer offsetX/Y or the keyboard center, both already in the svg's
+  coordinate space, no rect math); the reduced-motion gate rides the
+  same spawn seam.
+
+  Extracted from press-button.svelte (2026-08-26) when Chip needed the
+  same loop; reworked to the svg node form 2026-09-10 (the retired DOM
+  dots and their per-node top/left math are gone by construction), then
+  to the css-timeline settle the same day (r5 — the WAAPI engine is
+  retired). The visual halves (.jx-ripple-layer/-ink/-flat) stay in
+  press-button.css; every host imports that sheet.
 */
-export interface RippleInk {
-  x: number;
-  y: number;
-  size: number;
-  key: number;
-}
-
 export interface RippleRuntime {
-  /** reactive ink queue — render into the host's .jx-ripple-layer */
-  readonly ripples: RippleInk[];
-  /** use: action — WAAPI owns the dot's lifecycle */
+  /** the event-driven lifecycle for one ink node: `onSettled` rides the
+   *  animationend/animationcancel settle for callers that own the
+   *  node's DOM (the effect runtime's imperative layer removes the
+   *  node there) */
   ink: (
-    dot: HTMLElement,
-    params: { key: number; duration: number }
+    node: SVGElement,
+    params: { key: number; onSettled?: () => void }
   ) => { destroy: () => void };
-  /** the host's click handler: spawn from the activation point, then
-   *  the consumer's own activation */
-  onclick: (event: MouseEvent & { currentTarget: HTMLElement }) => void;
 }
 
-export function createRipple(onActivate?: () => void): RippleRuntime {
-  let ripples = $state<RippleInk[]>([]);
-  let rippleSeq = 0;
-
-  const spawnRipple = (
-    host: HTMLElement,
-    clientX: number,
-    clientY: number,
-    fromPointer: boolean
-  ): void => {
-    if (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches)
-      return;
-    const rect = host.getBoundingClientRect();
-    const size = Math.max(rect.width, rect.height);
-    const px = fromPointer ? clientX : rect.left + rect.width / 2;
-    const py = fromPointer ? clientY : rect.top + rect.height / 2;
-    const key = ++rippleSeq;
-    ripples = [...ripples, { x: px - rect.left - size / 2, y: py - rect.top - size / 2, size, key }];
-  };
-
-  const ink = (dot: HTMLElement, params: { key: number; duration: number }) => {
-    const anim = dot.animate(
-      [
-        { transform: 'scale(0)', opacity: 1 },
-        { transform: 'scale(2)', opacity: 0 },
-      ],
-      { duration: params.duration, easing: 'ease-out', fill: 'both' }
-    );
-    const clear = () => {
-      ripples = ripples.filter((r) => r.key !== params.key);
+export function createRipple(): RippleRuntime {
+  const ink = (
+    node: SVGElement,
+    params: { key: number; onSettled?: () => void }
+  ) => {
+    const settle = (): void => {
+      unlisten();
+      params.onSettled?.();
     };
-    anim.finished.then(clear, clear);
+    const unlisten = (): void => {
+      node.removeEventListener('animationend', settle);
+      node.removeEventListener('animationcancel', settle);
+    };
+    node.addEventListener('animationend', settle);
+    node.addEventListener('animationcancel', settle);
     return {
       destroy() {
-        anim.cancel();
+        unlisten();
+        node.remove();
       },
     };
   };
 
-  const onclick = (event: MouseEvent & { currentTarget: HTMLElement }): void => {
-    spawnRipple(event.currentTarget, event.clientX, event.clientY, event.detail > 0);
-    onActivate?.();
-  };
-
-  return {
-    get ripples() {
-      return ripples;
-    },
-    ink,
-    onclick,
-  };
+  return { ink };
 }

@@ -1,7 +1,17 @@
 @layer theme, base, components, utilities;
 
-/* jixoai card css — THE STRUCTURAL SURFACE (Owner, 2026-09-03): the
- * dialog ruler's structural clone with ONE hard divergence — INTEGER
+/* jixoai card css — THE STRUCTURAL KERNEL'S RULE SET
+ * (card-surface-kernel, 2026-09-09): everything below anchors on the
+ * `data-jx-card` attribute family and `.jx-card-*` classes — zero
+ * element-type selectors, zero component-structure coupling, zero
+ * specificity. STRUCTURE IS A STICKER: any element stamped
+ * `data-jx-card` acquires this whole ruler server-side by CSS alone
+ * (the planar <Card> root, a Dialog's interior host, any future
+ * floating surface); the named column lines and the `jx-card`
+ * container name are PUBLIC API (renaming is a breaking operation).
+ *
+ * THE STRUCTURAL SURFACE (Owner, 2026-09-03): the dialog ruler's
+ * structural clone with ONE hard divergence — INTEGER
  * cell placement, never dialog's NAMED rows. The card is born to live
  * inside card-grid's SUBGRID, and a wrapped band rents IMPLICIT rows
  * where line names don't resolve (the 2026-09-03 rev.1 lesson: named
@@ -145,13 +155,34 @@
     grid-column: 1 / -1;
     align-self: start;
   }
+  /* THE RAW-FOOT FAIL-SOFT (issue #7): the five tracks are for SEATS —
+     .jx-card-foot-grid and the seats it dissolves into. A RAW foot
+     snippet's bare children (unwrapped buttons, arbitrary content)
+     used to auto-place into the 14px inset track: squeezed to
+     slivers, clipped, overlapping, SILENT (measured 26px — "ba").
+     Any direct child that is not a known seat now defaults to the
+     content span, end-justified — readable, and the "wrap me in
+     <CardFooter> or own the ruler yourself" contract breaks VISIBLE
+     instead of broken. The RAW law itself is unchanged: consumers who
+     know the ruler still place their own lines. One rule, every
+     surface — Card, Dialog's foot band, Sheet's (the same zone
+     attribute) */
+  :where([data-jx-card-foot])
+    > :where(
+      :not(.jx-card-foot-grid, .jx-card-foot-start, .jx-card-foot-end, .jx-card-foot-cluster)
+    ) {
+    grid-column: card-content-start / card-inline-end;
+    justify-self: end;
+  }
 
   /* ── the head seats (the r14 tuning clone, lifted onto the ruler):
      the content face ENTERS at the content lines — its inline inset
      is the ruler's inset track, not a utility; it keeps only its
      block rhythm (py-2.5 in the markup). The action slot SPANS the
      end inset track to hug the top-right corner flush — the seat
-     dialog's × occupies when Dialog is refactored onto Card */
+     dialog's × OCCUPIES since card-surface-kernel (2026-09-09):
+     Dialog's interior stamps the sticker and its × rides this exact
+     corner seat */
   :where(.jx-card-head-content) {
     grid-column: card-content-start / card-content-end;
     min-inline-size: 0;
@@ -160,5 +191,25 @@
     grid-column: card-content-end / -1;
     justify-self: end;
     align-self: start;
+  }
+  /* ── THE HEAD FACE'S TWO CARRIERS (card-surface-kernel,
+     2026-09-09 — the card-footer precedent verbatim): standalone the
+     wrapper carries its OWN mirror of the five tracks; inside a head
+     band it DISSOLVES (the rule below wins by source order — both
+     are zero-specificity) and the face places against the RENTED
+     ruler lines (one geometry, two carriers — the rental is the
+     source of truth, the mirror serves the standalone context) */
+  :where(.jx-card-head-face) {
+    display: grid;
+    grid-template-columns:
+      [card-inline-start] 0.875rem
+      [card-content-start] auto
+      [card-fill] minmax(0.625rem, 1fr)
+      [card-content-end] auto
+      [card-inline-end] 0.875rem;
+    align-items: start;
+  }
+  :where([data-jx-card-head]) > :where(.jx-card-head-face) {
+    display: contents;
   }
 }

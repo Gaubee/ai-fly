@@ -2,7 +2,7 @@
   jixoai alert (registry/files/ui/alert/alert.svelte).
   The inline notice block: 1px border, hard offset shadow, and the
   variant ladder as its surface. Not the modal one (that is
-  alert-dialog, a later registry item) — this is the in-flow banner
+  system-dialog, a later registry item) — this is the in-flow banner
   for loaded/failed states.
 
   Live-region semantics are a prop, not a guess:

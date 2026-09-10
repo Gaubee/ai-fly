@@ -6,9 +6,11 @@
  * The separator family's SINGLE declared ambient contract (design.md
  * Defaults 定位): one `SeparatorDefaults` object whose slots cover
  * every vocabulary-hit style prop —
- *   - variant: the LITERAL family (own 'line'), deliberately NOT a
- *     paint axis slot: the vocabulary names the INK GEOMETRY (masks
- *     over the contrast ghost — dashed/dense/dotted/wavy — or the
+ *   - variant: the LITERAL family (own 'fused'), deliberately NOT a
+ *     paint axis slot: the vocabulary names the INK GEOMETRY (the
+ *     default technique is now NAMED fused — the contrast ghost
+ *     itself, not a mask over it; the masks dashed/dense/dotted/wavy
+ *     shape the same ghost; solid is the plain-fill escape; or the
  *     blend engine for fade), never a prominence rung; it can never
  *     join the paint ladder's frozen table, so the slot stays a
  *     defineLiteralSlot forever (the kbd mode's terminal form: no
@@ -27,15 +29,17 @@ import { defineComponentDefaults, defineLiteralSlot } from '$lib/defaults.svelte
 import { densitySlot } from '$lib/density.svelte';
 
 export const separatorVariantSlot = defineLiteralSlot(
-  ['line', 'dashed', 'dense', 'dotted', 'wavy', 'fade'],
-  'line',
+  ['fused', 'solid', 'dashed', 'dense', 'dotted', 'wavy', 'fade'],
+  'fused',
 );
 
 /**
- * The ink geometry — masks over the contrast ghost (dashed/dense/
- * dotted/wavy) or the blend engine (fade); length stays the
- * consumer's job. ReturnType 反查 — the slot's values tuple is the
- * union's source.
+ * The ink geometry — fused (the named default: the contrast ghost
+ * itself), solid (the plain-fill escape, the subtraction-ink
+ * exception — Owner amendment 2026-09-08, `--border`), masks over
+ * the ghost (dashed/dense/dotted/wavy) or the blend engine (fade);
+ * length stays the consumer's job. ReturnType 反查 — the slot's
+ * values tuple is the union's source.
  */
 export type SeparatorVariant = ReturnType<typeof separatorVariantSlot>;
 

@@ -1,6 +1,6 @@
 @layer theme, base, components, utilities;
 
-/* jxoai card-footer css — ONE resident: the foot seats on the card's
+/* jixoai card-footer css — ONE resident: the foot seats on the card's
  * INLINE RULER (Owner, 2026-09-03 r2). Inside a Card foot zone the
  * wrapper dissolves (display: contents) and the seats place directly
  * against the ROOT's rented ruler tracks — passive text ENTERS at
@@ -74,6 +74,15 @@
     align-self: stretch;
     display: grid;
   }
+  /* THE CONCENTRIC PAIRING (the corner-context law, 2026-09-09): a
+     surface that publishes --jx-corner hands its curve to the flush
+     cluster — the end cell rounds WITH the container instead of poking
+     past it (no clipping: the engrave shadow must shear never). Inert
+     wherever no provider exists (the 0px fallback keeps every square
+     surface exactly as it was) */
+  :where(.jx-card-foot-cluster) [data-jx-btngroup] > :last-child {
+    border-end-end-radius: var(--jx-corner, 0px);
+  }
 
   /* ── the narrow reversal (the dialog-footer law, grid-native) ────
      Under 15rem the cluster takes the top row FULL-BLEED (reachable,
@@ -90,6 +99,10 @@
       /* the base seat hugs the end; the reversal stretches it full
          bleed — override the justification with the span */
       justify-self: stretch;
+    }
+    :where(.jx-card-foot-cluster) [data-jx-btngroup] > :first-child {
+      /* the reversal is FULL-BLEED: both end cells ride the corners */
+      border-end-start-radius: var(--jx-corner, 0px);
     }
     :where(.jx-card-foot-start) {
       grid-row: 2;

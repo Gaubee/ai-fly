@@ -19,23 +19,33 @@
 
   One opt-in effect loop per button, modeled on the animation-svelte
   reference (github.com/SikandarJODD/animations, 2026-08-23 user
-  request): shimmer (a conic spark walks the perimeter, additive
-  plus-lighter — Owner polish), pulse (sonar rings from the body's own
-  silhouette), rainbow (a blended aurora wash on three prime
-  timelines), ripple (ink from the activation point — WAAPI-driven,
-  removed on animation.finished, round or bevel/diamond silhouette).
-  Effects are typed builders exported from the module script:
+  request; recipes re-ruled r4 then r5, 2026-09-10): shimmer (a conic
+  spark with dwell keyframes WALKS a ring-masked rim — nothing slides,
+  nothing reads the host's background), pulse (sonar rings that fade
+  AS they expand), rainbow
+  (a five-stop train flowing around a mask-banded rim ring — the FULL
+  ring, top and bottom alike — plus the blurred under-glow; the host's
+  background is never touched), ripple (SVG ink from the activation
+  point — css-animated on the svg node, softened by an svg
+  feGaussianBlur, clipped to the host's silhouette, a round circle or
+  the bevel diamond path, removed on animationend).
+  Since effect-attachments (2026-09-09) the loop rides the ATTACHMENT
+  channel, self-listening and host-free: this component is a PLAIN
+  HOST (variant/state/aria/law only), the builders stay typed exports
+  of the module script, and press-effect-runtime.ts owns the kernels:
 
-    import PressButton, { shimmer, pulse, rainbow, ripple }
+    import PressButton, { shimmer, pressEffect }
       from '@ui/press-button.svelte';
-    <PressButton variant="fill" effect={shimmer({ speed: 4000 })}>
+    <PressButton variant="fill" {@attach pressEffect(shimmer({ speed: 4000 }))}>
       deploy
     </PressButton>
 
-  The ripple RUNTIME (spawn geometry, WAAPI lifecycle, reduced-motion
-  gate) lives in ./ripple.svelte.ts — extracted verbatim (2026-08-26)
-  when Chip needed the same loop; its visual halves stay in this
-  folder's press-button.css.
+  The imperative kernels (layer spans/svg, host classes, vars — held to
+  this spec's DOM/classname assertions) and the self-listening factory
+  live in ./press-effect-runtime.ts; the animationend settle machinery
+  in ./ripple.svelte.ts (the svg ink engine; css-timeline driven since
+  r5); the keyframes + @property registrations stay in this folder's
+  press-button.css.
 
   The async idiom (enhance-picker-feedback, 2026-08-30) — `loading`
   pose + `flash()` success, the two-step deploy pattern:
@@ -77,8 +87,9 @@
   press-button.css — keyframes, @property registrations, cqw math and
   ::after builds are all D1-exempt machinery, and splitting each
   layer's static half from its animated half would separate one
-  logical unit across two sheets. Only the hosts' stacking pose
-  (relative z-0) became utilities.
+  logical unit across two sheets. The hosts' stacking pose (relative
+  z-0) stamped with the effect branches until effect-attachments
+  retired them — the runtime's own HOST_CLASSES stamp it now.
 -->
 <script module lang="ts">
   import type { pressButtonVariantSlot } from './press-button-defaults.svelte';
@@ -117,33 +128,64 @@
   /** the one opt-in effect loop — builders keep options typed and discoverable */
   export type PressEffect = ShimmerEffect | PulseEffect | RainbowEffect | RippleEffect;
 
-  export interface ShimmerOptions {
-    /** the spark color (any CSS color) */
-    color?: string;
-    /** the conic arc width of the spark */
-    spread?: string;
-    /** how far the spark bleeds inward from the border */
-    cut?: string;
-    /** one slide pass, in ms (the spin runs at 2×) */
+    export interface ShimmerOptions {
+    /** the shine color (any CSS color; default the primary token —
+     *  the arc peaks at this color over the ring's rest color) */
+    shine?: string;
+    /** the ring's REST color — the band the arc walks on (any CSS
+     *  color, default currentColor: the ring inherits the host's own
+     *  ink) */
+    ringColor?: string;
+    /** the shine arc's angular width (the walk's footprint) */
+    shineWidth?: string;
+    /** one full revolution of the arc, in ms */
     speed?: number;
+    /** the ring band's width — the HOST's own border-width (r11: the
+     *  effect paints the host directly, no child layer, no inset). A
+     *  number is px; a string is any CSS length ('0.25em', '4px') */
+    ringW?: number | string;
+    /** the FACE: an opaque color as a 0xRRGGBB number (solidFill()
+     *  mints these from any CSS color against the context base), or
+     *  null for TRANSPARENT — the true border-area cutout where the
+     *  engine supports it, the white/black + darken/lighten blend
+     *  emulation where it does not. Default: undefined = the
+     *  context's theme token var(--background) — light/dark follows
+     *  the Context live (「默认不透明」) */
+    fill?: number | null;
   }
   export interface ShimmerEffect {
     readonly type: 'shimmer';
-    color: string;
-    spread: string;
-    cut: string;
+    shine: string;
+    ringColor: string;
+    shineWidth: string;
     speed: number;
+    ringW: string;
+    fill: number | null | undefined;
   }
+  /** shimmer (r9-r11, the Owner's settled design — the backdrop-cutout
+   *  ask is RETIRED as a mask problem and reborn as border geometry):
+   *  the HOST element itself carries the ring — border-width = ringW,
+   *  the double background (fill + conic), the spin. See
+   *  press-effect-runtime.ts's solidFill() for minting fill numbers */
   export function shimmer({
-    color = 'currentColor',
-    spread = '90deg',
-    cut = '0.06em',
+    shine = 'var(--primary)',
+    ringColor = 'currentColor',
+    shineWidth = '30deg',
     speed = 3000,
+    ringW = 1,
+    fill,
   }: ShimmerOptions = {}): ShimmerEffect {
-    return { type: 'shimmer', color, spread, cut, speed };
+    return {
+      type: 'shimmer',
+      shine,
+      ringColor,
+      shineWidth,
+      speed,
+      ringW: typeof ringW === 'number' ? `${ringW}px` : ringW,
+      fill,
+    };
   }
-
-  export interface PulseOptions {
+export interface PulseOptions {
     /** the sonar ring color (any CSS color) */
     color?: string;
     /** one ring cycle, in ms */
@@ -170,15 +212,26 @@
   }
 
   export interface RainbowOptions {
-    /** base pace — the three prime timelines run at 3s / 5s / 7s when speed is 2000 */
+    /** the flow pace — one full 200% pan of the ring's stop train, in ms */
     speed?: number;
-    /** the gradient stops, first-to-last around the conic wheel */
+    /** the gradient stops, first-to-last along the flowing rim */
     colors?: [string, ...string[]];
+    /** the ring band's width — the HOST's own border-width (r13: the
+     *  same host-channel technique as shimmer). A number is px; a
+     *  string is any CSS length */
+    ringW?: number | string;
+    /** the FACE — the same channel as shimmer's fill: an opaque
+     *  0xRRGGBB number (solidFill() mints these), null for the true
+     *  cutout / blend emulation, undefined (default) for Canvas (the
+     *  color-scheme system color, theme-live) */
+    fill?: number | null;
   }
   export interface RainbowEffect {
     readonly type: 'rainbow';
     speed: number;
     colors: [string, ...string[]];
+    ringW: string;
+    fill: number | null | undefined;
   }
   export function rainbow({
     speed = 2000,
@@ -189,8 +242,16 @@
       'hsl(195 100% 63%)',
       'hsl(90 100% 63%)',
     ],
+    ringW = 1,
+    fill,
   }: RainbowOptions = {}): RainbowEffect {
-    return { type: 'rainbow', speed, colors };
+    return {
+      type: 'rainbow',
+      speed,
+      colors,
+      ringW: typeof ringW === 'number' ? `${ringW}px` : ringW,
+      fill,
+    };
   }
 
   export interface RippleOptions {
@@ -202,39 +263,53 @@
      *  bevel cuts the corners into a diamond (a 45° square where
      *  corner-shape is unsupported — the same shape to the eye) */
     shape?: 'round' | 'bevel';
+    /** the svg feGaussianBlur softness of the ink edge, in px. 0 (the
+     * default) DISABLES the filter entirely — a crisp ink; any positive
+     * value rides one per-layer filter def (Owner 2026-09-10: soft is a
+     * choice, never a default) */
+    soft?: number;
   }
   export interface RippleEffect {
     readonly type: 'ripple';
     color: string;
     duration: number;
     shape: 'round' | 'bevel';
+    soft: number;
   }
   export function ripple({
     color = 'currentColor',
     duration = 600,
     shape = 'round',
+    soft = 0,
   }: RippleOptions = {}): RippleEffect {
-    return { type: 'ripple', color, duration, shape };
+    return { type: 'ripple', color, duration, shape, soft };
   }
-
-  // corner-shape gates the bevel ink's fast path; where it's missing the
-  // flat fallback turns a square 45° — the same diamond to the eye
-  const bevelInk =
-    typeof CSS !== 'undefined' &&
-    typeof CSS.supports === 'function' &&
-    CSS.supports('corner-shape', 'bevel');
 </script>
 
 <script lang="ts">
   import { getContext, onDestroy } from 'svelte';
   import type { Snippet } from 'svelte';
+  import type { HTMLAttributes } from 'svelte/elements';
   import Icon from '$lib/ui/icon';
   import type { Density } from '$lib/density.svelte';
   import { PressButtonDefaults } from './press-button-defaults.svelte';
-  import { createRipple } from './ripple.svelte';
   import './press-button.css';
 
-  interface Props {
+  /* the REST LANE (floating-flesh-sweep, 2026-09-09 — the props
+   * discipline law completed after the third wrapper-hack collision):
+   * arbitrary attributes flow through VERBATIM and land on the root
+   * (button or anchor — the shared HTMLElement contract); the family's
+   * own typed props and component-owned stamps win by spread order.
+   * The component-tag ATTACHMENT rides this lane too (r4, 2026-09-10):
+   * `<PressButton {@attach pressEffect(…)}>` compiles to a symbol-keyed
+   * prop that the rest spread forwards onto the root, where the
+   * runtime's attribute_effect branch mounts it — data-jx-attach="root"
+   * stays as the optional named mounting-point stamp, never the
+   * forwarding mechanism */
+  interface Props extends Omit<
+    HTMLAttributes<HTMLElement>,
+    'onclick' | 'class' | 'aria-label' | 'style' | 'type'
+  > {
     /** DENSITY override: explicit ?? ambient ?? no-opinion — resolved
      *  through PressButtonDefaults (the family contract); undefined
      *  stamps nothing and the ambient css scope channel flows */
@@ -245,8 +320,6 @@
      *  prop adopts the paint zone's rung (a ButtonGroup or variant
      *  scope), else the frozen own 'outline' — explicit always wins */
     variant?: PressButtonVariant;
-    /** built by shimmer() / pulse() / rainbow() / ripple() — one loop per button */
-    effect?: PressEffect;
     href?: string;
     /** Opens non-internal hrefs (not starting with "/") in a new tab. */
     external?: boolean;
@@ -293,7 +366,6 @@
   let {
     density,
     variant = undefined,
-    effect = undefined,
     href,
     external = undefined,
     loading = false,
@@ -305,6 +377,7 @@
     raised = undefined,
     class: className = '',
     children,
+    ...rest
   }: Props = $props();
 
   // THE single read point (context-defaults-economy 2.1): the family
@@ -399,66 +472,22 @@
     link: 'text-primary underline-offset-4 hover:underline forced-colors:text-[LinkText]',
   } as const;
 
-  // effect host class (the stacking pose rides utilities: relative z-0
-  // keeps the negative-z layers under the in-flow label) + the custom
-  // properties its loop reads
-  const effectClass = $derived.by(() => {
-    if (!effect) return '';
-    switch (effect.type) {
-      case 'shimmer':
-        return 'relative z-0';
-      case 'pulse':
-        return 'relative z-0';
-      case 'rainbow':
-        return 'jx-rainbow-host relative z-0';
-      case 'ripple':
-        return 'relative z-0';
-    }
-  });
-  const effectStyle = $derived.by(() => {
-    if (!effect) return '';
-    switch (effect.type) {
-      case 'shimmer':
-        return `--shimmer-color:${effect.color}; --shimmer-spread:${effect.spread}; --shimmer-cut:${effect.cut}; --shimmer-speed:${effect.speed}ms`;
-      case 'pulse':
-        return `--pulse-color:${effect.color}; --pulse-duration:${effect.duration}ms; --pulse-distance:${effect.distance}`;
-      case 'rainbow':
-        return `--rainbow-tx:${(effect.speed * 3) / 2}ms; --rainbow-ty:${(effect.speed * 5) / 2}ms; --rainbow-t1:${(effect.speed * 7) / 2}ms; --rainbow-t2:${(effect.speed * 11) / 2}ms; --rainbow-t3:${(effect.speed * 13) / 2}ms; --rainbow-t4:${(effect.speed * 17) / 2}ms; ${effect.colors
-          .map((c, i) => `--c${i + 1}:${c}`)
-          .join('; ')}`;
-      case 'ripple':
-        return '';
-    }
-  });
-
-  // ripple: the shared runtime (./ripple.svelte.ts) — ink circles from
-  // the activation point; keyboard activation (click with detail 0)
-  // ripples from the center. Reduced motion skips the ink inside the
-  // factory — the anchored press already answers the pointer.
-  const rippleRuntime = createRipple(() => onclick?.());
-
   // ---- the loading lock (the anchor contract's enforcement seam) ------
   // EVERY activation path funnels through click — native buttons
   // synthesize it from Enter AND Space, anchors from Enter — so one
   // guard covers pointer and keyboard alike. loading: buttons no-op;
   // anchors preventDefault (the navigation itself is blocked). Tab
   // order is untouched — aria-disabled, never the disabled attribute.
-  function onButtonClick(event: MouseEvent & { currentTarget: HTMLElement }): void {
+  // (the effect loops never ride this seam — pressEffect() owns its own
+  // gesture surface through the attachment, effect-attachments §2b)
+  function onButtonClick(): void {
     if (loading) return;
-    // the ripple is part of the ACTIVATION path — it must spawn (or be
-    // suppressed with the loading lock) exactly when the consumer fires
-    if (effect?.type === 'ripple') {
-      rippleRuntime.onclick(event as MouseEvent & { currentTarget: HTMLAnchorElement });
-      return;
-    }
     onclick?.();
   }
   function onAnchorClick(event: MouseEvent & { currentTarget: HTMLAnchorElement }): void {
     if (loading) {
       event.preventDefault();
-      return;
     }
-    if (effect?.type === 'ripple') rippleRuntime.onclick(event);
   }
 
   // THE FLAT POSE (raised={false}): the variant's own pose customs are
@@ -477,9 +506,7 @@
       : variants[resolvedVariant],
   );
 
-  const classes = $derived(
-    `${base} ${variantClasses}${effectClass ? ` ${effectClass}` : ''}${className ? ` ${className}` : ''}`
-  );
+  const classes = $derived(`${base} ${variantClasses}${className ? ` ${className}` : ''}`);
   const isExternal = $derived(external ?? (href !== undefined && !href.startsWith('/')));
 
   // the leading lane (enhance-picker-feedback): loading swaps in the
@@ -487,35 +514,6 @@
   // flash swaps in the ✓ check — one glyph slot, never both
   const leadingGlyph = $derived(loading ? 'spin' : flashState === 'success' ? 'check' : 'none');
 </script>
-
-{#snippet layers()}
-  {#if effect?.type === 'ripple'}
-    <span class="jx-ripple-layer" aria-hidden="true">
-      {#each rippleRuntime.ripples as r (r.key)}
-        <span
-          class="jx-ripple-dot{effect.shape === 'bevel' && !bevelInk ? ' jx-ripple-flat' : ''}"
-          data-shape={effect.shape}
-          style="width:{r.size}px; height:{r.size}px; top:{r.y}px; left:{r.x}px;
-            --ripple-color:{effect.color}"
-          use:rippleRuntime.ink={{ key: r.key, duration: effect.duration }}
-        ></span>
-      {/each}
-    </span>
-  {:else if effect?.type === 'shimmer'}
-    <span class="jx-shimmer-box" aria-hidden="true">
-      <span class="jx-shimmer-slide"><span class="jx-shimmer-spark"></span></span>
-    </span>
-    <span class="jx-shimmer-cover" aria-hidden="true"></span>
-  {:else if effect?.type === 'pulse'}
-    <span
-      class="jx-pulse-layer"
-      class:jx-pulse-slow={effect.variant === 'slow'}
-      class:jx-pulse-ring={effect.variant === 'ring'}
-      class:jx-pulse-ripple={effect.variant === 'ripple'}
-      aria-hidden="true"
-    ></span>
-  {/if}
-{/snippet}
 
 {#snippet leadingLane()}
   {#if leadingGlyph === 'spin'}
@@ -534,6 +532,7 @@
 
 {#if href}
   <a
+    {...rest}
     {href}
     target={isExternal ? '_blank' : undefined}
     rel={isExternal ? 'noreferrer' : undefined}
@@ -543,19 +542,16 @@
     data-density={d.density}
     data-jx-press-button={d.variant}
     data-jx-press-flat={flat ? '' : undefined}
-    data-jx-shimmer-host={effect?.type === 'shimmer' ? '' : undefined}
-    data-jx-pulse-host={effect?.type === 'pulse' ? '' : undefined}
-    data-jx-ripple-host={effect?.type === 'ripple' ? '' : undefined}
+    data-jx-attach="root"
     class={classes}
-    style={effectStyle || undefined}
     onclick={onAnchorClick}
   >
-    {@render layers()}
     {@render leadingLane()}
     {@render children()}
   </a>
 {:else}
   <button
+    {...rest}
     {type}
     onclick={onButtonClick}
     aria-label={ariaLabel}
@@ -565,13 +561,9 @@
     data-jx-press-button={d.variant}
     data-jx-press-flat={flat ? '' : undefined}
     popovertarget={popovertarget}
-    data-jx-shimmer-host={effect?.type === 'shimmer' ? '' : undefined}
-    data-jx-pulse-host={effect?.type === 'pulse' ? '' : undefined}
-    data-jx-ripple-host={effect?.type === 'ripple' ? '' : undefined}
+    data-jx-attach="root"
     class={classes}
-    style={effectStyle || undefined}
   >
-    {@render layers()}
     {@render leadingLane()}
     {@render children()}
   </button>

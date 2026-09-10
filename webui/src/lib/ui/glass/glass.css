@@ -1,0 +1,118 @@
+/**
+ * glass.css — THE ONE glass-effect law sheet (registry/files/ui/glass/
+ * glass.css, Owner 2026-09-08 「把 glass 和 blur 合并成一个 blur…引入
+ * Liquid Glass」; r10 2026-09-09 the kube.io source-level lock). The five
+ * retired hand-tuned glass paints (.jx-glass, tabs glass/liquid, toast
+ * glass) unify behind the data-jx-effect stamp channel; this sheet is
+ * the single css owner of that channel's paint.
+ *
+ * THE CONTRACT:
+ *  - THE STAMP: builders stamp `data-jx-effect="blur" | "liquid-glass"`
+ *    plus the tuning vars (--jx-glass-radius/saturate/fill/brightness;
+ *    the interactive flag adds --jx-glass-interactive:1). Selectors read
+ *    the stamp, vars carry the tuning — consumers override VALUES,
+ *    never names.
+ *  - THE FROST BASE IS UNCONDITIONAL (both members, every engine):
+ *    background fill + blur/saturate/brightness over the backdrop.
+ *    For liquid this IS the no-JS / pre-hydration / unsupported-engine
+ *    paint — the lens is an enhancement, never a dependency. Fallback
+ *    values are the retired `.jx-glass` values verbatim (blur 14px ·
+ *    saturate 1.35 · fill 68% — computed-equivalence for migration).
+ *  - THE LENS IS POINTER-ONLY (r10, the v3 lesson): inside
+ *    @supports (backdrop-filter: url()) a liquid element's paint is the
+ *    single `var(--jx-glass-filter, saturate(1))` pointer. The frost
+ *    lives INSIDE the filter chain (feGaussianBlur is its first
+ *    primitive) — chaining css frost functions under url() would
+ *    double-blur. The pointer's identity fallback covers the UNSET
+ *    case only; the mount writes the pointer AFTER appending the
+ *    filter node, so SET-but-missing never occurs through the API
+ *    (hand-writing it is documented misuse, not css-solvable).
+ *    CASCADE LAW: this block FOLLOWS the frost base in the sheet, so a
+ *    mounted lens OVERRIDES the frost on liquid in supporting engines —
+ *    frost → lens, never unfiltered → lens. blur() never enters the
+ *    branch.
+ *  - INTERACTIVE MOTION: Apple .interactive()'s press feedback — the
+ *    flag var is the state carrier (stamped by glassVars when the
+ *    effect is flagged), the motion lives HERE: press scale + brighten
+ *    over a spring-flavored transition, gated OFF under
+ *    prefers-reduced-motion. Composes with the consumer's own press
+ *    choreography (the press-effect channel).
+ *  - PRINT: the filters drop (both engines' lines); the fill stays.
+ *  - REDUCED TRANSPARENCY: solid ground — the opaque fill (a
+ *    --jx-glass-solid-fill escape hatch over the plain background
+ *    token, the jx-surface precedent), no filters at all.
+ *  - NO forced-colors block BY DESIGN: forced-colors consumers carry
+ *    their own Canvas grounds (the consumer map, design §6); the law
+ *    never guesses system colors.
+ *
+ * Everything rides @layer components behind :where() — zero
+ * specificity, consumer utilities always win. Single-load via
+ * side-effect imports.
+ */
+@layer theme, base, components, utilities;
+
+@layer components {
+  /* the UNCONDITIONAL frost paint — both members, every engine.
+     For liquid this IS the no-JS / unsupported-engine fallback. */
+  :where([data-jx-effect='blur'], [data-jx-effect='liquid-glass']) {
+    background: var(--jx-glass-fill, color-mix(in oklab, var(--background, Canvas) 68%, transparent));
+    -webkit-backdrop-filter: blur(var(--jx-glass-radius, 14px)) saturate(var(--jx-glass-saturate, 1.35)) brightness(var(--jx-glass-brightness, 1));
+    backdrop-filter: blur(var(--jx-glass-radius, 14px)) saturate(var(--jx-glass-saturate, 1.35)) brightness(var(--jx-glass-brightness, 1));
+  }
+
+  /* the lens: POINTER-ONLY (r10 — the v3 lesson). The frost lives
+     INSIDE the filter chain (feGaussianBlur is the first primitive);
+     chaining css frost functions under url() would double-blur. The
+     pointer's identity fallback covers the UNSET case only; the
+     mount writes the pointer AFTER appending the filter node, so
+     SET-but-missing never occurs through the API (hand-writing it
+     is documented misuse, not css-solvable). */
+  @supports (backdrop-filter: url('#jx-glass-supports-probe')) {
+    :where([data-jx-effect='liquid-glass']) {
+      -webkit-backdrop-filter: var(--jx-glass-filter, saturate(1));
+      backdrop-filter: var(--jx-glass-filter, saturate(1));
+    }
+  }
+
+  /* print: the filters off (frost AND lens — both lines), the fill
+     stays readable on paper */
+  @media print {
+    :where([data-jx-effect='blur'], [data-jx-effect='liquid-glass']) {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+
+  /* the environment asks for less transparency → exactly solid: the
+     opaque fill (the --jx-glass-solid-fill escape hatch over the plain
+     background token — the jx-surface precedent), no filters at all */
+  @media (prefers-reduced-transparency: reduce) {
+    :where([data-jx-effect='blur'], [data-jx-effect='liquid-glass']) {
+      background: var(--jx-glass-solid-fill, var(--background, Canvas));
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+
+  /* Apple .interactive() — the semantic layer's press feedback. The
+     flag var is the state carrier; the motion lives HERE (the demo
+     page's :active recipe promoted into law). */
+  :where([data-jx-effect='liquid-glass'][style*='--jx-glass-interactive:1']) {
+    transition: transform .18s cubic-bezier(.2, .9, .3, 1.4), filter .18s ease;
+  }
+  :where([data-jx-effect='liquid-glass'][style*='--jx-glass-interactive:1']):active {
+    transform: scale(.93);
+    filter: brightness(1.25);
+  }
+
+  /* motion is an enhancement too — reduced-motion drops the press
+     choreography (the press-effect channel's own convention) */
+  @media (prefers-reduced-motion: reduce) {
+    :where([data-jx-effect='liquid-glass'][style*='--jx-glass-interactive:1']),
+    :where([data-jx-effect='liquid-glass'][style*='--jx-glass-interactive:1']):active {
+      transition: none;
+      transform: none;
+      filter: none;
+    }
+  }
+}

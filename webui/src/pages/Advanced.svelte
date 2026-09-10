@@ -20,7 +20,7 @@
   import Toggle from "$lib/ui/toggle";
   import ThemeToggle from "$lib/ui/theme-toggle";
   import Tabs, { TabsList, TabsTrigger, TabsContent } from "$lib/ui/tabs";
-  import Dialog, { DialogFooter } from "$lib/ui/dialog";
+  import Dialog from "$lib/ui/dialog";
   import { toRpcError } from "$lib/rpc-client";
   import type { ServiceConfigView } from "$shared/rpc-contract.ts";
   import { slide } from "svelte/transition";
@@ -957,9 +957,9 @@
       </p>
     </div>
     {#snippet footer()}
-      <DialogFooter label="key issued">
+      <CardFooter label="key issued">
         <PressButton variant="fill" onclick={() => (keyIssue.result = null)}>done - I saved it</PressButton>
-      </DialogFooter>
+      </CardFooter>
     {/snippet}
   {/if}
 </Dialog>

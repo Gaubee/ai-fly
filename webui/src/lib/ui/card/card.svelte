@@ -59,6 +59,7 @@
   import type { Snippet } from 'svelte';
   import Separator from '$lib/ui/separator/separator.svelte';
   import ButtonVariantScope from '$lib/ui/button-group/button-variant-scope.svelte';
+  import CardBody from './card-body.svelte';
   import CardHeader from './card-header.svelte';
   import './card.css';
 
@@ -127,20 +128,12 @@
          chrome, hidden from AT -->
     <Separator data-jx-card-sep="head" aria-hidden="true" />
   {/if}
-  <div data-jx-card-body data-jx-scroll={scroll ? undefined : 'off'}>
-    <!-- the CELL is the scroll ring (card.css — the zone stays a plain
-         track occupant: a scroll-container subgrid tenant collapses
-         its rented row to zero). Its inline padding is the dialog
-         cell's VERBATIM gutter compensation: max(0.875rem − probed
-         thin, 0) keeps the visual inset at the authored 14px;
-         overlay-scrollbar systems probe 0 and keep it whole -->
-    <div
-      data-jx-card-cell
-      class="min-w-0 py-3.5 px-[max(0.875rem-var(--jx-scrollbar-thin,0px),0px)] text-[13px] leading-[1.6] text-[color-mix(in_oklab,var(--card-foreground)_80%,transparent)]"
-    >
-      {@render children()}
-    </div>
-  </div>
+  <!-- the body band is the family part (card-body.svelte,
+       card-surface-kernel): one scroll law, one gutter-compensation
+       formula, shared with every ruler carrier -->
+  <CardBody {scroll}>
+    {@render children()}
+  </CardBody>
   {#if hasFoot}
     <Separator data-jx-card-sep="foot" aria-hidden="true" />
     <!-- THE RAW FOOT ZONE: the foot snippet overrides everything —

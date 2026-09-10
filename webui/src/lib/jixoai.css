@@ -267,13 +267,14 @@
   --jx-gap-end: var(--jx-density-end-gap-lg);
   --jx-stack: var(--jx-density-stack-gap-lg);
   --jx-inset: var(--jx-density-inline-inset-lg);
+  --jx-chip-radius: var(--jx-density-chip-radius-lg);
   --jx-gap-content: var(--jx-density-content-gap-lg);
   --jx-row-min: var(--jx-density-row-min-lg);
   --jx-hit: var(--jx-density-hit-min-lg);
   --jx-icon: var(--jx-density-media-icon-lg);
   --jx-image: var(--jx-density-media-image-lg);
   --jx-text-secondary: var(--jx-density-secondary-text-lg);
-  --jx-leading-secondary: var(--jx-density-secondary-leading);
+  --jx-leading-secondary: var(--jx-density-secondary-leading-2xs);
   --jx-line-secondary: var(--jx-density-secondary-line-lg);
   --jx-toggle-track: var(--jx-line);
   --jx-toggle-width: calc(var(--jx-toggle-track) * 2);
@@ -325,14 +326,11 @@
   }
 }
 
-/* Glass material: translucent surface + real backdrop blur. Outline (not
-   border) so the box line never affects layout and stays crisp over the
-   blurred backdrop; identical outline law as the ToC toggle. */
-.jx-glass {
-  background: color-mix(in oklab, var(--background) 68%, transparent);
-  -webkit-backdrop-filter: blur(14px) saturate(1.35);
-  backdrop-filter: blur(14px) saturate(1.35);
-}
+/* (the hand-tuned glass-material class RETIRED, glass-effect-blur-liquid
+   2026-09-08: it unified behind the @jixoai/glass stamp channel —
+   data-jx-effect + the --jx-glass-* vars, painted by glass.css, the one
+   law sheet. Same rendered values, so migration is
+   computed-equivalent.) */
 
 /* ============================================================
    Floating-surface law (Owner rulings, 2026-08-22 → 2026-08-23 r18)
@@ -662,12 +660,21 @@ html:not(.js) .jx-surface.jx-waapi:popover-open .jx-surface-shadow {
 
 /* acrylic / auto: the body carries ONE filter — blur. Bezel panels
    retune the fill through the custom properties, keeping their
-   identity in BOTH variants. */
+   identity in BOTH variants. VALUE-LEVEL TOKEN REBASE
+   (glass-effect-blur-liquid, 2026-09-08): the magnitudes read the
+   --jx-glass-* family the @jixoai/glass item owns, pinned LOCALLY at
+   the retired values (14 / 1 / 2 — saturate 1 is the identity, so the
+   rendered formula is unchanged); this selector stays the DECLARED
+   EXCEPTION to the one-formula boundary (surface acrylic is not a
+   stamp-channel family — design §6). */
 .jx-surface[data-variant='acrylic'] .jx-surface-body,
 .jx-surface[data-variant='auto'] .jx-surface-body {
+  --jx-glass-radius: 14px;
+  --jx-glass-saturate: 1;
+  --jx-glass-brightness: 2;
   background: var(--jx-surface-acrylic-fill, color-mix(in oklab, var(--popover) 72%, transparent));
-  -webkit-backdrop-filter: blur(14px) brightness(2);
-  backdrop-filter: blur(14px) brightness(2);
+  -webkit-backdrop-filter: blur(var(--jx-glass-radius, 14px)) saturate(var(--jx-glass-saturate, 1)) brightness(var(--jx-glass-brightness, 2));
+  backdrop-filter: blur(var(--jx-glass-radius, 14px)) saturate(var(--jx-glass-saturate, 1)) brightness(var(--jx-glass-brightness, 2));
 }
 /* auto = acrylic UNLESS the environment asks for less transparency —
    then exactly solid */
@@ -1005,12 +1012,34 @@ html:not(.js) .jx-surface.jx-waapi:popover-open .jx-surface-shadow {
   --jx-density-secondary-text-sm: max(0.625rem, calc(var(--jx-density-text-sm) - calc(var(--jx-unit) / 4)));
   --jx-density-secondary-text-default: max(0.625rem, calc(var(--jx-density-text-default) - calc(var(--jx-unit) / 4)));
   --jx-density-secondary-text-lg: max(0.625rem, calc(var(--jx-density-text-lg) - calc(var(--jx-unit) / 4)));
-  --jx-density-secondary-leading: 1.5;
-  --jx-density-secondary-line-2xs: calc(var(--jx-density-secondary-text-2xs) * var(--jx-density-secondary-leading));
-  --jx-density-secondary-line-xs: calc(var(--jx-density-secondary-text-xs) * var(--jx-density-secondary-leading));
-  --jx-density-secondary-line-sm: calc(var(--jx-density-secondary-text-sm) * var(--jx-density-secondary-leading));
-  --jx-density-secondary-line-default: calc(var(--jx-density-secondary-text-default) * var(--jx-density-secondary-leading));
-  --jx-density-secondary-line-lg: calc(var(--jx-density-secondary-text-lg) * var(--jx-density-secondary-leading));
+  /* the secondary leading ladder (Owner ruling, 2026-09-08: 2xs 的
+     lineHeight 有必要缩减): the flat 1.5 read loose on the small rungs'
+     ~10-11px secondary text; the ramp tightens BELOW default only —
+     default/lg keep 1.5 so nothing above sm moves */
+  --jx-density-secondary-leading-2xs: 1.25;
+  --jx-density-secondary-leading-xs: 1.35;
+  --jx-density-secondary-leading-sm: 1.45;
+  --jx-density-secondary-leading-default: 1.5;
+  --jx-density-secondary-leading-lg: 1.5;
+  --jx-density-secondary-line-2xs: calc(var(--jx-density-secondary-text-2xs) * var(--jx-density-secondary-leading-2xs));
+  --jx-density-secondary-line-xs: calc(var(--jx-density-secondary-text-xs) * var(--jx-density-secondary-leading-xs));
+  --jx-density-secondary-line-sm: calc(var(--jx-density-secondary-text-sm) * var(--jx-density-secondary-leading-sm));
+  --jx-density-secondary-line-default: calc(var(--jx-density-secondary-text-default) * var(--jx-density-secondary-leading-default));
+  --jx-density-secondary-line-lg: calc(var(--jx-density-secondary-text-lg) * var(--jx-density-secondary-leading-lg));
+
+  /* Chip corner radius (inline-code-engine-and-text-modifiers D4,
+     2026-09-08 — Owner mapping 2/2/2/4/8): the inline code chip's
+     corner leaves the global --radius (the fleet corner token) for
+     its OWN density-scaled ladder. The small sizes read as
+     "softened, not round" (a 1px-border band, not a card); default
+     4px is the Owner's pinned chip corner; lg 8px meets the fleet
+     corner at reading size. Consumed as --jx-chip-radius by the
+     per-scope remaps below (the --jx-inset authoring pattern). */
+  --jx-density-chip-radius-2xs: 2px;
+  --jx-density-chip-radius-xs: 2px;
+  --jx-density-chip-radius-sm: 2px;
+  --jx-density-chip-radius-default: 4px;
+  --jx-density-chip-radius-lg: 8px;
   --jx-icon-optical: 0px;
 }
 
@@ -2110,13 +2139,14 @@ html:not(.js) .jx-surface.jx-waapi:popover-open .jx-surface-shadow {
   --jx-gap-end: var(--jx-density-end-gap-default);
   --jx-stack: var(--jx-density-stack-gap-default);
   --jx-inset: var(--jx-density-inline-inset-default);
+  --jx-chip-radius: var(--jx-density-chip-radius-default);
   --jx-gap-content: var(--jx-density-content-gap-default);
   --jx-row-min: var(--jx-density-row-min-default);
   --jx-hit: var(--jx-density-hit-min-default);
   --jx-icon: var(--jx-density-media-icon-default);
   --jx-image: var(--jx-density-media-image-default);
   --jx-text-secondary: var(--jx-density-secondary-text-default);
-  --jx-leading-secondary: var(--jx-density-secondary-leading);
+  --jx-leading-secondary: var(--jx-density-secondary-leading-xs);
   --jx-line-secondary: var(--jx-density-secondary-line-default);
   --jx-toggle-track: var(--jx-line);
   --jx-toggle-width: calc(var(--jx-toggle-track) * 2);
@@ -2135,13 +2165,14 @@ html:not(.js) .jx-surface.jx-waapi:popover-open .jx-surface-shadow {
   --jx-gap-end: var(--jx-density-end-gap-xs);
   --jx-stack: var(--jx-density-stack-gap-xs);
   --jx-inset: var(--jx-density-inline-inset-xs);
+  --jx-chip-radius: var(--jx-density-chip-radius-xs);
   --jx-gap-content: var(--jx-density-content-gap-xs);
   --jx-row-min: var(--jx-density-row-min-xs);
   --jx-hit: var(--jx-density-hit-min-xs);
   --jx-icon: var(--jx-density-media-icon-xs);
   --jx-image: var(--jx-density-media-image-xs);
   --jx-text-secondary: var(--jx-density-secondary-text-xs);
-  --jx-leading-secondary: var(--jx-density-secondary-leading);
+  --jx-leading-secondary: var(--jx-density-secondary-leading-sm);
   --jx-line-secondary: var(--jx-density-secondary-line-xs);
   --jx-toggle-track: var(--jx-line);
   --jx-toggle-width: calc(var(--jx-toggle-track) * 2);
@@ -2160,13 +2191,14 @@ html:not(.js) .jx-surface.jx-waapi:popover-open .jx-surface-shadow {
   --jx-gap-end: var(--jx-density-end-gap-sm);
   --jx-stack: var(--jx-density-stack-gap-sm);
   --jx-inset: var(--jx-density-inline-inset-sm);
+  --jx-chip-radius: var(--jx-density-chip-radius-sm);
   --jx-gap-content: var(--jx-density-content-gap-sm);
   --jx-row-min: var(--jx-density-row-min-sm);
   --jx-hit: var(--jx-density-hit-min-sm);
   --jx-icon: var(--jx-density-media-icon-sm);
   --jx-image: var(--jx-density-media-image-sm);
   --jx-text-secondary: var(--jx-density-secondary-text-sm);
-  --jx-leading-secondary: var(--jx-density-secondary-leading);
+  --jx-leading-secondary: var(--jx-density-secondary-leading-default);
   --jx-line-secondary: var(--jx-density-secondary-line-sm);
   --jx-toggle-track: var(--jx-line);
   --jx-toggle-width: calc(var(--jx-toggle-track) * 2);
@@ -2197,13 +2229,14 @@ html:not(.js) .jx-surface.jx-waapi:popover-open .jx-surface-shadow {
   --jx-gap-end: var(--jx-density-end-gap-2xs);
   --jx-stack: var(--jx-density-stack-gap-2xs);
   --jx-inset: var(--jx-density-inline-inset-2xs);
+  --jx-chip-radius: var(--jx-density-chip-radius-2xs);
   --jx-gap-content: var(--jx-density-content-gap-2xs);
   --jx-row-min: var(--jx-density-row-min-2xs);
   --jx-hit: var(--jx-density-hit-min-2xs);
   --jx-icon: var(--jx-density-media-icon-2xs);
   --jx-image: var(--jx-density-media-image-2xs);
   --jx-text-secondary: var(--jx-density-secondary-text-2xs);
-  --jx-leading-secondary: var(--jx-density-secondary-leading);
+  --jx-leading-secondary: var(--jx-density-secondary-leading-lg);
   --jx-line-secondary: var(--jx-density-secondary-line-2xs);
   --jx-toggle-track: var(--jx-line);
   --jx-toggle-width: calc(var(--jx-toggle-track) * 2);

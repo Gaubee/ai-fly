@@ -17,9 +17,13 @@
  * tabs-list.svelte, RTL-normalized).
  *
  * Material law: line = 2px primary bar at the strip edge · pill =
- * tonal hug · outline = border hug · glass/liquid = backdrop hug
- * (liquid swaps its backdrop-filter for the SVG displacement filter
- * the list mounts). layout law: grow stretches the triggers · wrap
+ * tonal hug · outline = border hug · glass/liquid = backdrop hug —
+ * PAINTED BY THE SHARED glass law sheet off the data-jx-effect stamp
+ * (glass = the blur() frost member stamped in markup; liquid = the
+ * lens mounted by the liquidGlass action — the retired hand-tuned
+ * formulas and the inline displacement svg are gone). tabs keeps ONLY
+ * the indicator chrome here: border + radius + the forced-colors
+ * Canvas ground. layout law: grow stretches the triggers · wrap
  * flows rows · every horizontal strip degrades to a hidden-scrollbar
  * scroll run (the tablist IS the run) with DOM chevron buttons and
  * the merged veil layer over it (below). */
@@ -54,17 +58,23 @@
   border-radius: calc(var(--radius) - 2px);
   box-sizing: border-box;
 }
+/* glass/liquid CHROME ONLY (glass-effect design §6): the frost/lens
+ * paint lives in the glass law sheet keyed on the data-jx-effect
+ * stamp — no backdrop-filter or fill formula here (the one-formula
+ * boundary); tabs owns the border, the radius, and the forced-colors
+ * ground below */
 :where([data-jx-tabs-ind][data-material='glass']),
 :where([data-jx-tabs-ind][data-material='liquid']) {
-  backdrop-filter: blur(10px) saturate(1.5);
-  -webkit-backdrop-filter: blur(10px) saturate(1.5);
-  background: color-mix(in oklab, var(--background) 40%, transparent);
   border: 1px solid color-mix(in oklab, var(--foreground) 12%, transparent);
   border-radius: calc(var(--radius) - 2px);
 }
-:where([data-jx-tabs-ind][data-material='liquid']) {
-  backdrop-filter: var(--jx-tabs-liquid-bf, blur(10px) saturate(1.5));
-  -webkit-backdrop-filter: var(--jx-tabs-liquid-bf, blur(10px) saturate(1.5));
+/* forced-colors consumer ground (design §3 consumer map): a solid
+ * Canvas panel — geometry (border, radius, slide) untouched */
+@media (forced-colors: active) {
+  :where([data-jx-tabs-ind][data-material='glass']),
+  :where([data-jx-tabs-ind][data-material='liquid']) {
+    background: Canvas;
+  }
 }
 :where([data-layout='grow']) > [role='tab'] {
   flex: 1 1 0;

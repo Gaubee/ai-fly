@@ -86,6 +86,7 @@
 -->
 <script lang="ts">
   import { getContext, onMount, tick } from 'svelte';
+  import { fromAction } from 'svelte/attachments';
   import {
     SWIPE_BY_FLOAT_POS,
     type FloatPos,
@@ -102,6 +103,9 @@
   import { ToastDefaults } from './toast-defaults.svelte';
   import { frictionShift, judgeSwipe } from './toast-swipe';
   import './toast.css';
+  // the glass material rides the SHARED stamp channel (glass-effect
+  // design §6): the law sheet paints the frost off data-jx-effect
+  import '$lib/ui/glass/glass.css';
 
   interface Props {
     /** the app-created store (createToastStore()) */
@@ -674,8 +678,8 @@
   }
 
   // variant grammar: the ladder drives border + ink; MATERIAL picks the
-  // ground independently (popover solid default; glass = the backdrop-
-  // filter translucent — the entity law's restrained ground). Tonal
+  // ground independently (popover solid default; glass = the shared
+  // stamp channel's frost — the entity law's restrained ground). Tonal
   // tints 12% OVER the ground; the §6 forced-colors degradations ride
   // every rung.
   const variantBorder = {
@@ -684,7 +688,16 @@
   } as const;
   const materialGround = {
     popover: 'bg-popover forced-colors:bg-[Canvas]',
-    glass: 'bg-[color-mix(in_oklab,var(--popover)_55%,transparent)] backdrop-blur-md forced-colors:bg-[Canvas]',
+    // the glass member rides the SHARED stamp channel (glass-effect
+    // design §6): the law sheet (glass.css) paints the frost off
+    // data-jx-effect='blur'; the tuning vars ride the class string as
+    // arbitrary properties — the card's style attribute is JS-OWNED by
+    // the swipe (the wrapper's belongs to Svelte's stacking vars), so a
+    // Svelte style attr here is forbidden. Values 12px / saturate 1 /
+    // 55% fill = the retired backdrop-blur-md ground verbatim
+    // (computed-equivalence); the forced-colors Canvas ground stays.
+    glass:
+      '[--jx-glass-radius:12px] [--jx-glass-saturate:1] [--jx-glass-fill:color-mix(in_oklab,var(--popover)_55%,transparent)] forced-colors:bg-[Canvas]',
   } as const;
   const tonalGround = 'bg-[color-mix(in_oklab,var(--jx-tonal)_12%,var(--popover))]';
   const titleInk = {
@@ -743,7 +756,7 @@
            (Svelte owns this style attr; the swipe vars live on the
            visual card inside, which JS owns) -->
       <div
-        use:bindCard={item.id}
+        {@attach fromAction(bindCard, () => item.id)}
         class={`pointer-events-auto [grid-area:1/1] justify-self-stretch ${growsDown ? 'self-start' : 'self-end'}`}
         style={wrapperStyle(i, collapsedY, expandedY)}
         {...swipeHandlers(item)}
@@ -752,6 +765,7 @@
           data-jx-toast={variant}
           data-material={material}
           data-effect={item.effect && item.effect !== 'none' ? item.effect : undefined}
+          data-jx-effect={material === 'glass' ? 'blur' : undefined}
           class={cn(
             // the float-button material (Owner R3-5): the press law at
             // float scale — rest on --shadow, hover grows, active

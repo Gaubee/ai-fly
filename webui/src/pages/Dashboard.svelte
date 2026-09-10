@@ -9,6 +9,7 @@
   import Badge from "$lib/ui/badge";
   import PressButton from "$lib/ui/press-button";
   import Skeleton from "$lib/ui/skeleton";
+  import { t } from "$lib/i18n.svelte.ts";
   import Separator from "$lib/ui/separator";
   import { slide } from "svelte/transition";
   import StateBadge, { type ConsumerState } from "../components/StateBadge.svelte";
@@ -92,8 +93,8 @@
 
 <div class="mx-auto flex max-w-4xl flex-col gap-4 p-4 md:p-6">
   <header class="flex flex-wrap items-baseline justify-between gap-2">
-    <h1 class="font-nav text-base uppercase tracking-[0.1em]">Dashboard</h1>
-    <p class="text-xs text-muted-foreground">live status, updated by engine notifications</p>
+    <h1 class="font-nav text-base uppercase tracking-[0.1em]">{t("dash.title")}</h1>
+    <p class="text-xs text-muted-foreground">{t("dash.subtitle")}</p>
   </header>
 
   <!-- 首屏三步可达：空数据时只有两条向导大入口，无高级设置干扰。
@@ -101,7 +102,7 @@
        整卡不做 <a> 跳转。 -->
   {#if isEmpty}
     <div class="grid gap-4 sm:grid-cols-2" transition:slide={{ duration: 180 }}>
-      <Card title="share my services" scroll={false}>
+      <Card title={t("dash.entry.share.title")} scroll={false}>
         <div class="flex min-h-28 flex-col gap-2 p-3">
           <p class="text-sm leading-relaxed text-muted-foreground">
             Pick a source, name it, send one link. Your friend's agents reach your local models or
@@ -114,7 +115,7 @@
           </CardFooter>
         {/snippet}
       </Card>
-      <Card title="use a friend's link" scroll={false}>
+      <Card title={t("dash.entry.connect.title")} scroll={false}>
         <div class="flex min-h-28 flex-col gap-2 p-3">
           <p class="text-sm leading-relaxed text-muted-foreground">
             Paste an aifly1. link, confirm local ports, pick your agent. Ready to request in three
@@ -132,12 +133,12 @@
 
   <div class="grid gap-4 md:grid-cols-2">
     <!-- 提供方状态卡 -->
-    <Card title="provider" scroll={false}>
+    <Card title={t("dash.provider")} scroll={false}>
       {#snippet actions()}
         {#if provider?.running}
-          <Badge variant="tonal" class="jx-hue-success">running</Badge>
+          <Badge variant="tonal" class="jx-hue-success">{t("dash.running")}</Badge>
         {:else if provider !== null}
-          <Badge variant="tonal" class="jx-hue-neutral">stopped</Badge>
+          <Badge variant="tonal" class="jx-hue-neutral">{t("dash.stopped")}</Badge>
         {/if}
       {/snippet}
       {#if provider === null}
@@ -150,27 +151,27 @@
         <div class="flex flex-col gap-3 p-3">
           <dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
-              <dt class="text-muted-foreground">services</dt>
+              <dt class="text-muted-foreground">{t("dash.stat.services")}</dt>
               <dd class="font-mono">{provider.services}</dd>
             </div>
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
-              <dt class="text-muted-foreground">groups</dt>
+              <dt class="text-muted-foreground">{t("dash.stat.groups")}</dt>
               <dd class="font-mono">{provider.groups}</dd>
             </div>
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
-              <dt class="text-muted-foreground">active keys</dt>
+              <dt class="text-muted-foreground">{t("dash.stat.activeKeys")}</dt>
               <dd class="font-mono">{provider.activeKeys}</dd>
             </div>
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
-              <dt class="text-muted-foreground">revoked keys</dt>
+              <dt class="text-muted-foreground">{t("dash.stat.revokedKeys")}</dt>
               <dd class="font-mono">{provider.revokedKeys}</dd>
             </div>
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
-              <dt class="text-muted-foreground">online sessions</dt>
+              <dt class="text-muted-foreground">{t("dash.stat.sessions")}</dt>
               <dd class="font-mono">{provider.sessionCount}</dd>
             </div>
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
-              <dt class="text-muted-foreground">relay</dt>
+              <dt class="text-muted-foreground">{t("dash.stat.relay")}</dt>
               <dd class="font-mono">{provider.running ? provider.relayMode ?? "-" : "-"}</dd>
             </div>
           </dl>
@@ -194,19 +195,19 @@
             >
               {provider.running ? "stop daemon" : "start daemon"}
             </PressButton>
-            <PressButton variant="ghost" href="#/share" external={false}>share a service</PressButton>
+            <PressButton variant="ghost" href="#/share" external={false}>{t("dash.shareService")}</PressButton>
           </CardFooter>
         {/snippet}
       {/if}
     </Card>
 
     <!-- 使用方状态卡 -->
-    <Card title="consumer" scroll={false}>
+    <Card title={t("dash.consumer")} scroll={false}>
       {#snippet actions()}
         {#if consumer?.gatewayRunning}
-          <Badge variant="tonal" class="jx-hue-success">gateway running</Badge>
+          <Badge variant="tonal" class="jx-hue-success">{t("dash.gateway.running")}</Badge>
         {:else if consumer !== null}
-          <Badge variant="tonal" class="jx-hue-neutral">gateway stopped</Badge>
+          <Badge variant="tonal" class="jx-hue-neutral">{t("dash.gateway.stopped")}</Badge>
         {/if}
       {/snippet}
       {#if consumer === null}
@@ -217,7 +218,7 @@
       {:else}
         <div class="flex flex-col gap-2 p-3">
           {#if consumer.providers.length === 0}
-            <p class="text-xs text-muted-foreground">no providers imported yet</p>
+            <p class="text-xs text-muted-foreground">{t("dash.noProviders")}</p>
             <a class="text-xs text-primary underline-offset-2 hover:underline" href="#/connect">
               import a share link ->
             </a>
@@ -238,11 +239,11 @@
                 {/if}
                 {#if forgetConfirm === entry.endpointId}
                   <div class="flex items-center gap-2">
-                    <span class="text-[11px] text-muted-foreground">forget this provider (removes keys)?</span>
+                    <span class="text-[11px] text-muted-foreground">{t("dash.forgetConfirm")}</span>
                     <PressButton variant="tonal" class="jx-pair-destructive" loading={forgetBusy} onclick={() => void forgetProvider(entry.endpointId)}>
                       confirm forget
                     </PressButton>
-                    <PressButton variant="ghost" onclick={() => (forgetConfirm = "")}>cancel</PressButton>
+                    <PressButton variant="ghost" onclick={() => (forgetConfirm = "")}>{t("common.cancel")}</PressButton>
                   </div>
                 {:else}
                   <button
@@ -262,7 +263,7 @@
             <PressButton variant="outline" loading={gatewayBusy} onclick={() => void toggleGateway()}>
               {consumer.gatewayRunning ? "stop gateway" : "start gateway"}
             </PressButton>
-            <PressButton variant="ghost" href="#/connect" external={false}>import a link</PressButton>
+            <PressButton variant="ghost" href="#/connect" external={false}>{t("dash.importLink")}</PressButton>
           </CardFooter>
         {/snippet}
       {/if}
@@ -270,7 +271,7 @@
   </div>
 
   <!-- 端口表 -->
-  <Card title="local ports" scroll={false}>
+  <Card title={t("dash.ports.title")} scroll={false}>
     {#if portRows.length === 0}
       <p class="p-3 text-xs text-muted-foreground">
         no ports yet - they appear after sharing or importing services.
@@ -279,10 +280,10 @@
       <table class="w-full text-xs">
         <thead>
           <tr class="border-b border-border text-left font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
-            <th class="px-3 py-2 font-normal">service</th>
-            <th class="px-3 py-2 font-normal">port</th>
-            <th class="px-3 py-2 font-normal">provider</th>
-            <th class="px-3 py-2 font-normal">state</th>
+            <th class="px-3 py-2 font-normal">{t("dash.ports.service")}</th>
+            <th class="px-3 py-2 font-normal">{t("dash.ports.port")}</th>
+            <th class="px-3 py-2 font-normal">{t("dash.ports.provider")}</th>
+            <th class="px-3 py-2 font-normal">{t("dash.ports.state")}</th>
           </tr>
         </thead>
         <tbody>
@@ -301,7 +302,7 @@
 
   <Separator />
   <p class="text-[11px] text-muted-foreground">
-    engine internals (match sets, rewrite rules, keys) live in
-    <a class="text-primary underline-offset-2 hover:underline" href="#/advanced">Advanced</a>.
+    {t("dash.footer.pre")}
+    <a class="text-primary underline-offset-2 hover:underline" href="#/advanced">{t("shell.nav.advanced")}</a>.
   </p>
 </div>

@@ -17,10 +17,13 @@
   two-part contract + the icon-only posture. Every press-button
   capability passes through verbatim: the paint variants (fill …
     link — the variant-grammar ladder, imported not re-declared), the
-    effect loops (shimmer/pulse/rainbow/ripple), href/
-    external anchoring, type, class, the raised physics axis (the
-    foot-flat zone reaches the square through the child's own ambient
-    read — same tree, same window, Owner 2026-09-04), and the
+    component-tag effect attachments (the rest lane CHAINS — this
+    component's spread forwards the symbol-keyed prop into the child's
+    own rest, which lands on the button element: `<IconButton
+    {@attach pressEffect(shimmer())}>`, r4 effect-attachments §3),
+    href/external anchoring, type, class, the raised physics axis
+    (the foot-flat zone reaches the square through the child's own
+    ambient read — same tree, same window, Owner 2026-09-04), and the
     paint-zone context
   adoption (an absent variant adopts the zone/group's rung —
   explicit still wins). Since context-defaults-economy 2.1 the
@@ -36,14 +39,24 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import type { Density } from '$lib/density.svelte';
+  import type { HTMLAttributes } from 'svelte/elements';
   import PressButton, {
     type PressButtonVariant,
-    type PressEffect,
   } from '$lib/ui/press-button/press-button.svelte';
   import Tooltip from '$lib/ui/tooltip/tooltip.svelte';
   import { IconButtonDefaults } from './icon-button-defaults.svelte';
 
-  interface Props {
+  /* the REST LANE (floating-flesh-sweep, 2026-09-09): forwarded
+   * VERBATIM into the wrapped press-button — arbitrary attributes land
+   * on the control root; the family's typed props win by spread order.
+   * The component-tag ATTACHMENT chains through it (r4): the
+   * symbol-keyed prop from `<IconButton {@attach …}>` rides this
+   * spread into press-button's OWN rest lane, which lands it on the
+   * button element — one mechanism, two hops */
+  interface Props extends Omit<
+    HTMLAttributes<HTMLElement>,
+    'onclick' | 'class' | 'style' | 'type' | 'aria-label'
+  > {
     /** DENSITY override forwarded to the press-button control root */
     density?: Density;
     /** the glyph — always decorative; an svg or character snippet */
@@ -81,8 +94,6 @@
      *  placement names (on by default — a square trigger reads best with
      *  the pin; opt out for plain bubbles) */
     arrow?: boolean;
-    /** the one opt-in effect loop — shimmer()/pulse()/rainbow()/ripple() */
-    effect?: PressEffect;
     href?: string;
     /** Opens non-internal hrefs (not starting with "/") in a new tab. */
     external?: boolean;
@@ -104,13 +115,13 @@
     tip = true,
     placement,
     arrow = true,
-    effect = undefined,
     href,
     external = undefined,
     onclick,
     type = 'button',
     popovertarget = undefined,
     class: className = '',
+    ...rest
   }: Props = $props();
 
   // THE single read point (the restate lane, X2-11): the restated
@@ -124,11 +135,11 @@
 
 {#snippet control()}
   <PressButton
+    {...rest}
     density={d.density}
     variant={d.variant}
     {raised}
     square={iconOnly}
-    {effect}
     {href}
     {external}
     {onclick}

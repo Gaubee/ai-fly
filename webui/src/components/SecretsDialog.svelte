@@ -4,7 +4,8 @@
      前缀开关（编辑回填既有条目值）；空态引导。open 由选择器持有；
      onpick 在新增/覆写成功后回选通知。 -->
 <script lang="ts">
-  import Dialog, { DialogFooter } from "$lib/ui/dialog";
+  import Dialog from "$lib/ui/dialog";
+  import { CardFooter } from "$lib/ui/card";
   import PressButton from "$lib/ui/press-button";
   import Input from "$lib/ui/input";
   import Separator from "$lib/ui/separator";
@@ -170,8 +171,8 @@
   </div>
 
   {#snippet footer()}
-    <DialogFooter label="secrets dialog actions">
+    <CardFooter label="secrets dialog actions">
       <PressButton variant="fill" onclick={() => (open = false)}>done</PressButton>
-    </DialogFooter>
+    </CardFooter>
   {/snippet}
 </Dialog>

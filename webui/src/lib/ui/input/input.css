@@ -305,6 +305,18 @@
     position: relative;
     /* room for the bracket's upper half overhanging the border */
     margin-block-start: 0.625rem;
+    /* the floating-label ladder (z1 over the lane) is component-
+       PRIVATE: the positioned host roots it (the isolation clause,
+       css-architecture 2026-09-09 — the deferred class-(a) tail
+       cleared) */
+    isolation: isolate;
+  }
+  /* the picker-overlay ladder (z1 activation surrogate over the
+     lane): the shell isolates when it carries one — the file's own
+     :has idiom; the color-picker twin rides .jx-color-shell's own
+     isolation in jx-pure.css (same clause) */
+  :where(.jx-html-control-shell:has(.jx-picker-overlay)) {
+    isolation: isolate;
   }
   :where(.jx-floating-label) {
     position: absolute;
