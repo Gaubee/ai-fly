@@ -41,8 +41,9 @@ node scripts/release.mjs patch       # 或 patch / minor / major 自动递增
 之后 CI（`.github/workflows/release.yml`）接管：
 
 - `v*` tag 触发 → install → typecheck → vitest → build（tsdown）→
-  **tag/version guard** → `npm publish --provenance`（trusted publishing/OIDC，
-  无 token；npm 侧配置：package `ai-fly` ↔ repo `Gaubee/ai-fly` ↔ workflow
+  **tag/version guard** → `npm publish`（trusted publishing/OIDC，
+  无 token，无 provenance——npm 溯源仅支持 public 源仓库，仓库转 public 后在
+  release.yml 加回 `--provenance`；npm 侧配置：package `ai-fly` ↔ repo `Gaubee/ai-fly` ↔ workflow
   `release.yml` ↔ environment `npm-publish`）→ GitHub Release（自动 notes）。
 
 ## 4. 发布后核验
