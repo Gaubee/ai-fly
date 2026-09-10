@@ -1,17 +1,18 @@
-<!-- 应用骨架（B 3.1）：左侧导航（Dashboard / 分享向导 / 接入向导 / 高级设置）
-     + theme-toggle + 连接横幅 + hash 路由出口 + ToastViewport。
+<!-- 应用骨架（B 3.1）：顶部 appHeader（品牌 + 连接状态 + theme-toggle，
+     全部 inline-end 挂状态件）+ 左侧导航（Dashboard / 分享向导 / 接入向导 /
+     高级设置）+ hash 路由出口 + ToastViewport。
      空数据首屏由 Dashboard 渲染（两条向导大入口卡，spec「首屏三步可达」）。
      桌面 overlay 安全区（m3 2.1/2.2，Owner 裁决 2026-09-10 修订）：--ot-inset-left
-     只描述左上角控件矩形，必须搭配 --ot-inset-top 消费在 header 上——header 高度
-     ≥ inset-top，padding-inline-start/end = inset-left/right；整列/整行不再摊派。
-     header 同时是拖拽带（pointerdown → startAppRegionDrag）；浏览器 dev 归零无假象。 -->
+     只描述左上角控件矩形，必须搭配 --ot-inset-top 消费在 header 上——header
+     高度 ≥ inset-top，padding-inline-start/end = inset-left/right；整列/整行不再摊派。
+     header 同时是拖拽带（pointerdown → startAppRegionDrag）；header 内有交互元素
+     （theme-toggle），拖拽守卫跳过 button/a 等命中；浏览器 dev 归零无假象。 -->
 <script lang="ts">
   import { onMount } from "svelte";
   import ToastViewport from "$lib/ui/toast";
   import ThemeToggle from "$lib/ui/theme-toggle";
-  import Separator from "$lib/ui/separator";
   import { router, type RouteId } from "$lib/router.svelte.ts";
-  import { overlay, startOverlay, beginWindowDrag } from "$lib/overlay.svelte.ts";
+  import { startOverlay, beginWindowDrag } from "$lib/overlay.svelte.ts";
   import { rpcState } from "./stores/rpc.svelte.ts";
   import { startApp } from "./stores/app.svelte.ts";
   import { toast } from "./stores/toast.svelte.ts";
@@ -34,44 +35,51 @@
   ];
 
   const disconnected = $derived(rpcState.status !== "open");
+
+  /** header 拖拽守卫：命中交互元素（theme-toggle 等）不触发窗口拖拽。 */
+  function onHeaderPointerDown(event: PointerEvent & { currentTarget: EventTarget & HTMLElement }): void {
+    if ((event.target as HTMLElement).closest("button, a, input, select, textarea, [role='button']") !== null) return;
+    beginWindowDrag();
+  }
 </script>
 
 <div class="jx-pure flex h-dvh flex-col bg-background text-foreground">
-  <!-- 标题带 header（仅 overlay 可见时渲染）：高度 ≥ --ot-inset-top（保底 28px 可抓），
-       padding-inline 承接左/右控件矩形（红绿灯 / Windows caption）。整条即拖拽带，
-       内不放交互元素；原生控件由系统绘制于更上层，不必挖洞。 -->
-  {#if overlay.dragEnabled}
-    <header
-      class="flex shrink-0 cursor-default select-none"
-      style="height: max(var(--ot-inset-top, 0px), 28px); padding-inline-start: var(--ot-inset-left, 0px); padding-inline-end: var(--ot-inset-right, 0px)"
-      aria-hidden="true"
-      onpointerdown={beginWindowDrag}
-    ></header>
-  {/if}
-
-  <!-- 连接横幅：rpc 通道断开（connecting/reconnecting）时置顶提示。
-       横幅内无交互元素，pointerdown 同样可作为拖拽带（桌面 overlay 形态）。 -->
-  {#if disconnected}
-    <div
-      class="flex items-center gap-2 border-b border-border bg-muted/60 px-3 py-1.5 font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground"
-      role="status"
-      onpointerdown={beginWindowDrag}
-    >
-      <span class="size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true"></span>
-      {rpcState.status === "connecting"
-        ? "connecting to the local ai-fly service..."
-        : "connection lost - reconnecting..."}
+  <!-- appHeader：品牌 inline-start（单行——font-nav 纵向度量大，双行会溢出
+       固定高度；min-height 而非 height，内容再高也撑开不裁切）；inline-end
+       = 连接状态（合并原连接横幅与左下角 offline 指示）+ theme-toggle。
+       高度 ≥ --ot-inset-top（保底 44px），padding-inline 承接左/右控件矩形
+       （红绿灯 / Windows caption）；原生控件由系统绘制于更上层。 -->
+  <header
+    role="presentation"
+    class="flex shrink-0 select-none items-center justify-between gap-2 border-b border-border bg-muted/30"
+    style="min-height: max(var(--ot-inset-top, 0px), 44px); padding-inline-start: calc(var(--ot-inset-left, 0px) + 0.75rem); padding-inline-end: calc(var(--ot-inset-right, 0px) + 0.75rem)"
+    onpointerdown={onHeaderPointerDown}
+  >
+    <div class="flex min-w-0 items-baseline gap-2">
+      <span class="flex-none font-nav text-sm leading-none tracking-[0.08em]">ai-fly</span>
+      <span class="truncate text-[10px] leading-none text-muted-foreground">share services, simply</span>
     </div>
-  {/if}
+    <div class="flex flex-none items-center gap-3">
+      <span
+        class="flex items-center gap-1.5 font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground"
+        role="status"
+        aria-live="polite"
+      >
+        <span
+          class="size-1.5 rounded-full {disconnected
+            ? 'animate-pulse bg-muted-foreground/60'
+            : 'bg-primary'}"
+          aria-hidden="true"
+        ></span>
+        {disconnected ? (rpcState.status === "connecting" ? "connecting" : "reconnecting") : "online"}
+      </span>
+      <ThemeToggle variant="compact" />
+    </div>
+  </header>
 
   <div class="flex min-h-0 flex-1">
-    <!-- 左侧导航：控件避让全部由上方 header 承担，导航从 header 下缘开始 -->
+    <!-- 左侧导航：品牌与状态件已上移 appHeader，控件避让由 header 承担 -->
     <nav class="flex w-44 shrink-0 flex-col border-r border-border bg-muted/30" aria-label="main">
-      <div class="px-3 py-3">
-        <span class="font-nav text-sm tracking-[0.08em]">ai-fly</span>
-        <p class="mt-0.5 text-[10px] text-muted-foreground">share services, simply</p>
-      </div>
-      <Separator />
       <div class="flex flex-col gap-0.5 p-2">
         {#each NAV as item (item.id)}
           <a
@@ -86,16 +94,6 @@
             <span class="text-[10px] leading-tight">{item.hint}</span>
           </a>
         {/each}
-      </div>
-      <div class="mt-auto flex flex-col gap-2 p-3">
-        <div class="flex items-center gap-2 font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
-          <span
-            class="size-1.5 rounded-full {disconnected ? 'bg-muted-foreground/40' : 'bg-primary'}"
-            aria-hidden="true"
-          ></span>
-          {disconnected ? "offline" : "online"}
-        </div>
-        <ThemeToggle variant="compact" />
       </div>
     </nav>
 
