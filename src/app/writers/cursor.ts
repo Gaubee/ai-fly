@@ -9,7 +9,7 @@
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import type { ResolvedTarget, WriterContext, WriterModule } from "./common.ts";
-import { readJsonObjectFromText, serializeJson } from "./common.ts";
+import { openAiChatBase, readJsonObjectFromText, serializeJson } from "./common.ts";
 
 export const CURSOR_PLACEHOLDER_KEY = "sk-aifly-local";
 
@@ -32,7 +32,7 @@ export const cursorWriter: WriterModule = {
   configPath: cursorSettingsPath,
   compose(existing: string | null, target: ResolvedTarget): string {
     const root = readJsonObjectFromText(existing ?? "", "Cursor settings.json");
-    root["openai.baseUrl.experimental"] = target.baseUrl;
+    root["openai.baseUrl.experimental"] = openAiChatBase(target);
     root["openai.apiKey"] = CURSOR_PLACEHOLDER_KEY;
     return serializeJson(root);
   },

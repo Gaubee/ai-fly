@@ -209,7 +209,7 @@ describe("orpc over ws", () => {
 
 
     const presets = await client.presets.list({});
-    expect(presets.curated.length).toBeGreaterThanOrEqual(18);
+    expect(presets.curated.length).toBeGreaterThanOrEqual(3);
     expect(presets.modelsDev).toEqual([]); // settings 关闭 → 空长尾
     expect(presets.modelsDevError).toContain("disabled");
 
@@ -219,12 +219,17 @@ describe("orpc over ws", () => {
     // 预设 → 服务（展开走 services.add 同一校验路径）
     const applied = await client.presets.applyAsService({ presetId: "openai" });
     expect(applied.service.name).toBe("openai");
-    expect(applied.service.upstream).toBe("https://api.openai.com/v1");
+    // M3-r4：openai 预设 base 去掉 /v1（路由模型接管版本段），href 规范化带尾斜杠
+    expect(applied.service.upstream).toBe("https://api.openai.com/");
     expect(applied.service.defaultPort).toBe(4300);
     expect(applied.service.match).toEqual([{ type: "suffix", value: "api.openai.com" }]);
     expect(applied.service.rewrite).toEqual({
       headerSet: { authorization: "$env:OPENAI_API_KEY" },
     });
+    expect(applied.service.routes).toEqual([
+      { form: "openai-chat", upstreamPrefix: "" },
+      { form: "openai-responses", upstreamPrefix: "" },
+    ]);
     expect(applied.envHint).toContain("OPENAI_API_KEY");
 
     // secretName 优先于 keyEnv：rewrite 写 $secret:<name>，不给 envHint

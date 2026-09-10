@@ -1,8 +1,9 @@
 // codex 写手：~/.codex/config.toml（官方约定路径）。
-// 语义：[model_providers.ai-fly] 表——base_url 指向所选服务本地端点（路径合成
-// 交给服务的 upstream：openai 形上游自带 /v1，本地端点不追加路径）；
-// env_key 指向本机占位密钥（本地凭据不参与授权：网关剥离凭据头，跨网凭据走
-// fabric 钥环）。
+// 语义：[model_providers.ai-fly] 表——base_url 指向所选服务本地端点。服务声明
+// openai-responses 路由时走 responses wire_api（base = 标准前缀 + /v1，codex
+// 追加 /responses）；否则沿用 chat + 裸 base（路径合成交给 upstream 自带的
+// /v1——旧行为）。env_key 指向本机占位密钥（本地凭据不参与授权：网关剥离
+// 凭据头，跨网凭据走 fabric 钥环）。
 // TOML 编辑策略：文本级手术——只替换 [model_providers.ai-fly] 块（到下一个
 // 表头或 EOF），其余行逐字保留（避免全量重序列化重排/丢注释）。
 
@@ -12,12 +13,15 @@ import type { WriterContext, ResolvedTarget, WriterModule } from "./common.ts";
 const SECTION_HEADER = "[model_providers.ai-fly]";
 
 function buildSection(target: ResolvedTarget): string {
+  const responsesBase = target.formBase?.["openai-responses"];
+  const baseUrl = responsesBase === undefined ? target.baseUrl : `${responsesBase}/v1`;
+  const wireApi = responsesBase === undefined ? "chat" : "responses";
   return [
     SECTION_HEADER,
     'name = "ai-fly"',
-    `base_url = "${target.baseUrl}"`,
+    `base_url = "${baseUrl}"`,
     'env_key = "AIFLY_API_KEY"',
-    'wire_api = "chat"',
+    `wire_api = "${wireApi}"`,
     "# managed by ai-fly - local auth is a placeholder; credentials ride the fabric keyring",
   ].join("\n");
 }

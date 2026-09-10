@@ -247,3 +247,58 @@ describe("WS 升级识别", () => {
     expect(buildUpstreamRequest(makeService(), makeReq(), {}).isWebSocketUpgrade).toBe(false);
   });
 });
+
+describe("按标准路由（M3-r4）", () => {
+  const deepseek = makeService({
+    upstream: "https://api.deepseek.com",
+    routes: [
+      { form: "openai-chat", upstreamPrefix: "" },
+      { form: "anthropic", upstreamPrefix: "/anthropic" },
+    ],
+  });
+
+  it("DeepSeek anthropic 形态：/anthropic/v1/messages -> /anthropic/v1/messages", () => {
+    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/anthropic/v1/messages" }), {});
+    expect(plan.url.href).toBe("https://api.deepseek.com/anthropic/v1/messages");
+  });
+
+  it("DeepSeek openai 形态：/openai/v1/chat/completions -> /v1/chat/completions", () => {
+    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/openai/v1/chat/completions" }), {});
+    expect(plan.url.href).toBe("https://api.deepseek.com/v1/chat/completions");
+  });
+
+  it("段边界：/anthropicapi 不命中 anthropic 路由（原样透传）", () => {
+    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/anthropicapi/v1" }), {});
+    expect(plan.url.pathname).toBe("/anthropicapi/v1");
+  });
+
+  it("未命中路径原样透传（旧行为不变）", () => {
+    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/v1/chat/completions" }), {});
+    expect(plan.url.href).toBe("https://api.deepseek.com/v1/chat/completions");
+  });
+
+  it("路由前缀根命中：/anthropic -> upstream /anthropic", () => {
+    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/anthropic" }), {});
+    expect(plan.url.pathname).toBe("/anthropic");
+  });
+
+  it("upstream 带基础路径时拼接在映射后：base /api + route /anthropic/v1/x -> /api/v1/x", () => {
+    const service = makeService({
+      upstream: "https://agg.test/api",
+      routes: [{ form: "anthropic", upstreamPrefix: "" }],
+    });
+    const plan = buildUpstreamRequest(service, makeReq({ path: "/anthropic/v1/messages" }), {});
+    expect(plan.url.href).toBe("https://agg.test/api/v1/messages");
+  });
+
+  it("query 保留在映射后", () => {
+    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/openai/v1/models?list=1" }), {});
+    expect(plan.url.pathname).toBe("/v1/models");
+    expect(plan.url.search).toBe("?list=1");
+  });
+
+  it("无路由服务行为与从前完全一致（回归）", () => {
+    const plan = buildUpstreamRequest(makeService(), makeReq({ path: "/v1/chat" }), {});
+    expect(plan.url.href).toBe("http://127.0.0.1:11434/v1/chat");
+  });
+});

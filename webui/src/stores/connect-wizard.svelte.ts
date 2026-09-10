@@ -1,10 +1,11 @@
 // 使用方接入向导状态机（B 3.3，#/connect 三步）：
 // ①粘贴链接（离线 preview：别名/分组/服务表）→ ②端口确认（apply 即导入+
 // 网关启动；实际端口表 + 冲突自动错开标注 + 可改）→ ③Agent 配置（服务 +
-// Agent 选择 → writers.preview 渲染 diff → writers.apply 确认写入）。
+// Agent 选择（NativeSelect，skip 永远可达）+ 按标准 API endpoints 呈现与
+// 行内连通测试（M3-r4）→ writers.preview 渲染 diff → writers.apply 确认写入）。
 // 每步可回退（apply 之后回退到①仅重看 preview，不重复导入）。
 import { toRpcError, type RpcError } from "$lib/rpc-client";
-import type { WriterAgent } from "$shared/rpc-contract.ts";
+import type { RouteForm, WriterAgent } from "$shared/rpc-contract.ts";
 import type { RpcClient } from "$lib/rpc-client";
 import { call } from "./rpc.svelte.ts";
 import { toastRpcError, toastSuccess } from "./toast.svelte.ts";
@@ -14,6 +15,17 @@ type Out<Fn> = Fn extends (...args: never[]) => Promise<infer R> ? R : never;
 export type ImportPreviewView = Out<RpcClient["consumer"]["import"]["preview"]>;
 export type ImportApplyView = Out<RpcClient["consumer"]["import"]["apply"]>;
 export type WriterPreviewView = Out<RpcClient["writers"]["preview"]>;
+export type RouteTestOutput = Out<RpcClient["consumer"]["services"]["test"]>;
+
+/**
+ * 消费侧服务条目 detail.routes 的手写镜像（wire 形状见 SERVICE_ENTRY_SCHEMA；
+ * 不引 zod）。import.apply 输出不带 detail，路由披露经 consumer.status 的
+ * 服务条目携带——refreshImportedPorts 顺带捕获成 serviceId → routes 表。
+ */
+export interface ServiceRouteView {
+  form: RouteForm;
+  upstreamPrefix: string;
+}
 
 /** Agent 清单（含 skip：仅导入，不写任何配置）。 */
 export const AGENT_OPTIONS: ReadonlyArray<{ value: WriterAgent | "skip"; label: string }> = [
@@ -72,6 +84,13 @@ export const connectW = $state({
   writerApplyBusy: false,
   writerError: null as RpcError | null,
   writerDone: false,
+  // ③（M3-r4）按标准路由与连通测试
+  /** serviceId → 声明的按标准路由（缺项 = legacy 透传；来自 consumer.status 披露）。 */
+  serviceRoutes: {} as Record<string, ServiceRouteView[]>,
+  /** 连通测试在途的 form（null = 空闲；单飞防重入）。 */
+  testBusy: null as RouteForm | null,
+  /** 连通测试结果（per-form；RPC 层失败合成为 ok=false 结果就地展示）。 */
+  testResults: {} as Partial<Record<RouteForm, RouteTestOutput>>,
 });
 
 /** 重置向导。 */
@@ -97,6 +116,9 @@ export function resetConnect(): void {
   connectW.writerApplyBusy = false;
   connectW.writerError = null;
   connectW.writerDone = false;
+  connectW.serviceRoutes = {};
+  connectW.testBusy = null;
+  connectW.testResults = {};
 }
 
 /** ① 预览（离线解析，坏链接就地报错）。 */
@@ -155,6 +177,13 @@ async function refreshImportedPorts(endpointId: string): Promise<void> {
   ]);
   const storageRow = portsResult.providers.find((row) => row.endpointId === endpointId);
   const liveRow = statusResult.providers.find((row) => row.endpointId === endpointId);
+  // M3-r4：status 的服务条目（wire ServiceEntry 形状）携带 detail.routes 披露
+  // → 捕获成 serviceId → routes 表，③ 步端点区与可用性判定消费
+  const routesById: Record<string, ServiceRouteView[]> = {};
+  for (const service of liveRow?.services ?? []) {
+    if (service.detail?.routes !== undefined) routesById[service.serviceId] = service.detail.routes;
+  }
+  connectW.serviceRoutes = routesById;
   const rows: PortRowView[] = (storageRow?.services ?? []).map((service) => {
     const port = liveRow?.ports[service.serviceId] ?? service.port;
     return {
@@ -207,10 +236,11 @@ export async function applyImport(): Promise<void> {
   }
 }
 
-/** ② → ③。 */
+/** ② → ③（进入时重刷端口——网关刚启动的 auto-assign 此时已生效）。 */
 export function portsNext(): void {
   if (connectW.applied === null) return;
   connectW.step = 3;
+  void refreshWizardPorts();
   void refreshWriterPreview();
 }
 
@@ -289,4 +319,29 @@ export async function applyWriter(): Promise<void> {
 /** ③ 完成（skip 或写完）→ 通知刷新（Dashboard 引导按钮由页面渲染）。 */
 export function finishConnect(): void {
   refresh("consumer", "ports");
+}
+
+/**
+ * ③ 按标准连通测试（M3-r4）：对本机网关端口走完整 wire 链路的最小请求。
+ * RPC 层失败（网络/超时等，未拿到 test 输出）合成为 ok=false 结果就地展示；
+ * 不发 toast——行内结果区已是展示面，避免双重噪音。
+ */
+export async function testServiceRoute(form: RouteForm): Promise<void> {
+  if (connectW.testBusy !== null || connectW.agentServiceId === "") return;
+  connectW.testBusy = form;
+  connectW.testResults[form] = undefined; // 在途时清掉旧结果，避免陈旧 ok 残留
+  try {
+    connectW.testResults[form] = await call((c) =>
+      c.consumer.services.test({ serviceId: connectW.agentServiceId, form }),
+    );
+  } catch (error) {
+    connectW.testResults[form] = {
+      ok: false,
+      latencyMs: 0,
+      request: { method: "POST", url: "" },
+      error: toRpcError(error).message,
+    };
+  } finally {
+    connectW.testBusy = null;
+  }
 }

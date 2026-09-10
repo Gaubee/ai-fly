@@ -36,7 +36,7 @@ afterEach(() => {
 describe("curated presets", () => {
   it("loads and validates against the contract schema", () => {
     const curated = loadCuratedPresets();
-    expect(curated.length).toBeGreaterThanOrEqual(18);
+    expect(curated.length).toBeGreaterThanOrEqual(3);
     for (const preset of curated) {
       expect(preset.baseUrl).toMatch(/^https?:\/\//);
       expect(preset.defaultPort).toBeGreaterThanOrEqual(1024); // 特权端口须避开
@@ -45,29 +45,28 @@ describe("curated presets", () => {
     }
   });
 
-  it("covers the spec-mandated provider list", () => {
+  it("covers the M3-r4 curated list (OpenAI/Anthropic/DeepSeek)", () => {
     const ids = new Set(loadCuratedPresets().map((p) => p.id));
-    const required = [
-      "openai",
-      "anthropic",
-      "gemini",
-      "openrouter",
-      "deepseek",
-      "zai",
-      "zai-coding",
-      "zai-cn",
-      "moonshot",
-      "moonshot-anthropic",
-      "minimax",
-      "qwen-token-plan",
-      "github-copilot",
-      "groq",
-      "xai",
-      "together",
-      "ollama",
-      "lmstudio",
-    ];
+    const required = ["openai", "anthropic", "deepseek"];
     for (const id of required) expect(ids.has(id), `missing preset: ${id}`).toBe(true);
+  });
+
+  it("M3-r4 按标准路由：deepseek 双标准（anthropic → /anthropic）、openai 双 openai 形态", () => {
+    const curated = loadCuratedPresets();
+    const deepseek = curated.find((p) => p.id === "deepseek")!;
+    expect(deepseek.routes).toEqual(
+      expect.arrayContaining([
+        { form: "openai-chat", upstreamPrefix: "" },
+        { form: "anthropic", upstreamPrefix: "/anthropic" },
+      ]),
+    );
+    const openai = curated.find((p) => p.id === "openai")!;
+    expect(openai.routes).toEqual([
+      { form: "openai-chat", upstreamPrefix: "" },
+      { form: "openai-responses", upstreamPrefix: "" },
+    ]);
+    const anthropic = curated.find((p) => p.id === "anthropic")!;
+    expect(anthropic.routes).toEqual([{ form: "anthropic", upstreamPrefix: "" }]);
   });
 
   it("has unique ids and ports", () => {
@@ -76,24 +75,10 @@ describe("curated presets", () => {
     expect(new Set(curated.map((p) => p.defaultPort)).size).toBe(curated.length);
   });
 
-  it("local runtime templates carry no keyEnv", () => {
-    const curated = loadCuratedPresets();
-    for (const id of ["ollama", "lmstudio"]) {
-      const preset = curated.find((p) => p.id === id);
-      expect(preset).toBeDefined();
-      expect(preset!.keyEnv).toBeUndefined();
-    }
-    // 远端预设都有 keyEnv 建议
-    for (const preset of curated.filter((p) => p.id !== "ollama" && p.id !== "lmstudio")) {
+  it("remote presets declare keyEnv", () => {
+    for (const preset of loadCuratedPresets()) {
       expect(preset.keyEnv, `${preset.id} should declare keyEnv`).toBeDefined();
     }
-  });
-
-  it("covers all three api forms (protocol diversity)", () => {
-    const forms = new Set(loadCuratedPresets().map((p) => p.apiForm));
-    expect(forms.has("openai-completions")).toBe(true);
-    expect(forms.has("anthropic-messages")).toBe(true);
-    expect(forms.has("gemini-native")).toBe(true);
   });
 });
 

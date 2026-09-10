@@ -9,7 +9,7 @@
 import { platform } from "node:os";
 import { join } from "node:path";
 import type { ResolvedTarget, WriterContext, WriterModule } from "./common.ts";
-import { readJsonObjectFromText, serializeJson } from "./common.ts";
+import { openAiChatBase, readJsonObjectFromText, serializeJson } from "./common.ts";
 
 export const CLINE_PLACEHOLDER_KEY = "sk-aifly-local";
 
@@ -32,7 +32,7 @@ export const clineWriter: WriterModule = {
   configPath: vscodeUserSettingsPath,
   compose(existing: string | null, target: ResolvedTarget): string {
     const root = readJsonObjectFromText(existing ?? "", "VS Code settings.json");
-    root["cline.openAiBaseUrl"] = target.baseUrl;
+    root["cline.openAiBaseUrl"] = openAiChatBase(target);
     root["cline.openAiApiKey"] = CLINE_PLACEHOLDER_KEY;
     return serializeJson(root);
   },

@@ -71,6 +71,9 @@ const checkAddInput: AssertEqual<
           headerRemove?: string[] | undefined;
         }
       | undefined;
+    routes?:
+      | Array<{ form: "openai-chat" | "openai-responses" | "anthropic"; upstreamPrefix: string }>
+      | undefined;
   }
 > = true;
 void checkAddInput;

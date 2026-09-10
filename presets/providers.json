@@ -5,13 +5,17 @@
       "id": "openai",
       "label": "OpenAI",
       "apiForm": "openai-completions",
-      "baseUrl": "https://api.openai.com/v1",
+      "baseUrl": "https://api.openai.com",
       "keyEnv": "OPENAI_API_KEY",
       "defaultPort": 4300,
       "matchDomains": [
         "api.openai.com"
       ],
-      "notes": "Official OpenAI API. $env injection expects the full header value, e.g. OPENAI_API_KEY='Bearer <key>'.",
+      "routes": [
+        { "form": "openai-chat", "upstreamPrefix": "" },
+        { "form": "openai-responses", "upstreamPrefix": "" }
+      ],
+      "notes": "Official OpenAI API: chat completions + responses. $env injection expects the full header value, e.g. OPENAI_API_KEY='Bearer <key>'.",
       "source": "https://models.dev/api.json (@ai-sdk/openai default base URL)"
     },
     {
@@ -24,35 +28,11 @@
       "matchDomains": [
         "api.anthropic.com"
       ],
+      "routes": [
+        { "form": "anthropic", "upstreamPrefix": "" }
+      ],
       "notes": "Anthropic Messages API (Claude models). Also the protocol claude-code speaks natively.",
       "source": "https://models.dev/api.json (@ai-sdk/anthropic default base URL)"
-    },
-    {
-      "id": "gemini",
-      "label": "Google Gemini",
-      "apiForm": "gemini-native",
-      "baseUrl": "https://generativelanguage.googleapis.com",
-      "iconId": "google",
-      "keyEnv": "GEMINI_API_KEY",
-      "defaultPort": 4302,
-      "matchDomains": [
-        "generativelanguage.googleapis.com"
-      ],
-      "notes": "Native Gemini API. An OpenAI-compatible surface also exists at /v1beta/openai (models.dev records both).",
-      "source": "https://models.dev/api.json (@ai-sdk/google default base URL)"
-    },
-    {
-      "id": "openrouter",
-      "label": "OpenRouter",
-      "apiForm": "openai-completions",
-      "baseUrl": "https://openrouter.ai/api/v1",
-      "keyEnv": "OPENROUTER_API_KEY",
-      "defaultPort": 4303,
-      "matchDomains": [
-        "openrouter.ai"
-      ],
-      "notes": "Aggregator over many providers; single key, OpenAI-compatible.",
-      "source": "https://models.dev/api.json"
     },
     {
       "id": "deepseek",
@@ -64,181 +44,12 @@
       "matchDomains": [
         "api.deepseek.com"
       ],
-      "notes": "OpenAI-compatible.",
-      "source": "https://models.dev/api.json"
-    },
-    {
-      "id": "zai",
-      "label": "z.ai (GLM, global)",
-      "apiForm": "openai-completions",
-      "baseUrl": "https://api.z.ai/api/paas/v4",
-      "keyEnv": "ZHIPU_API_KEY",
-      "defaultPort": 4305,
-      "matchDomains": [
-        "api.z.ai"
+      "routes": [
+        { "form": "openai-chat", "upstreamPrefix": "" },
+        { "form": "anthropic", "upstreamPrefix": "/anthropic" }
       ],
-      "notes": "GLM pay-as-you-go endpoint. env var name per models.dev: ZHIPU_API_KEY (vendor docs also accept ZAI_API_KEY).",
-      "source": "https://models.dev/api.json"
-    },
-    {
-      "id": "zai-coding",
-      "label": "z.ai GLM Coding Plan",
-      "apiForm": "anthropic-messages",
-      "baseUrl": "https://api.z.ai/api/coding/paas/v4",
-      "iconId": "zai",
-      "keyEnv": "ZAI_API_KEY",
-      "defaultPort": 4306,
-      "matchDomains": [
-        "api.z.ai"
-      ],
-      "notes": "Subscription (Coding Plan) endpoint; quota comes from the plan, not pay-as-you-go credits. Speaks the Anthropic protocol for coding tools (OpenAI protocol also supported per vendor quick-start).",
-      "source": "https://docs.z.ai/devpack/quick-start"
-    },
-    {
-      "id": "zai-cn",
-      "label": "Zhipu (bigmodel.cn, CN)",
-      "apiForm": "openai-completions",
-      "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
-      "iconId": "zai",
-      "keyEnv": "ZHIPU_API_KEY",
-      "defaultPort": 4307,
-      "matchDomains": [
-        "open.bigmodel.cn"
-      ],
-      "notes": "China mainland GLM endpoint. A dedicated coding endpoint exists at /api/coding/paas/v4 (models.dev: zhipuai-coding-plan).",
-      "source": "https://models.dev/api.json"
-    },
-    {
-      "id": "moonshot",
-      "label": "Moonshot (Kimi, OpenAI protocol)",
-      "apiForm": "openai-completions",
-      "baseUrl": "https://api.moonshot.ai/v1",
-      "iconId": "moonshotai",
-      "keyEnv": "MOONSHOT_API_KEY",
-      "defaultPort": 4308,
-      "matchDomains": [
-        "api.moonshot.ai"
-      ],
-      "notes": "Kimi OpenAI-compatible surface. CN mainland endpoint: https://api.moonshot.cn/v1 (models.dev: moonshotai-cn).",
-      "source": "https://models.dev/api.json"
-    },
-    {
-      "id": "moonshot-anthropic",
-      "label": "Kimi Anthropic protocol",
-      "apiForm": "anthropic-messages",
-      "baseUrl": "https://api.moonshot.ai/anthropic",
-      "iconId": "moonshotai",
-      "keyEnv": "MOONSHOT_API_KEY",
-      "defaultPort": 4309,
-      "matchDomains": [
-        "api.moonshot.ai"
-      ],
-      "notes": "Kimi's Anthropic-compatible Messages surface for Claude-protocol coding tools.",
-      "source": "https://platform.kimi.ai/docs/guide/claude-code-kimi"
-    },
-    {
-      "id": "minimax",
-      "label": "MiniMax",
-      "apiForm": "anthropic-messages",
-      "baseUrl": "https://api.minimax.io/anthropic/v1",
-      "keyEnv": "MINIMAX_API_KEY",
-      "defaultPort": 4310,
-      "matchDomains": [
-        "api.minimax.io"
-      ],
-      "notes": "models.dev records the Anthropic-protocol surface (token plan shares it). CN mainland: https://api.minimaxi.com/anthropic/v1.",
-      "source": "https://models.dev/api.json"
-    },
-    {
-      "id": "qwen-token-plan",
-      "label": "Qwen Token Plan",
-      "apiForm": "openai-completions",
-      "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
-      "iconId": "alibaba",
-      "keyEnv": "ALIBABA_TOKEN_PLAN_API_KEY",
-      "defaultPort": 4311,
-      "matchDomains": [
-        "token-plan.ap-southeast-1.maas.aliyuncs.com",
-        "token-plan.cn-beijing.maas.aliyuncs.com"
-      ],
-      "notes": "Alibaba token-plan (Qwen subscription) endpoint, OpenAI-compatible; the second domain is the CN variant (models.dev: alibaba-token-plan / alibaba-token-plan-cn).",
-      "source": "https://models.dev/api.json"
-    },
-    {
-      "id": "github-copilot",
-      "label": "GitHub Copilot",
-      "apiForm": "openai-completions",
-      "baseUrl": "https://api.githubcopilot.com",
-      "keyEnv": "GITHUB_TOKEN",
-      "defaultPort": 4312,
-      "matchDomains": [
-        "api.githubcopilot.com"
-      ],
-      "notes": "OpenAI-compatible surface for Copilot subscribers; token exchange requirements vary - verify against your account before relying on it.",
-      "source": "https://models.dev/api.json"
-    },
-    {
-      "id": "groq",
-      "label": "Groq",
-      "apiForm": "openai-completions",
-      "baseUrl": "https://api.groq.com/openai/v1",
-      "keyEnv": "GROQ_API_KEY",
-      "defaultPort": 4313,
-      "matchDomains": [
-        "api.groq.com"
-      ],
-      "notes": "Fast inference; OpenAI-compatible.",
-      "source": "https://models.dev/api.json (@ai-sdk/groq default base URL)"
-    },
-    {
-      "id": "xai",
-      "label": "xAI (Grok)",
-      "apiForm": "openai-completions",
-      "baseUrl": "https://api.x.ai/v1",
-      "keyEnv": "XAI_API_KEY",
-      "defaultPort": 4314,
-      "matchDomains": [
-        "api.x.ai"
-      ],
-      "notes": "Grok models; OpenAI-compatible.",
-      "source": "https://models.dev/api.json (@ai-sdk/xai default base URL)"
-    },
-    {
-      "id": "together",
-      "label": "Together AI",
-      "apiForm": "openai-completions",
-      "baseUrl": "https://api.together.xyz/v1",
-      "keyEnv": "TOGETHER_API_KEY",
-      "defaultPort": 4315,
-      "matchDomains": [
-        "api.together.xyz"
-      ],
-      "notes": "Hosted open models; OpenAI-compatible.",
-      "source": "https://models.dev/api.json (@ai-sdk/togetherai default base URL)"
-    },
-    {
-      "id": "ollama",
-      "label": "Ollama (local)",
-      "apiForm": "openai-completions",
-      "baseUrl": "http://127.0.0.1:11434",
-      "defaultPort": 4316,
-      "matchDomains": [
-        "127.0.0.1"
-      ],
-      "notes": "Local runtime template (no keyEnv). The OpenAI-compatible surface is <base>/v1; the service upstream points at the runtime root so paths compose. Consumer port deliberately differs from the runtime's own 11434.",
-      "source": "https://models.dev/api.json (ollama-cloud sibling documents the API shape; runtime port per ollama docs)"
-    },
-    {
-      "id": "lmstudio",
-      "label": "LM Studio (local)",
-      "apiForm": "openai-completions",
-      "baseUrl": "http://127.0.0.1:1234/v1",
-      "defaultPort": 4317,
-      "matchDomains": [
-        "127.0.0.1"
-      ],
-      "notes": "Local runtime template (no keyEnv). Requires 'Enable CORS/serve on local network' off; server default port 1234.",
-      "source": "https://models.dev/api.json (lmstudio)"
+      "notes": "OpenAI-compatible at /v1/*; Anthropic-compatible surface at /anthropic/* (per vendor docs).",
+      "source": "https://models.dev/api.json + https://api-docs.deepseek.com/guides/anthropic_api"
     }
   ]
 }

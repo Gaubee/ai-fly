@@ -213,3 +213,72 @@ describe("分组管理（Owner 2026-09-10：对齐 keys）", () => {
   });
 });
 });
+
+describe("路由表（M3-r4）", () => {
+  it("routes 随服务落库并完整恢复", () => {
+    const store = ProviderStore.open(dir);
+    store.addService({
+      name: "deepseek",
+      upstream: "https://api.deepseek.com",
+      match: [{ type: "suffix", value: "api.deepseek.com" }],
+      defaultPort: 4300,
+      routes: [
+        { form: "openai-chat", upstreamPrefix: "" },
+        { form: "anthropic", upstreamPrefix: "/anthropic" },
+      ],
+    });
+    const reopened = ProviderStore.open(dir);
+    const svc = reopened.getServiceByName?.("deepseek") ?? reopened.listServices().find((s) => s.name === "deepseek");
+    expect(svc?.routes).toEqual([
+      { form: "openai-chat", upstreamPrefix: "" },
+      { form: "anthropic", upstreamPrefix: "/anthropic" },
+    ]);
+  });
+
+  it("upstreamPrefix 规范化：补前导斜杠、剥尾斜杠、全斜杠归一为根", () => {
+    const store = ProviderStore.open(dir);
+    const svc = store.addService({
+      name: "agg",
+      upstream: "https://aiapi.com",
+      match: [{ type: "suffix", value: "aiapi.com" }],
+      defaultPort: 4300,
+      routes: [
+        { form: "openai-chat", upstreamPrefix: "v1/" },
+        { form: "anthropic", upstreamPrefix: "/anthropic/" },
+        { form: "openai-responses", upstreamPrefix: "/" },
+      ],
+    });
+    expect(svc.routes).toEqual([
+      { form: "openai-chat", upstreamPrefix: "/v1" },
+      { form: "anthropic", upstreamPrefix: "/anthropic" },
+      { form: "openai-responses", upstreamPrefix: "" },
+    ]);
+  });
+
+  it("重复 form 拒绝（invalid）", () => {
+    const store = ProviderStore.open(dir);
+    expect(() =>
+      store.addService({
+        name: "dup",
+        upstream: "https://x.test",
+        match: [{ type: "suffix", value: "x.test" }],
+        routes: [
+          { form: "anthropic", upstreamPrefix: "" },
+          { form: "anthropic", upstreamPrefix: "/a" },
+        ],
+      }),
+    ).toThrowError(StoreError);
+  });
+
+  it("空路由表等价于未声明（存 undefined）", () => {
+    const store = ProviderStore.open(dir);
+    const svc = store.addService({
+      name: "noroute",
+      upstream: "https://y.test",
+      match: [{ type: "suffix", value: "y.test" }],
+      defaultPort: 4300,
+      routes: [],
+    });
+    expect(svc.routes).toBeUndefined();
+  });
+});

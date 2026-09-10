@@ -128,7 +128,14 @@ describe("testUpstream 请求形状", () => {
   it("apiForm 缺省 openai-completions", async () => {
     const { calls, fetchImpl } = captureFetch();
     await testUpstream({ upstream: "https://api.example.com", model: "m", fetchImpl });
-    expect(calls[0]!.url).toBe("https://api.example.com/chat/completions");
+    // M3-r4：base 无版本段时补 /v1（openai 预设 base 已去 /v1，路由模型接管版本段）
+    expect(calls[0]!.url).toBe("https://api.example.com/v1/chat/completions");
+  });
+
+  it("base 自带版本段（…/v1）时不重复补 /v1", async () => {
+    const { calls, fetchImpl } = captureFetch();
+    await testUpstream({ upstream: "https://api.example.com/v1", model: "m", fetchImpl });
+    expect(calls[0]!.url).toBe("https://api.example.com/v1/chat/completions");
   });
 });
 

@@ -49,12 +49,34 @@ export const SERVICE_REWRITE_SCHEMA = z.strictObject({
   headerRemove: z.array(z.string().min(1).max(1024)).max(32).optional(),
 });
 
+// ---------------------------------------------------------------------------
+// 按标准路由（M3-r4）：本地端口固定暴露三个标准前缀，路由表声明各自映射的
+// upstream 前缀——一个服务同时服务多种 API 标准（如 DeepSeek 的 OpenAI 与
+// Anthropic 形态）。无路由或路径未命中 → 原样透传（旧行为不变）。
+// ---------------------------------------------------------------------------
+
+export const ROUTE_FORM_SCHEMA = z.enum(["openai-chat", "openai-responses", "anthropic"]);
+
+export const SERVICE_ROUTE_SCHEMA = z.strictObject({
+  form: ROUTE_FORM_SCHEMA,
+  /** 替换本地标准前缀的 upstream 路径前缀（"" = upstream 根；规范化在 store 写入期）。 */
+  upstreamPrefix: z.string().max(2048),
+});
+
+/** 各 API 标准在本地端口上的固定前缀（agent 配置与提供方路由匹配共用）。 */
+export const ROUTE_LOCAL_PREFIX: Readonly<Record<RouteForm, string>> = {
+  "openai-chat": "/openai",
+  "openai-responses": "/responses",
+  anthropic: "/anthropic",
+};
+
 export const SERVICE_SCHEMA = z.strictObject({
   serviceId: z.string().min(1).max(128),
   name: z.string().min(1).max(256),
   match: z.array(SERVICE_MATCH_SCHEMA).max(64),
   upstream: z.string().min(1).max(2048),
   rewrite: SERVICE_REWRITE_SCHEMA.optional(),
+  routes: z.array(SERVICE_ROUTE_SCHEMA).max(3).optional(),
   defaultPort: z.number().int().min(1).max(65535),
 });
 
@@ -65,6 +87,7 @@ export const SERVICE_INPUT_SCHEMA = z.strictObject({
   match: z.array(SERVICE_MATCH_SCHEMA).min(1).max(64),
   defaultPort: z.number().int().min(1).max(65535).optional(),
   rewrite: SERVICE_REWRITE_SCHEMA.optional(),
+  routes: z.array(SERVICE_ROUTE_SCHEMA).max(3).optional(),
 });
 
 export const GROUP_LIMITS_SCHEMA = z.strictObject({
@@ -106,6 +129,11 @@ export const SERVICE_ENTRY_SCHEMA = z.object({
           prefix: z.string().optional(),
           headerSet: z.array(z.strictObject({ name: z.string(), value: z.string() })).optional(),
         })
+        .optional(),
+      /** 按标准路由披露（消费侧呈现各标准本地 base 与可用性判定）。 */
+      routes: z
+        .array(z.strictObject({ form: ROUTE_FORM_SCHEMA, upstreamPrefix: z.string() }))
+        .max(3)
         .optional(),
     })
     .optional(),
@@ -154,6 +182,8 @@ export const PRESET_SCHEMA = z.strictObject({
   defaultPort: z.number().int().min(1024).max(65535),
   /** 官方域名集（exact/suffix 建议的生成源）。 */
   matchDomains: z.array(z.string().min(1).max(256)).min(1).max(16),
+  /** 按标准路由（展开进服务；本地前缀由 form 派生）。 */
+  routes: z.array(SERVICE_ROUTE_SCHEMA).max(3).optional(),
   notes: z.string().max(2048).optional(),
   /** 出处（精选集为调研 URL；models.dev 长尾为 "models.dev"）。 */
   source: z.string().min(1).max(512),
@@ -190,6 +220,15 @@ export const SECRET_ENTRY_SCHEMA = z.strictObject({
 // ---------------------------------------------------------------------------
 
 export const WRITER_AGENT_SCHEMA = z.enum(["codex", "claude-code", "cursor", "cline", "continue"]);
+
+/** agent 使用的 API 标准（writer 写入 base 与 ③ 步可用性判定共用）。 */
+export const WRITER_AGENT_FORM: Readonly<Record<WriterAgent, RouteForm>> = {
+  codex: "openai-responses",
+  "claude-code": "anthropic",
+  cursor: "openai-chat",
+  cline: "openai-chat",
+  continue: "openai-chat",
+};
 
 /** 写手目标描述：serviceId（从消费方存储解析端口）或显式 port，二选一。 */
 export const WRITER_TARGET_SCHEMA = z
@@ -454,6 +493,34 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
         )
         .output(z.object({ alias: z.string(), added: z.boolean() })),
     },
+    services: {
+      /**
+       * 消费侧连通测试（M3-r4）：对本机网关端口按 API 标准发最小请求，走完整
+       * wire 链路；凭据由提供方 rewrite 注入，本请求不携带 authorization。
+       * model 缺省时经 models.dev 缓存按 detail.upstream 选最便宜 chat 模型。
+       */
+      test: oc
+        .input(
+          z.strictObject({
+            serviceId: z.string().min(1).max(128),
+            form: ROUTE_FORM_SCHEMA,
+            model: z.string().min(1).max(256).optional(),
+          }),
+        )
+        .output(
+          z.strictObject({
+            ok: z.boolean(),
+            latencyMs: z.number().int().min(0),
+            request: z.strictObject({ method: z.literal("POST"), url: z.string(), model: z.string().optional() }),
+            modelSource: z.enum(["explicit", "models.dev", "none"]).optional(),
+            /** upstream 响应状态码（拿到响应即有；传输失败缺席）。 */
+            httpStatus: z.number().int().min(100).max(599).optional(),
+            error: z.string().optional(),
+            /** 非 2xx 时的正文摘录（截断）。 */
+            bodyExcerpt: z.string().optional(),
+          }),
+        ),
+    },
     ports: {
       /** 全部已导入服务的本地端口清单（pinned/default 标注）。 */
       list: oc
@@ -617,6 +684,7 @@ export type RpcContract = typeof rpcContract;
 
 // 派生类型别名（实现侧与 webui 共用）
 export type ApiForm = z.infer<typeof API_FORM_SCHEMA>;
+export type RouteForm = z.infer<typeof ROUTE_FORM_SCHEMA>;
 export type Preset = z.infer<typeof PRESET_SCHEMA>;
 export type WriterAgent = z.infer<typeof WRITER_AGENT_SCHEMA>;
 export type Settings = z.infer<typeof SETTINGS_SCHEMA>;

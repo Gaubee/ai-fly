@@ -61,6 +61,9 @@ export function buildServiceDetail(service: ServiceConfig): ServiceDetail {
     upstream: service.upstream,
     match: service.match.map((m) => ({ type: m.type, value: m.value })),
     rewrite,
+    ...(service.routes !== undefined && service.routes.length > 0
+      ? { routes: service.routes.map((r) => ({ form: r.form, upstreamPrefix: r.upstreamPrefix })) }
+      : {}),
   };
 }
 
@@ -82,6 +85,9 @@ export function buildServiceEntry(service: ServiceConfig): ServiceEntry {
 export function detailDisplayLines(detail: ServiceDetail): string[] {
   const lines: string[] = [`upstream: ${detail.upstream}`];
   for (const m of detail.match) lines.push(`match: ${m.type} ${m.value}`);
+  for (const r of detail.routes ?? []) {
+    lines.push(`route: ${r.form} -> ${r.upstreamPrefix === "" ? "(root)" : r.upstreamPrefix}`);
+  }
   if (detail.rewrite !== undefined) {
     const r = detail.rewrite;
     if (r.host !== undefined) lines.push(`host: ${r.host}`);

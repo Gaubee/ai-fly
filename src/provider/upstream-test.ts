@@ -56,6 +56,12 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
+/** base 路径已带版本段（/v1、/v1beta、/compatible-mode/v1 等）时不再补 /v1
+    （M3-r4：openai 预设 base 去 /v1 改由路由模型接管，两形态都要可用）。 */
+function endsWithVersionSegment(base: string): boolean {
+  return /\/v\d+[a-z]*$/.test(base);
+}
+
 /** 网络错误摘要（截断；若摘要意外含密钥原文则整段打码——防御式）。 */
 function summarizeError(err: unknown, secretValue: string | undefined): string {
   const message = err instanceof Error ? err.message : String(err);
@@ -67,8 +73,9 @@ function summarizeError(err: unknown, secretValue: string | undefined): string {
   return summary;
 }
 
-/** model 缺省选择：按 upstream 定位 api.json provider，取 priced chat 最低价（复用 deriveModels 排序）。 */
-function pickDefaultModel(modelsRaw: string | undefined, upstream: string): string | undefined {
+/** model 缺省选择：按 upstream 定位 api.json provider，取 priced chat 最低价（复用 deriveModels 排序）。
+    （M3-r4 起消费侧测试也复用——models.dev 缓存按 upstream 主机名命中。） */
+export function pickDefaultModel(modelsRaw: string | undefined, upstream: string): string | undefined {
   if (modelsRaw === undefined || modelsRaw === "") return undefined;
   const providerKey = findModelsDevProviderKey(modelsRaw, upstream);
   if (providerKey === undefined) return undefined;
@@ -105,10 +112,13 @@ export async function probeUpstreamModels(input: {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   try {
-    const response = await fetchFn(`${trimTrailingSlash(input.upstream)}/models`, {
-      headers,
-      signal: ctrl.signal,
-    });
+    const response = await fetchFn(
+      `${trimTrailingSlash(input.upstream)}${endsWithVersionSegment(trimTrailingSlash(input.upstream)) ? "/models" : "/v1/models"}`,
+      {
+        headers,
+        signal: ctrl.signal,
+      },
+    );
     if (!(response.status >= 200 && response.status < 300)) return undefined;
     const parsed = (await response.json()) as { data?: Array<{ id?: unknown }> };
     if (!Array.isArray(parsed?.data)) return undefined;
@@ -188,7 +198,7 @@ export async function testUpstream(input: UpstreamTestInput): Promise<UpstreamTe
   let url: string;
   let body: string;
   if (apiForm === "openai-completions") {
-    url = `${base}/chat/completions`;
+    url = `${base}${endsWithVersionSegment(base) ? "/chat/completions" : "/v1/chat/completions"}`;
     body = JSON.stringify({
       model,
       messages: [{ role: "user", content: "ping" }],

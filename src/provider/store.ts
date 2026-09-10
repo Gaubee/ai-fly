@@ -68,12 +68,19 @@ export const SERVICE_REWRITE_STORE_SCHEMA = z.strictObject({
   headerRemove: z.array(z.string().min(1).max(1024)).max(32).optional(),
 });
 
+/** 按标准路由（M3-r4）：form 决定本地固定前缀，upstreamPrefix 为 upstream 侧替换前缀。 */
+export const SERVICE_ROUTE_STORE_SCHEMA = z.strictObject({
+  form: z.enum(["openai-chat", "openai-responses", "anthropic"]),
+  upstreamPrefix: z.string().max(2048),
+});
+
 export const SERVICE_STORE_SCHEMA = z.strictObject({
   serviceId: z.string().min(1).max(128),
   name: z.string().min(1).max(256),
   match: z.array(SERVICE_MATCH_STORE_SCHEMA).max(64),
   upstream: z.string().min(1).max(2048),
   rewrite: SERVICE_REWRITE_STORE_SCHEMA.optional(),
+  routes: z.array(SERVICE_ROUTE_STORE_SCHEMA).max(3).optional(),
   defaultPort: z.number().int().min(1).max(65535),
 });
 
@@ -110,6 +117,7 @@ export const STORE_FILE_SCHEMA = z.strictObject({
 
 export type ServiceMatchRule = z.infer<typeof SERVICE_MATCH_STORE_SCHEMA>;
 export type ServiceRewrite = z.infer<typeof SERVICE_REWRITE_STORE_SCHEMA>;
+export type ServiceRoute = z.infer<typeof SERVICE_ROUTE_STORE_SCHEMA>;
 export type ServiceConfig = z.infer<typeof SERVICE_STORE_SCHEMA>;
 export type GroupLimits = z.infer<typeof GROUP_LIMITS_STORE_SCHEMA>;
 export type GroupConfig = z.infer<typeof GROUP_STORE_SCHEMA>;
@@ -123,6 +131,7 @@ export interface ServiceInput {
   match: ServiceMatchRule[];
   defaultPort?: number | undefined;
   rewrite?: ServiceRewrite | undefined;
+  routes?: ServiceRoute[] | undefined;
 }
 
 /** verifyKey 结果：有效（含定位）/ 无效 / 已撤销。 */
@@ -312,6 +321,7 @@ export class ProviderStore {
       defaultPort = input.defaultPort;
     }
     const rewrite = input.rewrite === undefined ? undefined : normalizeRewrite(input.rewrite);
+    const routes = normalizeRoutes(input.routes);
     let serviceId: string;
     do {
       serviceId = randomZ32(SERVICE_ID_BYTES);
@@ -322,6 +332,7 @@ export class ProviderStore {
       match: input.match.map((m) => ({ ...m })),
       upstream: upstreamUrl.href,
       rewrite,
+      ...(routes !== undefined ? { routes } : {}),
       defaultPort,
     };
     this.data.services.push(service);
@@ -542,6 +553,29 @@ function validateLimits(limits: GroupLimits): void {
 }
 
 /** rewrite 归一化：header 名小写、headerRemove 去重、前缀字段以 / 开头。 */
+/** 路由表规范化：去空白、空表→undefined、upstreamPrefix 补 / 去尾斜杠、form 去重。 */
+function normalizeRoutes(routes: ServiceRoute[] | undefined): ServiceRoute[] | undefined {
+  if (routes === undefined) return undefined;
+  const cleaned = routes.filter((r) => r !== null && r !== undefined);
+  if (cleaned.length === 0) return undefined;
+  const seen = new Set<string>();
+  const out: ServiceRoute[] = [];
+  for (const route of cleaned) {
+    if (seen.has(route.form)) {
+      throw new StoreError("invalid", `error: duplicate route form '${route.form}'`);
+    }
+    seen.add(route.form);
+    let prefix = route.upstreamPrefix.trim();
+    if (prefix !== "") {
+      if (!prefix.startsWith("/")) prefix = `/${prefix}`;
+      // 尾斜杠剥净；全斜杠（"/"）归一为根 ""
+      prefix = prefix.replace(/\/+$/, "");
+    }
+    out.push({ form: route.form, upstreamPrefix: prefix });
+  }
+  return out;
+}
+
 function normalizeRewrite(rewrite: ServiceRewrite): ServiceRewrite {
   const out: ServiceRewrite = {};
   if (rewrite.hostHeader !== undefined) {

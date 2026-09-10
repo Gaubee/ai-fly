@@ -94,31 +94,40 @@ describe("app integration: token gate + contract over ws", () => {
     // notify 不断开：后续用例的 store 事件继续收集
   });
 
-  it("预设清单（精选免网）→ 预设落服务 → detail 凭据脱敏", async () => {
+  it("预设清单（精选免网）→ 预设落服务（routes 随行）→ detail 凭据脱敏", async () => {
     const { client, ws } = makeClient();
     const presets = await client.presets.list({});
-    assert.ok(presets.curated.length >= 15, `curated presets >= 15 (got ${presets.curated.length})`);
-    assert.ok(presets.curated.some((p) => p.id === "ollama"));
+    assert.ok(presets.curated.length >= 3, `curated presets >= 3 (got ${presets.curated.length})`);
+    assert.ok(presets.curated.some((p) => p.id === "deepseek"));
 
-    const zai = presets.curated.find((p) => p.id.startsWith("zai"));
-    assert.ok(zai, "zai preset present");
+    const deepseek = presets.curated.find((p) => p.id === "deepseek");
+    assert.ok(deepseek, "deepseek preset present");
+    assert.ok(
+      deepseek.routes?.some((r) => r.form === "anthropic" && r.upstreamPrefix === "/anthropic"),
+      "deepseek preset carries anthropic route",
+    );
 
     const added = await client.provider.services.add({
-      name: "zai-bridge",
-      upstream: zai.baseUrl,
+      name: "deepseek-bridge",
+      upstream: deepseek.baseUrl,
       defaultPort: 4300,
-      match: zai.matchDomains.slice(0, 2).map((d) => ({ type: "suffix", value: d })),
-      rewrite: { headerSet: { authorization: `$env:${zai.keyEnv}` } },
+      match: deepseek.matchDomains.slice(0, 2).map((d) => ({ type: "suffix", value: d })),
+      rewrite: { headerSet: { authorization: `$env:${deepseek.keyEnv}` } },
+      routes: deepseek.routes,
     });
-    assert.ok(added.service.name === "zai-bridge");
+    assert.ok(added.service.name === "deepseek-bridge");
+    assert.ok(
+      added.service.routes?.some((r) => r.form === "anthropic" && r.upstreamPrefix === "/anthropic"),
+      "routes 随服务落库",
+    );
 
-    const got = await client.provider.services.get({ name: "zai-bridge" });
+    const got = await client.provider.services.get({ name: "deepseek-bridge" });
     const detail = JSON.stringify(got);
     // 本地 RPC 面允许 $env 引用（变量名在本机 store 内，非 wire 面）；
     // 关键断言：不包含环境变量的"值"（store 从不落值），wire 面（AUTH_OK）的
     // ● 脱敏由引擎集成测试覆盖。
-    assert.ok(detail.includes("$env:ZHIPU_API_KEY"), "本地配置面保留 $env 引用");
-    assert.ok(!detail.includes(process.env.ZHIPU_API_KEY ?? "__never__"), "不含变量值");
+    assert.ok(detail.includes("$env:DEEPSEEK_API_KEY"), "本地配置面保留 $env 引用");
+    assert.ok(!detail.includes(process.env.DEEPSEEK_API_KEY ?? "__never__"), "不含变量值");
     ws.close();
   });
 
@@ -277,7 +286,7 @@ describe("app integration: token gate + contract over ws", () => {
       assert.equal(ok.httpStatus, 200);
       assert.equal(ok.model, "cheap-chat");
       assert.equal(typeof ok.latencyMs, "number");
-      assert.equal(seen.at(-1).url, "/chat/completions");
+      assert.equal(seen.at(-1).url, "/v1/chat/completions"); // M3-r4：base 无版本段补 /v1
       assert.equal(seen.at(-1).authorization, "Bearer fk-1");
       assert.equal(seen.at(-1).body.max_tokens, 1);
       assert.equal(seen.at(-1).body.messages[0].content, "ping");
@@ -326,7 +335,8 @@ describe("app integration: token gate + contract over ws", () => {
 
       // custom 上游探测模式：不在缓存里的第二上游，/models 拉清单 + test 走探测模型
       probeServer = createServer((req, res) => {
-        if (req.method === "GET" && req.url === "/models") {
+        // M3-r4：base 无版本段时探测走 /v1/models（两路都答）
+        if (req.method === "GET" && (req.url === "/models" || req.url === "/v1/models")) {
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify({ data: [{ id: "relay-xl" }, { id: "relay-mini" }] }));
           return;
@@ -346,7 +356,7 @@ describe("app integration: token gate + contract over ws", () => {
       assert.equal(viaProbe.ok, true, JSON.stringify(viaProbe));
       assert.equal(viaProbe.model, "relay-mini");
       assert.equal(viaProbe.modelSource, "upstream-probe");
-      assert.equal(viaProbe.request.url, `${probeBase}/chat/completions`);
+      assert.equal(viaProbe.request.url, `${probeBase}/v1/chat/completions`);
 
       // 删除密钥后同请求回到 secret not found
       await client.provider.secrets.remove({ name: "fake" });

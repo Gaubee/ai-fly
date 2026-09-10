@@ -9,6 +9,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, w
 import { createHash, randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import { DomainError } from "../errors.ts";
+import { ROUTE_LOCAL_PREFIX, type RouteForm } from "../../shared/rpc-contract.ts";
 
 /** 写手运行上下文（home 注入：单测用 tmp HOME，不触真实用户目录）。 */
 export interface WriterContext {
@@ -20,10 +21,30 @@ export interface ResolvedTarget {
   port: number;
   /** 本地端点（http://127.0.0.1:<port>；路径追加语义由各 Agent 配置决定）。 */
   baseUrl: string;
+  /**
+   * 各 API 标准的本地 base（M3-r4）：服务声明了对应路由时为
+   * `${baseUrl}${标准本地前缀}`，写手按自身协议取用；缺席 = 服务无该路由，
+   * 沿用裸 baseUrl 的旧行为（路径合成交给 upstream 自带的版本段）。
+   */
+  formBase?: Partial<Record<RouteForm, string>>;
 }
 
-export function resolveTargetPort(port: number): ResolvedTarget {
-  return { port, baseUrl: `http://127.0.0.1:${port}` };
+export function resolveTargetPort(port: number, forms?: readonly RouteForm[]): ResolvedTarget {
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const formBase: Partial<Record<RouteForm, string>> = {};
+  for (const form of forms ?? []) {
+    formBase[form] = `${baseUrl}${ROUTE_LOCAL_PREFIX[form]}`;
+  }
+  const hasForms = Object.keys(formBase).length > 0;
+  return { port, baseUrl, ...(hasForms ? { formBase } : {}) };
+}
+
+/** openai 家族 agent（cursor/cline/continue）的 base：服务声明 openai-chat 路由
+    → 标准前缀 + /v1（client 只追加 /chat/completions 等）；无路由沿用裸 base
+    （路径合成交给 upstream 自带的版本段——旧行为）。 */
+export function openAiChatBase(target: ResolvedTarget): string {
+  const base = target.formBase?.["openai-chat"];
+  return base === undefined ? target.baseUrl : `${base}/v1`;
 }
 
 /** 写手模块：目标路径定位 + 新内容合成（compose 纯函数，不写盘）。 */

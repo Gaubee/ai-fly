@@ -1,21 +1,25 @@
 <!-- 使用方接入向导（B 3.3，#/connect 三步）：
      ①粘贴链接（离线预览：提供者别名/分组/服务表：名称+默认端口+match 数）
      → ②端口确认（apply 即导入+网关启动；实际端口表 + 冲突自动错开显著
-     标注 + 可改）→ ③Agent 配置（服务+Agent 选择 → writers.preview 渲染
-     等宽 diff → 确认 writers.apply）。状态机在 stores/connect-wizard。 -->
+     标注 + 可改）→ ③Agent 配置（服务+Agent 选择（NativeSelect，skip 永远
+     可达——footer 在 preview 缺席时也放行 finish）+ API endpoints 按标准
+     呈现与行内连通测试（M3-r4）→ writers.preview 渲染等宽 diff → 确认
+     writers.apply）。状态机在 stores/connect-wizard。 -->
 <script lang="ts">
   import { onMount } from "svelte";
   import Card, { CardFooter } from "$lib/ui/card";
   import Badge from "$lib/ui/badge";
   import PressButton from "$lib/ui/press-button";
   import Input from "$lib/ui/input";
-  import Select from "$lib/ui/select";
+  import NativeSelect from "$lib/ui/native-select";
   import Alert from "$lib/ui/alert";
   import Skeleton from "$lib/ui/skeleton";
   import { slide } from "svelte/transition";
   import StepHeader from "../components/StepHeader.svelte";
   import ErrorAlert from "../components/ErrorAlert.svelte";
+  import CopyField from "../components/CopyField.svelte";
   import { connection } from "../stores/rpc.svelte.ts";
+  import { ROUTE_LOCAL_PREFIX, WRITER_AGENT_FORM, type RouteForm } from "$shared/rpc-contract.ts";
   import {
     connectW,
     resetConnect,
@@ -29,8 +33,10 @@
     refreshWizardPorts,
     applyWriter,
     finishConnect,
+    testServiceRoute,
     AGENT_OPTIONS,
     dialGuidance,
+    type RouteTestOutput,
   } from "../stores/connect-wizard.svelte.ts";
 
   onMount(() =>
@@ -61,34 +67,112 @@
   }
   function onServiceChange(value: string): void {
     connectW.agentServiceId = value;
+    connectW.testResults = {}; // 测试结果按服务归属：换服务即失效
+    void refreshWizardPorts(); // auto-assign 端口快照可能滞后，切换即对账
     void refreshWriterPreview();
   }
 
-  // Select 只支持 bind:value（无 onchange prop）：本地 $state + 受保护双向 effect 桥接
+  // NativeSelect 支持 bind:value + onchange 透传（照抄 GroupPicker 模式）：
+  // 本地显示值 + 单向 store→显示同步；用户变更经 onchange 读 DOM 值回写 store
   let serviceSel = $state(connectW.agentServiceId);
   $effect(() => {
-    if (connectW.agentServiceId !== serviceSel) serviceSel = connectW.agentServiceId;
+    serviceSel = connectW.agentServiceId;
   });
-  $effect(() => {
-    if (serviceSel !== connectW.agentServiceId) onServiceChange(serviceSel);
-  });
-
   let agentSel = $state(connectW.agent);
   $effect(() => {
-    if (connectW.agent !== agentSel) agentSel = connectW.agent;
+    agentSel = connectW.agent;
   });
-  $effect(() => {
-    if (agentSel !== connectW.agent) onAgentChange(agentSel);
-  });
+
+  function handleServiceChange(event: Event & { currentTarget: EventTarget & HTMLSelectElement }): void {
+    onServiceChange(event.currentTarget.value);
+  }
+  function handleAgentChange(event: Event & { currentTarget: EventTarget & HTMLSelectElement }): void {
+    onAgentChange(event.currentTarget.value);
+  }
 
   const serviceOptions = $derived(
     connectW.applied !== null
-      ? connectW.applied.services.map((service) => ({
-          value: service.serviceId,
-          label: `${service.name} (port from local gateway)`,
-        }))
+      ? connectW.applied.services.map((service) => {
+          const port = connectW.ports.find((row) => row.serviceId === service.serviceId)?.port;
+          return {
+            value: service.serviceId,
+            label: port === undefined ? `${service.name} (port from local gateway)` : `${service.name} (port ${port})`,
+          };
+        })
       : [],
   );
+
+  // ---------------------------------------------------------------------------
+  // ③ API endpoints（M3-r4）：按标准路由的本地 base 呈现 + agent 可用性 + 测试
+  // ---------------------------------------------------------------------------
+
+  /** form 人类可读标签（端点行与可用性提示共用）。 */
+  const FORM_LABELS: Readonly<Record<RouteForm, string>> = {
+    "openai-chat": "openai (chat completions)",
+    "openai-responses": "openai (responses)",
+    anthropic: "anthropic (messages)",
+  };
+
+  /** 当前选中服务（端点区与可用性判定）。 */
+  const selectedService = $derived(
+    connectW.applied?.services.find((service) => service.serviceId === connectW.agentServiceId) ??
+      null,
+  );
+  /** 选中服务的解析端口（ports 表优先，回退 defaultPort 投影）。 */
+  const selectedPort = $derived(
+    connectW.ports.find((row) => row.serviceId === connectW.agentServiceId)?.port ??
+      selectedService?.defaultPort ??
+      null,
+  );
+  /** 选中服务声明的按标准路由（空 = legacy 透传）。 */
+  const selectedRoutes = $derived(
+    connectW.agentServiceId === "" ? [] : connectW.serviceRoutes[connectW.agentServiceId] ?? [],
+  );
+  /** 端点行：标签 + 本地标准 base +（若有）该 form 的测试结果。 */
+  const routeRows = $derived(
+    selectedPort === null
+      ? []
+      : selectedRoutes.map((route) => ({
+          form: route.form,
+          label: FORM_LABELS[route.form],
+          base: `http://127.0.0.1:${selectedPort}${ROUTE_LOCAL_PREFIX[route.form]}`,
+          result: connectW.testResults[route.form] ?? null,
+        })),
+  );
+  /** legacy 直通 base（服务无 routes）。 */
+  const bareBase = $derived(selectedPort === null ? null : `http://127.0.0.1:${selectedPort}`);
+
+  /** 当前 agent 使用的 API 标准（skip = null）。 */
+  const agentForm = $derived(
+    connectW.agent === "skip" ? null : WRITER_AGENT_FORM[connectW.agent],
+  );
+  const agentFormServed = $derived(
+    agentForm !== null && selectedRoutes.some((route) => route.form === agentForm),
+  );
+  const agentFormBase = $derived(
+    agentForm !== null && selectedPort !== null
+      ? `http://127.0.0.1:${selectedPort}${ROUTE_LOCAL_PREFIX[agentForm]}`
+      : null,
+  );
+
+  /** 长 URL 展示：≤64 原样；超长保留首尾、中间省略（结果区块风格对齐 TestConnection）。 */
+  function shortenUrl(url: string, max = 64): string {
+    if (url.length <= max) return url;
+    const head = url.slice(0, Math.ceil((max - 1) / 2));
+    const tail = url.slice(-Math.floor((max - 1) / 2));
+    return `${head}...${tail}`;
+  }
+
+  /** 失败摘要：error 与 bodyExcerpt 择短展示（全宽 11px）。 */
+  function failureExcerpt(result: RouteTestOutput): string | null {
+    const candidates = [result.error, result.bodyExcerpt].filter(
+      (value): value is string => value !== undefined && value !== "",
+    );
+    if (candidates.length === 0) return null;
+    return candidates.reduce((shortest, current) =>
+      current.length < shortest.length ? current : shortest,
+    );
+  }
 </script>
 
 <div class="mx-auto flex max-w-3xl flex-col gap-4 p-4 md:p-6">
@@ -281,13 +365,84 @@
     <Card title="agent setup" scroll={false}>
       <div class="flex flex-col gap-3 p-3">
         <div class="grid gap-3 sm:grid-cols-2">
-          <!-- Select 只支持 bind:value：serviceSel/agentSel 为 derived get/set 桥接 -->
-          <Select label="service" options={serviceOptions} bind:value={serviceSel} />
-          <Select
-            label="agent"
-            options={AGENT_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
-            bind:value={agentSel}
-          />
+          <!-- NativeSelect（popover Select 只支持 bind:value 无 onchange，曾致
+               ③ 步死锁；此处换原生 select + onchange 透传） -->
+          <NativeSelect label="service" bind:value={serviceSel} onchange={handleServiceChange}>
+            {#each serviceOptions as option (option.value)}
+              <option value={option.value}>{option.label}</option>
+            {/each}
+          </NativeSelect>
+          <NativeSelect label="agent" bind:value={agentSel} onchange={handleAgentChange}>
+            {#each AGENT_OPTIONS as option (option.value)}
+              <option value={option.value}>{option.label}</option>
+            {/each}
+          </NativeSelect>
+        </div>
+
+        <!-- agent 可用性标注：按 WRITER_AGENT_FORM 查服务 routes 是否覆盖该标准 -->
+        {#if agentForm !== null && selectedService !== null}
+          {#if agentFormServed && agentFormBase !== null}
+            <p class="text-[11px] leading-relaxed text-[color:var(--success)]">
+              this service serves {FORM_LABELS[agentForm]} at
+              <code class="font-mono">{agentFormBase}</code>
+            </p>
+          {:else if selectedRoutes.length > 0}
+            <p class="text-[11px] leading-relaxed text-[color:var(--warning)]">
+              this service does not expose {FORM_LABELS[agentForm]} - pick another agent or service
+            </p>
+          {:else}
+            <p class="text-[11px] leading-relaxed text-muted-foreground">
+              legacy passthrough - this service has no per-standard routes; point the agent at the
+              bare base below.
+            </p>
+          {/if}
+        {/if}
+
+        <!-- API endpoints（M3-r4）：按标准路由的本地 base + 行内连通测试 -->
+        <div class="flex flex-col gap-2 border border-border/70 p-3">
+          <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
+            api endpoints
+          </span>
+          {#if selectedService === null || selectedPort === null}
+            <p class="text-[11px] text-muted-foreground">select a service to see its endpoints.</p>
+          {:else if routeRows.length > 0}
+            {#each routeRows as row (row.form)}
+              <div class="flex flex-col gap-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="w-full flex-none text-xs sm:w-44">{row.label}</span>
+                  <div class="min-w-0 flex-1">
+                    <CopyField value={row.base} />
+                  </div>
+                  <PressButton
+                    variant="outline"
+                    loading={connectW.testBusy === row.form}
+                    onclick={() => void testServiceRoute(row.form)}
+                  >test</PressButton>
+                </div>
+                {#if row.result !== null}
+                  {#if row.result.ok}
+                    <p class="font-mono text-[11px] text-[color:var(--success)]">
+                      ok {row.result.latencyMs}ms{row.result.httpStatus !== undefined ? ` (HTTP ${row.result.httpStatus})` : ""}
+                    </p>
+                  {:else}
+                    <p class="text-[11px] leading-relaxed text-[color:var(--warning)]">
+                      failed{row.result.httpStatus !== undefined ? ` (HTTP ${row.result.httpStatus})` : ""}{failureExcerpt(row.result) !== null ? `: ${failureExcerpt(row.result)}` : ""}
+                    </p>
+                  {/if}
+                  {#if row.result.request.url !== ""}
+                    <p class="break-all font-mono text-[11px] text-muted-foreground">
+                      POST {shortenUrl(row.result.request.url)}
+                    </p>
+                  {/if}
+                {/if}
+              </div>
+            {/each}
+          {:else if bareBase !== null}
+            <div class="flex flex-col gap-1.5">
+              <CopyField value={bareBase} />
+              <p class="text-[11px] text-muted-foreground">legacy passthrough - no per-standard routes</p>
+            </div>
+          {/if}
         </div>
 
         {#if connectW.agent === "skip"}
@@ -309,6 +464,12 @@
             </p>
             <pre class="diff-block border border-border bg-muted/40 p-3">{connectW.writerPreview.diff}</pre>
           </div>
+        {:else if connectW.writerError !== null}
+          <!-- preview 失败不堵路：错误在卡片下方就地展示，footer 的 finish 仍可达 -->
+          <p class="text-xs leading-relaxed text-muted-foreground">
+            preview failed - see the error below. adjust the service or agent, or finish without
+            writing a config.
+          </p>
         {:else}
           <p class="text-xs text-muted-foreground">pick a service and an agent to preview the diff.</p>
         {/if}
@@ -316,7 +477,9 @@
       {#snippet foot()}
         <CardFooter label="connect wizard actions">
           <PressButton variant="ghost" onclick={connectBack} class={connectW.writerApplyBusy ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
-          {#if connectW.agent === "skip" || connectW.writerDone}
+          <!-- 死锁解除（M3-r4 ⑥b）：skip/写完照旧放行 finish；preview 缺席
+               （加载中/失败/未选）也放行——页脚始终有可点击的出路 -->
+          {#if connectW.agent === "skip" || connectW.writerDone || connectW.writerPreview === null}
             <PressButton variant="fill" href="#/dashboard" external={false} onclick={() => finishConnect()}>
               finish - go to dashboard
             </PressButton>

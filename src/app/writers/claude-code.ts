@@ -10,6 +10,13 @@ import { objectField, readJsonObjectFromText, serializeJson } from "./common.ts"
 
 export const CLAUDE_CODE_PLACEHOLDER_TOKEN = "sk-aifly-local";
 
+/** Claude Code 的 base：服务声明 anthropic 路由 → 标准前缀（client 追加
+    /v1/messages 等，路由映射到 upstream 侧真实前缀）；无路由沿用裸 base
+    （anthropic 原生 upstream 直接透传——旧行为）。 */
+function anthropicBase(target: ResolvedTarget): string {
+  return target.formBase?.anthropic ?? target.baseUrl;
+}
+
 export const claudeCodeWriter: WriterModule = {
   agent: "claude-code",
   configPath(ctx: WriterContext): string {
@@ -18,7 +25,7 @@ export const claudeCodeWriter: WriterModule = {
   compose(existing: string | null, target: ResolvedTarget): string {
     const root = readJsonObjectFromText(existing ?? "", "settings.json");
     const env = objectField(root, "env", "settings.json");
-    env["ANTHROPIC_BASE_URL"] = target.baseUrl;
+    env["ANTHROPIC_BASE_URL"] = anthropicBase(target);
     env["ANTHROPIC_AUTH_TOKEN"] = CLAUDE_CODE_PLACEHOLDER_TOKEN;
     root["env"] = env;
     return serializeJson(root);

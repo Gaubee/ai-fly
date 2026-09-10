@@ -291,3 +291,42 @@ describe("writer registry", () => {
     expect(paths.size).toBe(5);
   });
 });
+
+describe("M3-r4 按标准路由的 base 写入（formBase）", () => {
+  const routed = resolveTargetPort(4304, ["openai-chat", "anthropic"]);
+  const allForms = resolveTargetPort(4300, ["openai-chat", "openai-responses", "anthropic"]);
+
+  it("resolveTargetPort：formBase = baseUrl + 标准本地前缀；无路由缺省", () => {
+    expect(routed.baseUrl).toBe("http://127.0.0.1:4304");
+    expect(routed.formBase).toEqual({
+      "openai-chat": "http://127.0.0.1:4304/openai",
+      anthropic: "http://127.0.0.1:4304/anthropic",
+    });
+    expect(resolveTargetPort(4300).formBase).toBeUndefined();
+  });
+
+  it("claude-code：anthropic 路由 → /anthropic 前缀；无路由 → 裸 base（旧行为）", async () => {
+    const routedPreview = await previewWriter("claude-code", routed, { home });
+    expect(routedPreview.diff).toContain('"ANTHROPIC_BASE_URL": "http://127.0.0.1:4304/anthropic"');
+    const legacy = await previewWriter("claude-code", target, { home });
+    expect(legacy.diff).toContain(`"ANTHROPIC_BASE_URL": "${target.baseUrl}"`);
+  });
+
+  it("codex：responses 路由 → responses wire_api + /responses/v1；否则 chat + 裸 base", async () => {
+    const routedPreview = await previewWriter("codex", allForms, { home });
+    expect(routedPreview.diff).toContain('wire_api = "responses"');
+    expect(routedPreview.diff).toContain('base_url = "http://127.0.0.1:4300/responses/v1"');
+    const legacy = await previewWriter("codex", target, { home });
+    expect(legacy.diff).toContain('wire_api = "chat"');
+    expect(legacy.diff).toContain(`base_url = "${target.baseUrl}"`);
+  });
+
+  it("cursor/cline/continue：openai-chat 路由 → /openai/v1 base", async () => {
+    const cursorPreview = await previewWriter("cursor", routed, { home });
+    expect(cursorPreview.diff).toContain('"openai.baseUrl.experimental": "http://127.0.0.1:4304/openai/v1"');
+    const clinePreview = await previewWriter("cline", routed, { home });
+    expect(clinePreview.diff).toContain('"cline.openAiBaseUrl": "http://127.0.0.1:4304/openai/v1"');
+    const continuePreview = await previewWriter("continue", routed, { home });
+    expect(continuePreview.diff).toContain('"apiBase": "http://127.0.0.1:4304/openai/v1"');
+  });
+});

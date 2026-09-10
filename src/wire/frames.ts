@@ -279,6 +279,16 @@ export const SERVICE_DETAIL_SCHEMA = z.strictObject({
       .max(32)
       .optional(),
   }),
+  /** 按标准路由披露（M3-r4；消费侧据此呈现各标准本地 base 与 agent 可用性）。 */
+  routes: z
+    .array(
+      z.strictObject({
+        form: z.enum(["openai-chat", "openai-responses", "anthropic"]),
+        upstreamPrefix: z.string().max(2048),
+      }),
+    )
+    .max(3)
+    .optional(),
 });
 
 export const SERVICE_ENTRY_SCHEMA = z.strictObject({

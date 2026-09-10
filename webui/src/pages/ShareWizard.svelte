@@ -3,9 +3,10 @@
      tile）+ 搜索框（label/id/baseUrl 过滤精选与长尾）/ 本地运行时排前 /
      featured 徽标 / models.dev 长尾折叠区 + 断网提示 + 自定义 URL 卡）→
      ②命名与分组（服务名/分组（可新建，提示已有组）/密钥选择器 + manage
-     secrets 面板/连通测试；限额/default consumer port/自定义 match domains
-     收进默认折叠的 advanced options 手风琴——match 留空 = 提交时用 upstream
-     host）→ ③生成分享（链接 + 一键复制 + 链接即凭证警示 +
+     secrets 面板/连通测试；限额/default consumer port/自定义 match domains/
+     按标准 api routes（M3-r4 ⑦，custom 模式）收进默认折叠的 advanced
+     options 手风琴——match 留空 = 提交时用 upstream host）→ ③生成分享
+     （链接 + 一键复制 + 链接即凭证警示 +
      TTL + 密钥已存本机密钥面板提示）。状态机在 stores/share-wizard。 -->
 <script lang="ts">
   import { onMount } from "svelte";
@@ -305,6 +306,52 @@
                   <p class="text-[11px] leading-relaxed text-muted-foreground">
                     requests whose host matches are captured - leave empty to use the upstream host.
                   </p>
+                </div>
+                <!-- API routes（M3-r4 ⑦）：可选按标准声明 upstream 路径前缀；
+                     空 = 该标准不提供（store 组装处只收非空项；预设自带 routes） -->
+                <div class="flex flex-col gap-3">
+                  <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
+                    api routes (optional)
+                  </span>
+                  <div class="flex flex-col gap-1.5">
+                    <Input
+                      label="openai chat completions path"
+                      placeholder="/v1"
+                      autocapitalize="none"
+                      autocorrect="off"
+                      spellcheck={false}
+                      bind:value={share.customRouteChat}
+                    />
+                    <p class="text-[11px] leading-relaxed text-muted-foreground">
+                      upstream path prefix for this standard - empty = not offered
+                    </p>
+                  </div>
+                  <div class="flex flex-col gap-1.5">
+                    <Input
+                      label="openai responses path"
+                      placeholder="/v1"
+                      autocapitalize="none"
+                      autocorrect="off"
+                      spellcheck={false}
+                      bind:value={share.customRouteResponses}
+                    />
+                    <p class="text-[11px] leading-relaxed text-muted-foreground">
+                      upstream path prefix for this standard - empty = not offered
+                    </p>
+                  </div>
+                  <div class="flex flex-col gap-1.5">
+                    <Input
+                      label="anthropic messages path"
+                      placeholder="/v1"
+                      autocapitalize="none"
+                      autocorrect="off"
+                      spellcheck={false}
+                      bind:value={share.customRouteAnthropic}
+                    />
+                    <p class="text-[11px] leading-relaxed text-muted-foreground">
+                      upstream path prefix for this standard - empty = not offered
+                    </p>
+                  </div>
                 </div>
               {/if}
             </div>

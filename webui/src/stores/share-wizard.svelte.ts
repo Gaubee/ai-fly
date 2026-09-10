@@ -6,9 +6,11 @@
 // secretName（服务端写 $secret:<name>）；custom 路径手组
 // rewrite.headerSet.authorization = $secret:<name>，match 留空时由
 // upstream hostname 派生单条 exact（M3-acceptance ③）。
+// custom 路径可按标准声明 routes（M3-r4 ⑦：chat/responses/anthropic 三个
+// upstream 前缀输入，空 = 该标准不提供；全空不带 routes）。
 // 每步可回退；成功后锁定结果视图（回退会重复建服务，故隐藏 Back）。
 import { toRpcError, type RpcError } from "$lib/rpc-client";
-import type { Preset } from "$shared/rpc-contract.ts";
+import type { Preset, RouteForm } from "$shared/rpc-contract.ts";
 import { call } from "./rpc.svelte.ts";
 import { toastRpcError, toastSuccess } from "./toast.svelte.ts";
 import { refresh } from "./app.svelte.ts";
@@ -40,6 +42,10 @@ export const share = $state({
   customUpstream: "",
   customMatch: "",
   customPort: "",
+  // ②（M3-r4 ⑦）自定义服务的按标准路由 upstream 前缀（空 = 该标准不提供）
+  customRouteChat: "",
+  customRouteResponses: "",
+  customRouteAnthropic: "",
   // ② 命名与分组（端口沿用预设 defaultPort，可覆盖）
   name: "",
   port: "",
@@ -66,6 +72,9 @@ export function resetShare(): void {
   share.customUpstream = "";
   share.customMatch = "";
   share.customPort = "";
+  share.customRouteChat = "";
+  share.customRouteResponses = "";
+  share.customRouteAnthropic = "";
   share.name = "";
   share.port = "";
   share.groupName = "";
@@ -125,6 +134,19 @@ function customMatchRules(): Array<{ type: "exact" | "suffix"; value: string }> 
   } catch {
     return null;
   }
+}
+
+/** 自定义路由组装（M3-r4 ⑦）：三个标准前缀只收非空项；全空 = undefined
+ *  （不带 routes，legacy 透传）。前缀规范化（前导斜杠等）在引擎 store 写入期。 */
+function customRoutes(): Array<{ form: RouteForm; upstreamPrefix: string }> | undefined {
+  const entries: Array<{ form: RouteForm; upstreamPrefix: string }> = [];
+  const chat = share.customRouteChat.trim();
+  const responses = share.customRouteResponses.trim();
+  const anthropic = share.customRouteAnthropic.trim();
+  if (chat !== "") entries.push({ form: "openai-chat", upstreamPrefix: chat });
+  if (responses !== "") entries.push({ form: "openai-responses", upstreamPrefix: responses });
+  if (anthropic !== "") entries.push({ form: "anthropic", upstreamPrefix: anthropic });
+  return entries.length > 0 ? entries : undefined;
 }
 
 /** ② → ③ 校验：名称、分组名非空；端口/限额可解析。 */
@@ -217,6 +239,8 @@ export async function generateShare(): Promise<void> {
         share.error = { code: "INVALID_INPUT", message: "name, https upstream and match domain are required" };
         return;
       }
+      // routes：按标准 upstream 前缀（M3-r4 ⑦；全空 = undefined 不带）
+      const routes = customRoutes();
       const added = await call((c) =>
         c.provider.services.add({
           name: share.name.trim(),
@@ -228,6 +252,7 @@ export async function generateShare(): Promise<void> {
           ...(share.secretName !== undefined
             ? { rewrite: { headerSet: { authorization: `$secret:${share.secretName}` } } }
             : {}),
+          ...(routes !== undefined ? { routes } : {}),
         }),
       );
       serviceName = added.service.name;

@@ -14,6 +14,7 @@
 
 import { FORBIDDEN_REQ_HEADER_NAMES } from "../wire/frames.ts";
 import type { ReqHeader } from "../wire/frames.ts";
+import { ROUTE_LOCAL_PREFIX } from "../shared/rpc-contract.ts";
 import { parseUpstreamUrl } from "./store.ts";
 import type { ServiceConfig } from "./store.ts";
 
@@ -189,10 +190,27 @@ export function buildUpstreamRequest(
 ): UpstreamPlan {
   const upstream = parseUpstreamUrl(service.upstream);
 
-  // 1) path：防御性形状检查 -> 前缀剥离 -> 前缀追加 -> 基础路径拼接 -> 点段规范化。
+  // 1) path：防御性形状检查 -> 按标准路由（最长本地前缀段边界命中 → upstream 前缀
+  //    替换）-> 前缀剥离 -> 前缀追加 -> 基础路径拼接 -> 点段规范化。
+  //    路由改写优先于服务级 strip/append（预设/自定义只应择一使用）。
   assertFramePathShape(req.path);
   const { path: rawPath, query } = splitQuery(req.path);
   let requestPath = rawPath;
+  if (service.routes !== undefined && service.routes.length > 0) {
+    let matched: { localPrefix: string; upstreamPrefix: string } | null = null;
+    for (const route of service.routes) {
+      const local = ROUTE_LOCAL_PREFIX[route.form];
+      const hit = requestPath === local || requestPath.startsWith(local + "/");
+      if (hit && (matched === null || local.length > matched.localPrefix.length)) {
+        matched = { localPrefix: local, upstreamPrefix: route.upstreamPrefix };
+      }
+    }
+    if (matched !== null) {
+      const rest = requestPath.slice(matched.localPrefix.length); // "" | "/..."
+      const up = matched.upstreamPrefix;
+      requestPath = rest === "" ? (up === "" ? "/" : up) : `${up}${rest}`;
+    }
+  }
   const strip = service.rewrite?.pathPrefixStrip;
   if (strip !== undefined && (requestPath === strip || requestPath.startsWith(strip + "/"))) {
     // 仅在段边界剥离（strip=/a 命中 /a 与 /a/...，不误伤 /ab）；未携带前缀则原样。

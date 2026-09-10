@@ -14,9 +14,10 @@ import { buildShareLink, previewShareLink, SHARE_TTL_DEFAULT_MS } from "../provi
 import { parseUpstreamUrl } from "../provider/store.ts";
 import type { KeyRecord, ServiceConfig, ServiceInput } from "../provider/store.ts";
 import { SecretsStore } from "../provider/secrets.ts";
-import { probeUpstreamModels, testUpstream } from "../provider/upstream-test.ts";
+import { probeUpstreamModels, testUpstream, pickDefaultModel } from "../provider/upstream-test.ts";
 import { importLink, joinDevice, addKey } from "../consumer/join.ts";
 import { listKeyrings, removeKeyring, setPort } from "../consumer/store.ts";
+import { testLocalService } from "../consumer/local-test.ts";
 import { applyWriter, previewWriter } from "./writers/index.ts";
 import { resolveTargetPort } from "./writers/common.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
@@ -69,6 +70,7 @@ export function presetToServiceInput(
     name: input.name ?? preset.id,
     upstream: preset.baseUrl,
     match: preset.matchDomains.map((domain) => ({ type: "suffix" as const, value: domain })),
+    ...(preset.routes !== undefined && preset.routes.length > 0 ? { routes: preset.routes } : {}),
     ...(input.port !== undefined ? { defaultPort: input.port } : { defaultPort: preset.defaultPort }),
     ...(input.secretName !== undefined
       ? { rewrite: { headerSet: { authorization: `$secret:${input.secretName}` } } }
@@ -88,7 +90,8 @@ export function createRpcRouter(deps: RpcRouterDeps) {
   const host = deps.host;
   const home = (): string => deps.home ?? homedir();
 
-  /** 写手目标解析：serviceId → 消费方存储端口（pinned > default）；显式 port 直用。 */
+  /** 写手目标解析：serviceId → 消费方存储端口（pinned > default）与已声明路由
+      （detail.routes → 各标准本地 base）；显式 port 直用（无路由信息）。 */
   const resolveWriterTarget = (
     serviceId: string | undefined,
     port: number | undefined,
@@ -101,10 +104,22 @@ export function createRpcRouter(deps: RpcRouterDeps) {
     for (const ring of rings) {
       const service = ring.services.find((s) => s.serviceId === serviceId);
       if (service !== undefined) {
-        return resolveTargetPort(ring.ports[service.serviceId] ?? service.defaultPort);
+        // 端口：网关实际监听优先（auto-assign 后存储投影不可信），回退 keyring 投影
+        const port = livePorts().get(service.serviceId) ?? ring.ports[service.serviceId] ?? service.defaultPort;
+        return resolveTargetPort(port, service.detail?.routes?.map((r) => r.form));
       }
     }
     throw new DomainError("NOT_FOUND", `error: unknown service '${serviceId}'`);
+  };
+
+  /** 网关实际监听端口表（M3-r4：auto-assign 后 keyring 投影不可信；
+      无引擎/未监听时为空表，调用方回退存储投影）。 */
+  const livePorts = (): Map<string, number> => {
+    const map = new Map<string, number>();
+    const engine = host.consumerEngine();
+    if (engine === null) return map;
+    for (const info of engine.gateway.listenerInfo()) map.set(info.serviceId, info.port);
+    return map;
   };
 
   const rpc = implement(rpcContract);
@@ -309,6 +324,42 @@ export function createRpcRouter(deps: RpcRouterDeps) {
           return { alias: result.ring.alias, added: result.added };
         }),
       },
+      services: {
+        test: rpc.consumer.services.test.handler(async ({ input }) => {
+          // 定位服务（keyring detail 持 upstream 与 routes）+ 端口（运行时实际监听
+          // 优先；网关停止时用存储投影——fetch 的 ECONNREFUSED 即诚实信号）。
+          const { rings } = listKeyrings(host.consumersRoot);
+          let found: { port: number; upstream?: string } | undefined;
+          for (const ring of rings) {
+            const service = ring.services.find((s) => s.serviceId === input.serviceId);
+            if (service === undefined) continue;
+            found = {
+              port: livePorts().get(service.serviceId) ?? ring.ports[service.serviceId] ?? service.defaultPort,
+              ...(service.detail?.upstream !== undefined ? { upstream: service.detail.upstream } : {}),
+            };
+            break;
+          }
+          if (found === undefined) {
+            throw new DomainError("NOT_FOUND", `error: unknown service '${input.serviceId}'`);
+          }
+          // 模型缺省：models.dev 缓存按 detail.upstream 主机名命中，取最便宜 chat
+          let model = input.model;
+          let modelSource: "explicit" | "models.dev" | "none" = model !== undefined ? "explicit" : "none";
+          if (model === undefined && found.upstream !== undefined) {
+            const raw = readModelsDevRaw(modelsDevCachePath(home()));
+            const picked = pickDefaultModel(raw, found.upstream);
+            if (picked !== undefined) {
+              model = picked;
+              modelSource = "models.dev";
+            }
+          }
+          const result = await testLocalService({ port: found.port, form: input.form, ...(model !== undefined ? { model } : {}) });
+          return {
+            ...result,
+            ...(modelSource !== "none" ? { modelSource } : {}),
+          };
+        }),
+      },
       ports: {
         list: rpc.consumer.ports.list.handler(() => {
           const { rings } = listKeyrings(host.consumersRoot);
@@ -358,16 +409,22 @@ export function createRpcRouter(deps: RpcRouterDeps) {
         }
         return {
           gatewayRunning: true,
-          providers: engine.manager.snapshot().map((s) => ({
-            endpointId: s.endpointId,
-            alias: s.alias,
-            state: s.state,
-            services: s.services,
-            ports: s.ports,
-            servedCount: s.servedCount,
-            bufferOverflows: s.bufferOverflows,
-            ...(s.lastError !== undefined ? { lastError: s.lastError } : {}),
-          })),
+          providers: engine.manager.snapshot().map((s) => {
+            // M3-r4：端口以网关实际监听为准（auto-assign 后 keyring 投影会失真）
+            const live = livePorts();
+            return {
+              endpointId: s.endpointId,
+              alias: s.alias,
+              state: s.state,
+              services: s.services,
+              ports: Object.fromEntries(
+                s.services.map((svc) => [svc.serviceId, live.get(svc.serviceId) ?? s.ports[svc.serviceId] ?? svc.defaultPort]),
+              ),
+              servedCount: s.servedCount,
+              bufferOverflows: s.bufferOverflows,
+              ...(s.lastError !== undefined ? { lastError: s.lastError } : {}),
+            };
+          }),
         };
       }),
       forget: rpc.consumer.forget.handler(async ({ input }) => {

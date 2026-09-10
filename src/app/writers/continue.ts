@@ -4,7 +4,7 @@
 
 import { join } from "node:path";
 import type { ResolvedTarget, WriterContext, WriterModule } from "./common.ts";
-import { readJsonObjectFromText, serializeJson } from "./common.ts";
+import { openAiChatBase, readJsonObjectFromText, serializeJson } from "./common.ts";
 import { DomainError } from "../errors.ts";
 
 export const CONTINUE_MODEL_TITLE = "ai-fly";
@@ -25,7 +25,7 @@ export const continueWriter: WriterModule = {
     const entry = {
       title: CONTINUE_MODEL_TITLE,
       provider: "openai",
-      apiBase: target.baseUrl,
+      apiBase: openAiChatBase(target),
       apiKey: CONTINUE_PLACEHOLDER_KEY,
       // 本地端点不指定模型名：由服务 upstream 侧的目录/默认模型决定，留占位
       model: CONTINUE_MODEL_TITLE,
