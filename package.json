@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "description": "ai-fly — peer-to-peer HTTP/WebSocket bridge with AI-ready presets, over OpenDWeb fabric",
   "license": "MIT OR Apache-2.0",
-  "private": true,
   "type": "module",
   "bin": {
     "ai-fly": "./dist/ai-fly.js"
@@ -55,5 +54,14 @@
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0"
+  },
+  "files": [
+    "dist/*.js",
+    "dist/*.mjs",
+    "dist/*.d.ts"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gaubee/ai-fly.git"
   }
 }
