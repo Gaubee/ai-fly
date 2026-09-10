@@ -244,7 +244,15 @@
 
       <div class="mt-1 flex flex-col gap-2 border-t border-border pt-3">
         <p class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">new group</p>
-        <Input label="name" placeholder="friends" bind:value={newName} error={newNameError} />
+        <Input
+          label="name"
+          placeholder="friends"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck={false}
+          bind:value={newName}
+          error={newNameError}
+        />
         {#if serviceNames.length > 0}
           <div class="flex flex-wrap gap-x-4 gap-y-1">
             {#each serviceNames as svc (svc.id)}

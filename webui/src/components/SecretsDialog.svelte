@@ -126,7 +126,15 @@
       <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
         {editing !== null ? `overwrite "${editing}"` : "add a secret"}
       </span>
-      <Input label="name" placeholder="openai" error={nameError} bind:value={name} />
+      <Input
+        label="name"
+        placeholder="openai"
+        autocapitalize="none"
+        autocorrect="off"
+        spellcheck={false}
+        error={nameError}
+        bind:value={name}
+      />
       <Input
         type="password"
         label="value"

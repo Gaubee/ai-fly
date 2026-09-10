@@ -245,13 +245,23 @@
     <Card title="name & group" scroll={false}>
       <div class="flex flex-col gap-3 p-3">
         {#if share.mode === "custom"}
-          <Input label="upstream URL" placeholder="https://api.example.com/v1" bind:value={share.customUpstream} />
+          <Input
+            label="upstream URL"
+            placeholder="https://api.example.com/v1"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck={false}
+            bind:value={share.customUpstream}
+          />
           <Separator />
         {/if}
 
         <Input
           label="service name"
           placeholder={share.mode === "preset" ? share.name : "my-service"}
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck={false}
           bind:value={share.name}
         />
 
@@ -287,6 +297,9 @@
                   <Input
                     label="match domains (default: use the upstream host)"
                     placeholder="auto: api.example.com"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
                     bind:value={share.customMatch}
                   />
                   <p class="text-[11px] leading-relaxed text-muted-foreground">

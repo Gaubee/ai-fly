@@ -402,10 +402,16 @@
           <Card title={serviceForm.editingName !== "" ? `edit service - ${serviceForm.editingName}` : "add service"} scroll={false}>
             <div class="flex flex-col gap-3 p-3">
               <div class="grid gap-3 sm:grid-cols-2">
-                <Input label="name" bind:value={serviceForm.name} />
+                <Input
+                  label="name"
+                  autocapitalize="none"
+                  autocorrect="off"
+                  spellcheck={false}
+                  bind:value={serviceForm.name}
+                />
                 <Input label="port" placeholder="default 8080" bind:value={serviceForm.port} />
               </div>
-              <Input label="upstream URL" placeholder="https://api.example.com/v1" bind:value={serviceForm.upstream} />
+              <Input label="upstream URL" placeholder="https://api.example.com/v1" autocapitalize="none" autocorrect="off" spellcheck={false} bind:value={serviceForm.upstream} />
               <div class="flex flex-col gap-1.5">
                 <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">match rules</span>
                 {#each serviceForm.match as rule, i (i)}
@@ -424,6 +430,9 @@
                     <input
                       class="min-w-0 flex-1 border border-border bg-transparent px-2.5 py-1.5 font-mono text-xs focus:border-primary focus:outline-none"
                       placeholder="api.example.com"
+                      autocapitalize="none"
+                      autocorrect="off"
+                      spellcheck={false}
                       bind:value={serviceForm.match[i]!.value}
                     />
                     <PressButton
@@ -579,7 +588,14 @@
         {#if groupForm.open}
           <Card title="add group" scroll={false}>
             <div class="flex flex-col gap-3 p-3">
-              <Input label="group name" placeholder="friends" bind:value={groupForm.name} />
+              <Input
+                label="group name"
+                placeholder="friends"
+                autocapitalize="none"
+                autocorrect="off"
+                spellcheck={false}
+                bind:value={groupForm.name}
+              />
               <div class="flex flex-wrap gap-x-5 gap-y-1.5">
                 {#each app.services.map((service) => service.name) as name (name)}
                   <label class="flex items-center gap-1.5 text-xs">
@@ -747,7 +763,15 @@
               <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
                 {secretEditing !== null ? `overwrite "${secretEditing}"` : "add a secret"}
               </span>
-              <Input label="name" placeholder="openai" error={secretNameError} bind:value={secretNameDraft} />
+              <Input
+                label="name"
+                placeholder="openai"
+                autocapitalize="none"
+                autocorrect="off"
+                spellcheck={false}
+                error={secretNameError}
+                bind:value={secretNameDraft}
+              />
               <Input
                 type="password"
                 label="value"
