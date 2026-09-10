@@ -131,7 +131,8 @@
   /** 该标准路由的本地前缀（M3-r6：规则自带 from；缺省派生规范前缀）。
       anthropic 家族剥尾部版本段——Claude Code 自带 /v1/messages。 */
   function localPrefixForForm(form: RouteForm): string | null {
-    const route = selectedRoutes.find((r) => r.forms.includes(form));
+    // 端点 base 仅 prefix 模式可给（pattern 模式无稳定前缀面）
+    const route = selectedRoutes.find((r) => r.forms.includes(form) && r.mode !== "pattern");
     if (route === undefined) return null;
     const local = route.localPrefix ?? ROUTE_LOCAL_PREFIX[form];
     return form === "anthropic" ? local.replace(/\/v\d+$/, "") : local;
@@ -145,7 +146,7 @@
           .map((form) => {
             const local = localPrefixForForm(form);
             if (local === null) return null;
-            const route = selectedRoutes.find((r) => r.forms.includes(form))!;
+            const route = selectedRoutes.find((r) => r.forms.includes(form) && r.mode !== "pattern")!;
             return {
               form,
               label: FORM_LABELS[form],

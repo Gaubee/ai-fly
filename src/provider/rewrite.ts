@@ -15,6 +15,8 @@
 import { FORBIDDEN_REQ_HEADER_NAMES } from "../wire/frames.ts";
 import type { ReqHeader } from "../wire/frames.ts";
 import { routeLocalPrefix } from "../shared/rpc-contract.ts";
+import { compileMatchPattern, matchRequestPath } from "./match-pattern.ts";
+import { expandUriTemplate } from "./uri-template.ts";
 import { parseUpstreamUrl } from "./store.ts";
 import type { ServiceConfig } from "./store.ts";
 
@@ -156,6 +158,30 @@ function splitQuery(raw: string): SplitPath {
   return idx < 0 ? { path: raw, query: "" } : { path: raw.slice(0, idx), query: raw.slice(idx + 1) };
 }
 
+/** 查询值解码（畸形序列原样保留；模板会重新编码）。 */
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value.replace(/\+/g, "%20"));
+  } catch {
+    return value;
+  }
+}
+
+/** 查询串 → 变量表（pattern 模板变量域；同名捕获组优先覆盖）。 */
+function parseQueryVars(query: string): Record<string, string> {
+  const vars: Record<string, string> = {};
+  if (query === "") return vars;
+  for (const pair of query.split("&")) {
+    const eq = pair.indexOf("=");
+    if (eq < 0) {
+      if (pair !== "") vars[pair] = "";
+      continue;
+    }
+    vars[pair.slice(0, eq)] = safeDecode(pair.slice(eq + 1));
+  }
+  return vars;
+}
+
 /** 帧内 path 的纵深防御检查（schema 层已拒；双保险）。 */
 function assertFramePathShape(path: string): void {
   if (!path.startsWith("/") || path.startsWith("//") || path.startsWith("/\\")) {
@@ -202,31 +228,47 @@ export function buildUpstreamRequest(
 ): UpstreamPlan {
   const upstream = parseUpstreamUrl(service.upstream);
 
-  // 1) path：防御性形状检查 -> 路径路由（最长 localPrefix 段边界命中 → upstream
-  //    前缀替换；未命中 = 路由表白名单外，本地拒绝零上游请求）-> 前缀剥离 ->
-  //    前缀追加 -> 基础路径拼接 -> 点段规范化。
+  // 1) path：防御性形状检查 -> 路径路由（**按声明顺序命中，先声明先匹配**
+  //    ——M3-r7 Owner 裁决；prefix 模式段边界前缀替换 / pattern 模式
+  //    URLPattern 匹配 + RFC 6570 模板拼装；未命中 = 白名单外，本地拒绝零
+  //    上游请求）-> 前缀剥离 -> 前缀追加 -> 基础路径拼接 -> 点段规范化。
   //    路由改写优先于服务级 strip/append（预设/自定义只应择一使用）。
-  //    M3-r6：localPrefix 是规则自带的 from 路径（缺省按 forms 规范前缀派生），
-  //    通用 from→to 规则——forms 标注与转发无关。
   assertFramePathShape(req.path);
-  const { path: rawPath, query } = splitQuery(req.path);
-  let requestPath = rawPath;
+  const split = splitQuery(req.path);
+  let requestPath = split.path;
+  let query = split.query;
   if (service.routes !== undefined && service.routes.length > 0) {
-    let matched: { localPrefix: string; upstreamPrefix: string } | null = null;
+    let matched = false;
     for (const route of service.routes) {
+      if (route.mode === "pattern") {
+        const groups = matchRequestPath(compileMatchPattern(route.matchPattern!), requestPath, query);
+        if (groups === null) continue;
+        // 变量 = URLPattern 捕获组 + 请求查询参数；模板产物含查询串则替换之
+        const vars: Record<string, string | undefined> = { ...parseQueryVars(query), ...groups };
+        const assembled = expandUriTemplate(route.template!, vars);
+        const qIdx = assembled.indexOf("?");
+        if (qIdx >= 0) {
+          requestPath = assembled.slice(0, qIdx);
+          query = assembled.slice(qIdx + 1);
+        } else {
+          requestPath = assembled;
+        }
+        matched = true;
+        break;
+      }
       const local = routeLocalPrefix(route);
       const hit = requestPath === local || requestPath.startsWith(local + "/");
-      if (hit && (matched === null || local.length > matched.localPrefix.length)) {
-        matched = { localPrefix: local, upstreamPrefix: route.upstreamPrefix };
-      }
+      if (!hit) continue;
+      const rest = requestPath.slice(local.length); // "" | "/..."
+      const up = route.upstreamPrefix ?? "";
+      requestPath = rest === "" ? (up === "" ? "/" : up) : `${up}${rest}`;
+      matched = true;
+      break;
     }
-    if (matched === null) {
+    if (!matched) {
       // 路由表 = 白名单：未声明的路径一律拒绝（个人信息端点保护）。
       throw new PathNotOfferedError();
     }
-    const rest = requestPath.slice(matched.localPrefix.length); // "" | "/..."
-    const up = matched.upstreamPrefix;
-    requestPath = rest === "" ? (up === "" ? "/" : up) : `${up}${rest}`;
   }
   const strip = service.rewrite?.pathPrefixStrip;
   if (strip !== undefined && (requestPath === strip || requestPath.startsWith(strip + "/"))) {

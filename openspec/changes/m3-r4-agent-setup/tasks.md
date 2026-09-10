@@ -53,3 +53,20 @@
       预览随动、回绑恢复；/user/balance → 404 白名单、/v1/* 与
       /anthropic/v1/messages → 401 governor（真实 DeepSeek，版本段拦截直通
       官方路径）
+
+## M3-r7 追加（Owner 裁决：排序命中 + pattern 模式）
+
+- [x] 19. 排序命中：路由按声明顺序匹配（先声明先赢，取消最长前缀优先）；
+      ② 行 UI 加 ↑/↓ 排序按钮（首/末行对应方向禁用）
+- [x] 20. pattern 模式：matchPattern（URLPattern pathname 表达式；{name}
+      花括号语法编译期翻译为 :name 兼容 Node/Ada 运行时）+ template
+      （RFC 6570 URI Template，变量域 = 捕获组 + 请求查询参数；产物含查询串
+      则替换）。uri-template.ts 独立模块（Level 1-2 操作符全集 + pct-encode）
+      + match-pattern.ts（编译缓存）；store 写入期 fail-fast 校验
+- [x] 21. 消费侧适配：端点 base/测试探测仅 prefix 模式规则可给（pattern 无
+      稳定前缀面）；可用性判定仍按 forms（含 pattern 行）
+- [x] 22. 回归与实证：rewrite 44 + store 22 + uri-template 14 单测全绿；
+      集成 25/25。实机决定性证据（upstream 互换成假记录器 + 文件同步通道）：
+      本地 POST /v1/chat/completions → upstream 收到 POST /relay/chat/completions
+      （pattern 置顶命中 + RFC 6570 改写 + 顺序优先）；GET /v1/models →
+      pattern 未命中落 prefix 规则原样转发；/a/*、/user/balance → 404 白名单

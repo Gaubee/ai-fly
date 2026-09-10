@@ -25,8 +25,11 @@ export type RouteTestOutput = Out<RpcClient["consumer"]["services"]["test"]>;
 export interface ServiceRouteView {
   /** 该规则承载的 API 标准（AI 层标注；可为空 = 未标注的通用规则）。 */
   forms: RouteForm[];
+  mode?: "prefix" | "pattern" | undefined;
   localPrefix?: string | undefined;
-  upstreamPrefix: string;
+  upstreamPrefix?: string | undefined;
+  matchPattern?: string | undefined;
+  template?: string | undefined;
 }
 
 /** Agent 清单（含 skip：仅导入，不写任何配置）。 */

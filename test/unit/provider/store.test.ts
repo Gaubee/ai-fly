@@ -270,3 +270,50 @@ describe("路由表（M3-r4）", () => {
     expect(svc.routes).toBeUndefined();
   });
 });
+
+describe("pattern 模式路由（M3-r7）", () => {
+  it("合法 pattern 行落库并完整恢复", () => {
+    const store = ProviderStore.open(dir);
+    store.addService({
+      name: "pat",
+      upstream: "https://agg.test",
+      match: [{ type: "suffix", value: "agg.test" }],
+      defaultPort: 4300,
+      routes: [{ forms: [], mode: "pattern", matchPattern: "/v1/:ver/*", template: "/relay/{+0}" }],
+    });
+    const reopened = ProviderStore.open(dir);
+    const svc = reopened.listServices().find((s) => s.name === "pat");
+    expect(svc?.routes).toEqual([{ forms: [], mode: "pattern", matchPattern: "/v1/:ver/*", template: "/relay/{+0}" }]);
+  });
+
+  it("非法 URLPattern / 非法模板写入期拒绝（invalid）", () => {
+    const store = ProviderStore.open(dir);
+    expect(() =>
+      store.addService({
+        name: "bad1",
+        upstream: "https://x.test",
+        match: [{ type: "suffix", value: "x.test" }],
+        defaultPort: 4300,
+        routes: [{ forms: [], mode: "pattern", matchPattern: "([)", template: "/x" }],
+      }),
+    ).toThrowError(StoreError);
+    expect(() =>
+      store.addService({
+        name: "bad2",
+        upstream: "https://x.test",
+        match: [{ type: "suffix", value: "x.test" }],
+        defaultPort: 4300,
+        routes: [{ forms: [], mode: "pattern", matchPattern: "/x", template: "/a/{unclosed" }],
+      }),
+    ).toThrowError(StoreError);
+    expect(() =>
+      store.addService({
+        name: "bad3",
+        upstream: "https://x.test",
+        match: [{ type: "suffix", value: "x.test" }],
+        defaultPort: 4300,
+        routes: [{ forms: [], mode: "pattern", matchPattern: "/x" }],
+      }),
+    ).toThrowError(StoreError); // pattern 行缺 template
+  });
+});

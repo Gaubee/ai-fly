@@ -64,11 +64,15 @@ export function buildServiceDetail(service: ServiceConfig): ServiceDetail {
     rewrite,
     ...(service.routes !== undefined && service.routes.length > 0
       ? {
-          routes: service.routes.map((r) => ({
-            forms: r.forms,
-            localPrefix: routeLocalPrefix(r),
-            upstreamPrefix: r.upstreamPrefix,
-          })),
+          routes: service.routes.map((r) =>
+            r.mode === "pattern"
+              ? { forms: r.forms, mode: "pattern" as const, matchPattern: r.matchPattern, template: r.template }
+              : {
+                  forms: r.forms,
+                  localPrefix: routeLocalPrefix(r),
+                  upstreamPrefix: r.upstreamPrefix ?? "",
+                },
+          ),
         }
       : {}),
   };
@@ -93,8 +97,13 @@ export function detailDisplayLines(detail: ServiceDetail): string[] {
   const lines: string[] = [`upstream: ${detail.upstream}`];
   for (const m of detail.match) lines.push(`match: ${m.type} ${m.value}`);
   for (const r of detail.routes ?? []) {
-    const to = r.upstreamPrefix === "" ? "(root)" : r.upstreamPrefix;
-    lines.push(`route: ${r.localPrefix} -> ${to}${r.forms.length > 0 ? ` (${r.forms.join("+")})` : ""}`);
+    const forms = r.forms.length > 0 ? ` (${r.forms.join("+")})` : "";
+    if (r.mode === "pattern") {
+      lines.push(`route: ${r.matchPattern} => ${r.template}${forms}`);
+    } else {
+      const to = r.upstreamPrefix === "" ? "(root)" : r.upstreamPrefix;
+      lines.push(`route: ${r.localPrefix} -> ${to}${forms}`);
+    }
   }
   if (detail.rewrite !== undefined) {
     const r = detail.rewrite;

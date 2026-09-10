@@ -66,16 +66,23 @@ export function parsePositiveInt(raw: string): number | undefined {
  */
 export interface ShareRouteRow {
   id: number;
+  /** 匹配模式（M3-r7）：prefix（默认，from→to 前缀替换）/ pattern
+   *  （URLPattern 匹配 + RFC 6570 模板拼装）。 */
+  mode: "prefix" | "pattern";
   from: string;
   to: string;
   bound: boolean;
+  /** pattern 模式：URLPattern pathname 表达式。 */
+  match: string;
+  /** pattern 模式：RFC 6570 URI Template。 */
+  template: string;
   forms: RouteForm[];
 }
 
 let routeRowSeq = 1;
 
 export function makeRouteRow(over: Partial<ShareRouteRow> = {}): ShareRouteRow {
-  return { id: routeRowSeq++, from: "/v1", to: "/v1", bound: true, forms: [], ...over };
+  return { id: routeRowSeq++, mode: "prefix", from: "/v1", to: "/v1", bound: true, match: "", template: "", forms: [], ...over };
 }
 
 export const share = $state({
@@ -142,7 +149,7 @@ export function choosePreset(preset: Preset): void {
   // forms 标注随行（消费侧 agent 判定），表单不显示
   share.routeRows = (preset.routes ?? []).map((route) => {
     const from = route.localPrefix ?? ROUTE_LOCAL_PREFIX[route.forms[0] ?? "openai-chat"];
-    const to = toInputFromPrefix(route.upstreamPrefix);
+    const to = toInputFromPrefix(route.upstreamPrefix ?? "");
     return makeRouteRow({ from, to, bound: to === from, forms: route.forms });
   });
   if (share.routeRows.length === 0) share.routeRows = [makeRouteRow()];
@@ -170,6 +177,21 @@ export function toggleRouteBound(row: ShareRouteRow, bound: boolean): void {
   row.bound = bound;
   if (bound) row.to = row.from;
 }
+/** 行排序（M3-r7 Owner 裁决：按顺序命中，先声明先匹配）。 */
+export function moveRouteRow(id: number, direction: -1 | 1): void {
+  const idx = share.routeRows.findIndex((row) => row.id === id);
+  const next = idx + direction;
+  if (idx < 0 || next < 0 || next >= share.routeRows.length) return;
+  const rows = [...share.routeRows];
+  const [row] = rows.splice(idx, 1);
+  rows.splice(next, 0, row!);
+  share.routeRows = rows;
+}
+
+export function setRouteMode(row: ShareRouteRow, mode: "prefix" | "pattern"): void {
+  row.mode = mode;
+}
+
 export function addRouteRow(): void {
   if (share.routeRows.length >= 4) return;
   share.routeRows.push(makeRouteRow());
@@ -217,9 +239,32 @@ function customMatchRules(): Array<{ type: "exact" | "suffix"; value: string }> 
 
 /** 路由组装（M3-r6）：行模型 from→to → 引擎路由（from 空 = 该行跳过；形状
  *  归一在此完成——零语义限制）。全空 = undefined（不带 routes，legacy 透传）。 */
-function routeRowsInput(): Array<{ forms: RouteForm[]; localPrefix: string; upstreamPrefix: string }> | undefined {
-  const entries: Array<{ forms: RouteForm[]; localPrefix: string; upstreamPrefix: string }> = [];
+function routeRowsInput():
+  | Array<{
+      forms: RouteForm[];
+      mode?: "prefix" | "pattern";
+      localPrefix?: string;
+      upstreamPrefix?: string;
+      matchPattern?: string;
+      template?: string;
+    }>
+  | undefined {
+  const entries: Array<{
+    forms: RouteForm[];
+    mode?: "prefix" | "pattern";
+    localPrefix?: string;
+    upstreamPrefix?: string;
+    matchPattern?: string;
+    template?: string;
+  }> = [];
   for (const row of share.routeRows) {
+    if (row.mode === "pattern") {
+      const match = row.match.trim();
+      const template = row.template.trim();
+      if (match === "" || template === "") continue; // 未完成的 pattern 行跳过
+      entries.push({ forms: row.forms, mode: "pattern", matchPattern: match, template });
+      continue;
+    }
     const local = normalizeRoutePrefix(row.from);
     if (local === "" || local === "/") continue;
     entries.push({ forms: row.forms, localPrefix: local, upstreamPrefix: toPrefixFromInput(row.to) });

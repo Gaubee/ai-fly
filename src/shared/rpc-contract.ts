@@ -57,18 +57,29 @@ export const SERVICE_REWRITE_SCHEMA = z.strictObject({
 
 export const ROUTE_FORM_SCHEMA = z.enum(["openai-chat", "openai-responses", "anthropic"]);
 
+/** 路由匹配模式（M3-r7）：prefix = 前缀替换（默认）；pattern = URLPattern
+ *  匹配 + RFC 6570 URI Template 拼装。 */
+export const ROUTE_MODE_SCHEMA = z.enum(["prefix", "pattern"]);
+
 /**
- * 按标准路由（M3-r6 定形）：一条通用 from→to 转发规则——本地端口前缀
- * （请求从这来，版本段粒度如 /v1、/anthropic）替换为 upstream 前缀；
- * forms 标注该规则承载的 API 标准（AI 层预命名，agent 可用性与 writer
- * 消费；引擎转发与 forms 无关）。默认绑定态 from==to（1:1 官方镜像）。
+ * 路径路由（M3-r7 定形）：**按声明顺序命中**（先声明先匹配）。
+ * - prefix 模式（默认）：localPrefix（版本段粒度如 /v1）替换为 upstreamPrefix；
+ * - pattern 模式：matchPattern（URLPattern pathname 表达式，`:name`/`{name}`
+ *   组、`*` 通配）匹配请求路径，template（RFC 6570 URI Template）以捕获组
+ *   + 查询参数拼装 upstream 路径。
+ * forms 标注承载的 API 标准（AI 层；引擎转发与 forms 无关，可为空）。
  */
 export const SERVICE_ROUTE_SCHEMA = z.strictObject({
-  forms: z.array(ROUTE_FORM_SCHEMA).min(1).max(3),
-  /** 本地端口前缀。缺省 = 首个 form 的规范前缀（store 写入期填充）。 */
+  forms: z.array(ROUTE_FORM_SCHEMA).max(3),
+  mode: ROUTE_MODE_SCHEMA.optional(),
+  /** prefix 模式：本地端口前缀。缺省 = 首个 form 的规范前缀。 */
   localPrefix: z.string().min(1).max(2048).optional(),
-  /** 替换本地前缀的 upstream 路径前缀（"" = upstream 根）。 */
-  upstreamPrefix: z.string().max(2048),
+  /** prefix 模式：替换本地前缀的 upstream 路径前缀（"" = upstream 根）。 */
+  upstreamPrefix: z.string().max(2048).optional(),
+  /** pattern 模式：URLPattern pathname 表达式。 */
+  matchPattern: z.string().min(1).max(2048).optional(),
+  /** pattern 模式：RFC 6570 URI Template（变量 = 捕获组 + 查询参数）。 */
+  template: z.string().min(1).max(2048).optional(),
 });
 
 /** 各 API 标准在本地端口上的规范前缀（缺省 localPrefix 与 agent 配置基准）。 */
@@ -147,9 +158,12 @@ export const SERVICE_ENTRY_SCHEMA = z.object({
       routes: z
         .array(
           z.strictObject({
-            forms: z.array(ROUTE_FORM_SCHEMA).min(1).max(3),
+            forms: z.array(ROUTE_FORM_SCHEMA).max(3),
+            mode: ROUTE_MODE_SCHEMA.optional(),
             localPrefix: z.string().optional(),
-            upstreamPrefix: z.string(),
+            upstreamPrefix: z.string().optional(),
+            matchPattern: z.string().optional(),
+            template: z.string().optional(),
           }),
         )
         .max(4)

@@ -280,13 +280,16 @@ export const SERVICE_DETAIL_SCHEMA = z.strictObject({
       .max(32)
       .optional(),
   }),
-  /** 路径路由披露（M3-r6：通用 from→to 规则；forms 为 AI 层标注，可为空）。 */
+  /** 路径路由披露（M3-r7：prefix/pattern 双模式；forms 为 AI 层标注，可为空）。 */
   routes: z
     .array(
       z.strictObject({
         forms: z.array(z.enum(["openai-chat", "openai-responses", "anthropic"])).max(3),
-        localPrefix: z.string().max(2048),
-        upstreamPrefix: z.string().max(2048),
+        mode: z.enum(["prefix", "pattern"]).optional(),
+        localPrefix: z.string().max(2048).optional(),
+        upstreamPrefix: z.string().max(2048).optional(),
+        matchPattern: z.string().max(2048).optional(),
+        template: z.string().max(2048).optional(),
       }),
     )
     .max(4)

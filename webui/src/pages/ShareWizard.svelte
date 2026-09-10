@@ -20,6 +20,7 @@
   import Separator from "$lib/ui/separator";
   import Accordion, { AccordionItem } from "$lib/ui/accordion";
   import Toggle from "$lib/ui/toggle";
+  import NativeSelect from "$lib/ui/native-select";
   import { slide } from "svelte/transition";
   import StepHeader from "../components/StepHeader.svelte";
   import ErrorAlert from "../components/ErrorAlert.svelte";
@@ -47,6 +48,8 @@
     toggleRouteBound,
     addRouteRow,
     removeRouteRow,
+    moveRouteRow,
+    setRouteMode,
     normalizeRoutePrefix,
     toPrefixFromInput,
   } from "../stores/share-wizard.svelte.ts";
@@ -83,6 +86,14 @@
   function onRowTo(rowId: number, event: Event & { currentTarget: EventTarget & HTMLInputElement }): void {
     const row = share.routeRows.find((r) => r.id === rowId);
     if (row !== undefined) row.to = event.currentTarget.value;
+  }
+  function onRowField(rowId: number, field: "match" | "template", event: Event & { currentTarget: EventTarget & HTMLInputElement }): void {
+    const row = share.routeRows.find((r) => r.id === rowId);
+    if (row !== undefined) row[field] = event.currentTarget.value;
+  }
+  function onRowMode(rowId: number, event: Event & { currentTarget: EventTarget & HTMLSelectElement }): void {
+    const row = share.routeRows.find((r) => r.id === rowId);
+    if (row !== undefined) setRouteMode(row, event.currentTarget.value === "pattern" ? "pattern" : "prefix");
   }
 
   /** 长尾展开（默认收起——20/80 法则：精选直达，长尾按需）。 */
@@ -289,34 +300,78 @@
           <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
             path routes
           </span>
-          {#each share.routeRows as row (row.id)}
+          {#each share.routeRows as row, index (row.id)}
             <div class="flex flex-col gap-1.5 border border-border/70 p-2.5">
               <div class="flex flex-wrap items-center gap-2">
-                <div class="min-w-36 flex-1">
-                  <Input
-                    placeholder="/v1"
-                    value={row.from}
-                    onchange={(event) => onRowFrom(row.id, event)}
-                    autocapitalize="none"
-                    autocorrect="off"
-                    spellcheck={false}
-                  />
+                <span class="flex shrink-0 items-center gap-0.5">
+                  <PressButton
+                    variant="ghost"
+                    ariaLabel="move route up"
+                    class={index === 0 ? "px-1.5 pointer-events-none opacity-40" : "px-1.5"}
+                    onclick={() => moveRouteRow(row.id, -1)}
+                  >↑</PressButton>
+                  <PressButton
+                    variant="ghost"
+                    ariaLabel="move route down"
+                    class={index === share.routeRows.length - 1 ? "px-1.5 pointer-events-none opacity-40" : "px-1.5"}
+                    onclick={() => moveRouteRow(row.id, 1)}
+                  >↓</PressButton>
+                </span>
+                <div class="w-28 shrink-0">
+                  <NativeSelect aria-label="route mode" value={row.mode} onchange={(event) => onRowMode(row.id, event)}>
+                    <option value="prefix">prefix</option>
+                    <option value="pattern">pattern</option>
+                  </NativeSelect>
                 </div>
-                <label class="flex shrink-0 cursor-pointer select-none items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <Toggle checked={row.bound} onchange={(event) => toggleRouteBound(row, event.currentTarget.checked)} />
-                  bind
-                </label>
-                <div class="min-w-36 flex-1">
-                  <Input
-                    placeholder="/ (root)"
-                    value={row.to}
-                    disabled={row.bound}
-                    onchange={(event) => onRowTo(row.id, event)}
-                    autocapitalize="none"
-                    autocorrect="off"
-                    spellcheck={false}
-                  />
-                </div>
+                {#if row.mode === "pattern"}
+                  <div class="min-w-32 flex-1">
+                    <Input
+                      placeholder="/v1/:ver/chat/completions"
+                      value={row.match}
+                      onchange={(event) => onRowField(row.id, "match", event)}
+                      autocapitalize="none"
+                      autocorrect="off"
+                      spellcheck={false}
+                    />
+                  </div>
+                  <span class="shrink-0 text-[11px] text-muted-foreground">⇒</span>
+                  <div class="min-w-32 flex-1">
+                    <Input
+                      placeholder={"/api/{ver}/completions"}
+                      value={row.template}
+                      onchange={(event) => onRowField(row.id, "template", event)}
+                      autocapitalize="none"
+                      autocorrect="off"
+                      spellcheck={false}
+                    />
+                  </div>
+                {:else}
+                  <div class="min-w-32 flex-1">
+                    <Input
+                      placeholder="/v1"
+                      value={row.from}
+                      onchange={(event) => onRowFrom(row.id, event)}
+                      autocapitalize="none"
+                      autocorrect="off"
+                      spellcheck={false}
+                    />
+                  </div>
+                  <label class="flex shrink-0 cursor-pointer select-none items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Toggle checked={row.bound} onchange={(event) => toggleRouteBound(row, event.currentTarget.checked)} />
+                    bind
+                  </label>
+                  <div class="min-w-32 flex-1">
+                    <Input
+                      placeholder="/ (root)"
+                      value={row.to}
+                      disabled={row.bound}
+                      onchange={(event) => onRowTo(row.id, event)}
+                      autocapitalize="none"
+                      autocorrect="off"
+                      spellcheck={false}
+                    />
+                  </div>
+                {/if}
                 {#if share.routeRows.length > 1}
                   <PressButton
                     variant="ghost"
@@ -326,7 +381,13 @@
                   >x</PressButton>
                 {/if}
               </div>
-              {#if routeRowPreview(row) !== null}
+              {#if row.mode === "pattern"}
+                {#if row.match.trim() !== "" && row.template.trim() !== ""}
+                  <p class="break-all pl-1 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                    match {row.match.trim()} ⇒ {row.template.trim()}
+                  </p>
+                {/if}
+              {:else if routeRowPreview(row) !== null}
                 <p class="break-all pl-1 font-mono text-[11px] leading-relaxed text-muted-foreground">
                   {normalizeRoutePrefix(row.from)}/* → {routeRowPreview(row)}
                 </p>

@@ -344,3 +344,74 @@ describe("路径路由（M3-r6：通用 from→to 规则 + 白名单）", () => 
     expect(plan.url.href).toBe("http://127.0.0.1:11434/v1/chat");
   });
 });
+
+describe("路由顺序命中与 pattern 模式（M3-r7）", () => {
+  it("顺序命中：先声明的规则赢——短前缀在前也优先于长前缀", () => {
+    const service = makeService({
+      upstream: "https://agg.test",
+      routes: [
+        { forms: [], localPrefix: "/a", upstreamPrefix: "/first" },
+        { forms: [], localPrefix: "/a/b", upstreamPrefix: "/second" },
+      ],
+    });
+    expect(buildUpstreamRequest(service, makeReq({ path: "/a/b/x" }), {}).url.pathname).toBe("/first/b/x");
+    // 交换顺序后长前缀赢
+    const swapped = makeService({
+      upstream: "https://agg.test",
+      routes: [
+        { forms: [], localPrefix: "/a/b", upstreamPrefix: "/second" },
+        { forms: [], localPrefix: "/a", upstreamPrefix: "/first" },
+      ],
+    });
+    expect(buildUpstreamRequest(swapped, makeReq({ path: "/a/b/x" }), {}).url.pathname).toBe("/second/x");
+  });
+
+  it("pattern 模式：URLPattern 组 + RFC 6570 模板拼装", () => {
+    const service = makeService({
+      upstream: "https://agg.test",
+      routes: [{ forms: [], mode: "pattern", matchPattern: "/v1/:ver/chat/completions", template: "/relay/{ver}/chat/completions" }],
+    });
+    const plan = buildUpstreamRequest(service, makeReq({ path: "/v1/v1/chat/completions" }), {});
+    expect(plan.url.pathname).toBe("/relay/v1/chat/completions");
+  });
+
+  it("pattern：花括号组语法翻译兼容（{ver} ≡ :ver）", () => {
+    const service = makeService({
+      upstream: "https://agg.test",
+      routes: [{ forms: [], mode: "pattern", matchPattern: "/v1/{ver}/*", template: "/proxy/{+0}" }],
+    });
+    const plan = buildUpstreamRequest(service, makeReq({ path: "/v1/v1/models/gpt-x" }), {});
+    expect(plan.url.pathname).toBe("/proxy/models/gpt-x");
+  });
+
+  it("pattern：查询参数进模板变量域，模板产物替换查询串", () => {
+    const service = makeService({
+      upstream: "https://agg.test",
+      routes: [{ forms: [], mode: "pattern", matchPattern: "/search", template: "/s{?q}" }],
+    });
+    const plan = buildUpstreamRequest(service, makeReq({ path: "/search?q=hello+world&extra=1" }), {});
+    expect(plan.url.pathname).toBe("/s");
+    expect(plan.url.search).toBe("?q=hello%20world");
+  });
+
+  it("pattern 未命中 → 继续后续规则；全部未命中 → 404 白名单", () => {
+    const service = makeService({
+      upstream: "https://agg.test",
+      routes: [
+        { forms: [], mode: "pattern", matchPattern: "/special/:id", template: "/s/{id}" },
+        { forms: [], localPrefix: "/v1", upstreamPrefix: "/v1" },
+      ],
+    });
+    expect(buildUpstreamRequest(service, makeReq({ path: "/special/9" }), {}).url.pathname).toBe("/s/9");
+    expect(buildUpstreamRequest(service, makeReq({ path: "/v1/models" }), {}).url.pathname).toBe("/v1/models");
+    expect(() => buildUpstreamRequest(service, makeReq({ path: "/other" }), {})).toThrow(PathNotOfferedError);
+  });
+
+  it("pattern 模板产物拼在 upstream 基础路径后", () => {
+    const service = makeService({
+      upstream: "https://agg.test/base",
+      routes: [{ forms: [], mode: "pattern", matchPattern: "/x/*", template: "/y/{+0}" }],
+    });
+    expect(buildUpstreamRequest(service, makeReq({ path: "/x/a/b" }), {}).url.pathname).toBe("/base/y/a/b");
+  });
+});

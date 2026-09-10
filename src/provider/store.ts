@@ -22,6 +22,8 @@ import {
 } from "node:fs";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { ROUTE_LOCAL_PREFIX } from "../shared/rpc-contract.ts";
+import { compileMatchPattern } from "./match-pattern.ts";
+import { validateUriTemplate } from "./uri-template.ts";
 import { join } from "node:path";
 import { z } from "zod";
 import { randomZ32 } from "../wire/z32.ts";
@@ -69,14 +71,16 @@ export const SERVICE_REWRITE_STORE_SCHEMA = z.strictObject({
   headerRemove: z.array(z.string().min(1).max(1024)).max(32).optional(),
 });
 
-/** 路径路由（M3-r6 定形）：通用 from→to 规则——localPrefix（本地端口前缀，
- *  版本段粒度如 /v1、/anthropic）替换为 upstreamPrefix（"" = 根）；
- *  forms 为 AI 层标注（可为空 = 未标注的通用规则；agent 可用性/writer 消费，
- *  引擎转发与 forms 无关）。 */
+/** 路径路由（M3-r7）：按声明顺序命中的转发规则——prefix 模式（默认，
+ *  localPrefix → upstreamPrefix）或 pattern 模式（matchPattern URLPattern
+ *  + template RFC 6570）。forms 为 AI 层标注（可为空）。 */
 export const SERVICE_ROUTE_STORE_SCHEMA = z.strictObject({
   forms: z.array(z.enum(["openai-chat", "openai-responses", "anthropic"])).max(3),
+  mode: z.enum(["prefix", "pattern"]).optional(),
   localPrefix: z.string().min(1).max(2048).optional(),
-  upstreamPrefix: z.string().max(2048),
+  upstreamPrefix: z.string().max(2048).optional(),
+  matchPattern: z.string().min(1).max(2048).optional(),
+  template: z.string().min(1).max(2048).optional(),
 });
 
 export const SERVICE_STORE_SCHEMA = z.strictObject({
@@ -557,9 +561,12 @@ function validateLimits(limits: GroupLimits): void {
   }
 }
 
-/** 路由表规范化（M3-r6）：空表→undefined；localPrefix 补 / 去尾斜杠（缺省按
- *  首个 form 的规范前缀）并持久化；upstreamPrefix 同归一（"/" → 根 ""）；
- *  forms 去重。不做语义限制——net-fly 通用 from→to 规则在前，AI 标注在后。 */
+/**
+ * 路由表规范化（M3-r7）：空表→undefined；模式字段按 mode 归一——
+ * prefix：localPrefix 补 / 去尾斜杠（缺省按首个 form 规范前缀）+ upstreamPrefix；
+ * pattern：matchPattern 编译校验（{name}→:name 兼容翻译）+ template RFC 6570
+ * 解析校验（写入期 fail-fast，运行期零重复解析）。不做语义限制。
+ */
 function normalizeRoutes(routes: ServiceRoute[] | undefined): ServiceRoute[] | undefined {
   if (routes === undefined) return undefined;
   const cleaned = routes.filter((r) => r !== null && r !== undefined);
@@ -567,13 +574,32 @@ function normalizeRoutes(routes: ServiceRoute[] | undefined): ServiceRoute[] | u
   const out: ServiceRoute[] = [];
   for (const route of cleaned) {
     const forms = [...new Set(route.forms ?? [])];
+    if (route.mode === "pattern") {
+      const matchPattern = route.matchPattern?.trim() ?? "";
+      const template = route.template?.trim() ?? "";
+      if (matchPattern === "" || template === "") {
+        throw new StoreError("invalid", "error: pattern route requires matchPattern and template");
+      }
+      try {
+        compileMatchPattern(matchPattern);
+      } catch (err) {
+        throw new StoreError("invalid", `error: invalid matchPattern '${matchPattern}': ${(err as Error).message}`);
+      }
+      try {
+        validateUriTemplate(template);
+      } catch (err) {
+        throw new StoreError("invalid", `error: invalid template '${template}': ${(err as Error).message}`);
+      }
+      out.push({ forms, mode: "pattern", matchPattern, template });
+      continue;
+    }
     let local = route.localPrefix?.trim() ?? "";
     if (local !== "") {
       if (!local.startsWith("/")) local = `/${local}`;
       local = local.replace(/\/+$/, "");
     }
     if (local === "") local = ROUTE_LOCAL_PREFIX[forms[0] ?? "openai-chat"];
-    let up = route.upstreamPrefix.trim();
+    let up = route.upstreamPrefix?.trim() ?? "";
     if (up !== "") {
       if (!up.startsWith("/")) up = `/${up}`;
       up = up.replace(/\/+$/, "");

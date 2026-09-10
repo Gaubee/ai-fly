@@ -334,7 +334,7 @@ export function createRpcRouter(deps: RpcRouterDeps) {
             const service = ring.services.find((s) => s.serviceId === input.serviceId);
             if (service === undefined) continue;
             // 该标准路由规则的本地前缀（无路由服务 = legacy 透传，用规范前缀探测）
-            const route = service.detail?.routes?.find((r) => r.forms.includes(input.form));
+            const route = service.detail?.routes?.find((r) => r.forms.includes(input.form) && r.mode !== "pattern");
             found = {
               port: livePorts().get(service.serviceId) ?? ring.ports[service.serviceId] ?? service.defaultPort,
               ...(service.detail?.upstream !== undefined ? { upstream: service.detail.upstream } : {}),
