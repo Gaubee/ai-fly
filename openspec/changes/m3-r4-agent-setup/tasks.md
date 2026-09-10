@@ -70,3 +70,23 @@
       本地 POST /v1/chat/completions → upstream 收到 POST /relay/chat/completions
       （pattern 置顶命中 + RFC 6570 改写 + 顺序优先）；GET /v1/models →
       pattern 未命中落 prefix 规则原样转发；/a/*、/user/balance → 404 白名单
+
+## M3-r8 追加（Owner 裁决：③ 步 = test，agent setup 移除）
+
+- [x] 23. ③ 步重做：agent setup 整段移除（AGENT_OPTIONS/writers preview/
+      apply/writer 状态全删），StepHeader 第三步更名 "test"；卡片 = 协议选择
+      （openai / openai responses / anthropic，可变表达）+ endpoint 选择
+      （中性路由表达 `/v1 → upstream/v1/*`，无 API 标准名）+ 单输入框
+      （默认 hi，Enter 或 send 发起，单轮）+ 结果面板（ok/failed + latency +
+      HTTP + POST url + bodyExcerpt 滚动区）
+- [x] 24. 契约与链路：consumer.services.test 增 content（max 8192，缺省
+      "hi"）；local-test 成功也读回复正文（BODY_EXCERPT_MAX=2000）；协议
+      切换端点联动（setTestProtocol：当前端点不承载该协议时跳到首个承载
+      端点，承载则保留用户手选）；footer = back + finish 恒可达
+- [x] 25. 回归与实证：vitest 487/487 + 集成 25/25 + svelte-check 基线 30 +
+      typecheck ✓。实机（Home 组真链接全链路）：③ 无 "agent setup"/"api
+      endpoints"/"openai (chat completions)" 字样；anthropic 协议 → 端点
+      自动跳 /anthropic → POST :4304/anthropic/v1/messages → HTTP 200
+      189ms deepseek-v4-flash 真实回复（thinking + text + usage）正文呈现；
+      openai 协议回跳 /v1 → /v1/chat/completions → HTTP 200 deepseek-flash
+      真实回复；测试 key 5 枚已 revoke、消费环 forget、headless 已回收

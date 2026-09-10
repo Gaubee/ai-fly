@@ -359,8 +359,14 @@ export function createRpcRouter(deps: RpcRouterDeps) {
           const result = await testLocalService({
             port: found.port,
             form: input.form,
-            ...(found.localPrefix !== undefined ? { localPrefix: found.localPrefix } : {}),
+            // 端点路径：显式选择 > 该标准路由规则本地前缀 > 规范前缀
+            ...(input.localPrefix !== undefined
+              ? { localPrefix: input.localPrefix }
+              : found.localPrefix !== undefined
+                ? { localPrefix: found.localPrefix }
+                : {}),
             ...(model !== undefined ? { model } : {}),
+            ...(input.content !== undefined ? { content: input.content } : {}),
           });
           return {
             ...result,

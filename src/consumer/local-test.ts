@@ -12,10 +12,12 @@ export interface LocalTestInput {
   /** 本机网关端口（运行时实际监听值）。 */
   port: number;
   form: RouteForm;
-  /** 该标准路由规则的本地前缀（缺省 = 规范前缀；版本段粒度如 /v1）。 */
+  /** 显式端点路径（③ 步 endpoint 选择；缺省 = 规范前缀）。 */
   localPrefix?: string | undefined;
   /** 已解析的模型名（显式或 models.dev；缺省省略 model 字段——上游 4xx 也能证明链路通）。 */
   model?: string | undefined;
+  /** 单轮提示词（M3-r8 聊天面板；缺省 "ping"）。 */
+  content?: string | undefined;
   fetchImpl?: typeof fetch | undefined;
   timeoutMs?: number | undefined;
   now?: (() => number) | undefined;
@@ -31,7 +33,7 @@ export interface LocalTestResult {
 }
 
 const DEFAULT_TIMEOUT_MS = 20_000;
-const BODY_EXCERPT_MAX = 300;
+const BODY_EXCERPT_MAX = 2000;
 const ERROR_SUMMARY_MAX = 200;
 
 /** 各标准的探测端点与最小请求形状（M3-r6：localPrefix 已含版本段——openai
@@ -42,6 +44,7 @@ function formRequest(
   form: RouteForm,
   localPrefix: string,
   model: string | undefined,
+  content: string,
 ): { url: string; body: Record<string, unknown>; headers: Record<string, string> } {
   const headers: Record<string, string> = { "content-type": "application/json" };
   switch (form) {
@@ -51,15 +54,14 @@ function formRequest(
         headers,
         body: {
           ...(model !== undefined ? { model } : {}),
-          messages: [{ role: "user", content: "ping" }],
-          max_tokens: 1,
+          messages: [{ role: "user", content }],
         },
       };
     case "openai-responses":
       return {
         url: `http://127.0.0.1:${port}${localPrefix}/responses`,
         headers,
-        body: { ...(model !== undefined ? { model } : {}), input: "ping" },
+        body: { ...(model !== undefined ? { model } : {}), input: content },
       };
     case "anthropic":
       return {
@@ -67,8 +69,8 @@ function formRequest(
         headers: { ...headers, "anthropic-version": "2023-06-01" },
         body: {
           ...(model !== undefined ? { model } : {}),
-          max_tokens: 1,
-          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 1024,
+          messages: [{ role: "user", content }],
         },
       };
   }
@@ -84,6 +86,7 @@ export async function testLocalService(input: LocalTestInput): Promise<LocalTest
     input.form,
     input.localPrefix ?? ROUTE_LOCAL_PREFIX[input.form],
     input.model,
+    input.content?.trim() !== "" && input.content !== undefined ? input.content : "ping",
   );
   const request = {
     method: "POST" as const,
@@ -99,11 +102,9 @@ export async function testLocalService(input: LocalTestInput): Promise<LocalTest
     });
     const latencyMs = Math.max(0, now() - started);
     const ok = response.status >= 200 && response.status < 300;
-    let bodyExcerpt: string | undefined;
-    if (!ok) {
-      const text = await response.text().catch(() => "");
-      if (text !== "") bodyExcerpt = text.slice(0, BODY_EXCERPT_MAX);
-    }
+    // 成功 = 模型回复、失败 = 错误体，都读摘录（M3-r8 聊天面板呈现）
+    const text = await response.text().catch(() => "");
+    const bodyExcerpt = text === "" ? undefined : text.slice(0, BODY_EXCERPT_MAX);
     return {
       ok,
       latencyMs,

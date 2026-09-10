@@ -528,9 +528,12 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
     },
     services: {
       /**
-       * 消费侧连通测试（M3-r4）：对本机网关端口按 API 标准发最小请求，走完整
-       * wire 链路；凭据由提供方 rewrite 注入，本请求不携带 authorization。
-       * model 缺省时经 models.dev 缓存按 detail.upstream 选最便宜 chat 模型。
+       * 消费侧连通测试（M3-r8：③ 步 = test——选协议、选端点、单轮输入框发
+       * 真实 AI 请求）：对本机网关端口按 API 标准发最小请求，走完整 wire 链路；
+       * 凭据由提供方 rewrite 注入，本请求不携带 authorization。
+       * model 缺省时经 models.dev 缓存按 detail.upstream 选最便宜 chat 模型；
+       * content 为单轮提示词（缺省 "ping"）；localPrefix 显式指定端点路径
+       * （缺省取该标准路由规则的本地前缀）。
        */
       test: oc
         .input(
@@ -538,6 +541,8 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
             serviceId: z.string().min(1).max(128),
             form: ROUTE_FORM_SCHEMA,
             model: z.string().min(1).max(256).optional(),
+            content: z.string().max(8192).optional(),
+            localPrefix: z.string().min(1).max(2048).optional(),
           }),
         )
         .output(
@@ -549,7 +554,7 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
             /** upstream 响应状态码（拿到响应即有；传输失败缺席）。 */
             httpStatus: z.number().int().min(100).max(599).optional(),
             error: z.string().optional(),
-            /** 非 2xx 时的正文摘录（截断）。 */
+            /** 响应正文摘录（成功=模型回复/错误体；截断）。 */
             bodyExcerpt: z.string().optional(),
           }),
         ),

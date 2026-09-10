@@ -54,16 +54,42 @@ describe("testLocalService 请求形状", () => {
     expect(JSON.parse(String(calls[0]!.init.body)).model).toBeUndefined();
     expect(result.request.model).toBeUndefined();
   });
+
+  it("提示词缺省 ping、content 覆盖（M3-r8 单轮输入框）", async () => {
+    const a = captureFetch();
+    await testLocalService({ port: 1, form: "openai-chat", fetchImpl: a.impl, now: () => 0 });
+    expect(JSON.parse(String(a.calls[0]!.init.body)).messages[0].content).toBe("ping");
+    const b = captureFetch();
+    await testLocalService({ port: 1, form: "anthropic", fetchImpl: b.impl, content: "hi", now: () => 0 });
+    expect(JSON.parse(String(b.calls[0]!.init.body)).messages[0].content).toBe("hi");
+    const c = captureFetch();
+    await testLocalService({ port: 1, form: "openai-responses", fetchImpl: c.impl, content: "hello", now: () => 0 });
+    expect(JSON.parse(String(c.calls[0]!.init.body)).input).toBe("hello");
+  });
+
+  it("显式端点路径（localPrefix）拼进请求 URL", async () => {
+    const { impl, calls } = captureFetch();
+    await testLocalService({ port: 4390, form: "openai-chat", localPrefix: "/relay", fetchImpl: impl, now: () => 0 });
+    expect(calls[0]!.url).toBe("http://127.0.0.1:4390/relay/chat/completions");
+  });
 });
 
 describe("testLocalService 结果归纳", () => {
-  it("非 2xx：ok=false + httpStatus + 正文摘录（300 截断）", async () => {
+  it("非 2xx：ok=false + httpStatus + 正文摘录", async () => {
     const impl = (async () =>
       makeResponse(404, '{"error":{"message":"model not found"}}')) as unknown as typeof fetch;
     const result = await testLocalService({ port: 1, form: "openai-chat", fetchImpl: impl, now: () => 0 });
     expect(result.ok).toBe(false);
     expect(result.httpStatus).toBe(404);
     expect(result.bodyExcerpt).toContain("model not found");
+  });
+
+  it("2xx：ok=true 且读模型回复正文（M3-r8 聊天面板呈现）", async () => {
+    const impl = (async () =>
+      makeResponse(200, '{"choices":[{"message":{"content":"hello there"}}]}')) as unknown as typeof fetch;
+    const result = await testLocalService({ port: 1, form: "openai-chat", fetchImpl: impl, now: () => 0 });
+    expect(result.ok).toBe(true);
+    expect(result.bodyExcerpt).toContain("hello there");
   });
 
   it("传输失败（网关未运行）：ok=false + error，无 httpStatus", async () => {
