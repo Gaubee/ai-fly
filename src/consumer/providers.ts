@@ -188,11 +188,21 @@ export interface ProviderTransportSessionFactory {
  */
 export function createFabricProviderTransport(
   factory: FabricFactory,
-  info: { dataDir: string; providerEndpointId: string },
+  info: {
+    dataDir: string;
+    providerEndpointId: string;
+    /** 该 ring 内嵌的 relay 入口（链接带来；缺省走工厂层解析）。 */
+    relayUrls?: string[];
+  },
 ): ProviderTransportSessionFactory {
   let fabric: FabricLike | undefined;
   const getFabric = async (): Promise<FabricLike> => {
-    fabric ??= await factory.open({ dataDir: info.dataDir });
+    fabric ??= await factory.open({
+      dataDir: info.dataDir,
+      ...(info.relayUrls !== undefined && info.relayUrls.length > 0
+        ? { relayUrls: info.relayUrls }
+        : {}),
+    });
     return fabric;
   };
   return {

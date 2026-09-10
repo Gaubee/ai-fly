@@ -129,3 +129,14 @@
       RelayPickerDialog 简化为 SDK 默认/自定义两选，入口移至 relay & limits
       卡片 footer；Owner settings.json 清理 + 残留子进程回收。
       回归：vitest 491/491 + svelte-check 基线 + typecheck ✓
+
+## M3-r11 追加（Owner 裁决 2026-09-13：链接带来的会合点优先）
+
+- [x] 32. ring 内嵌 relay 回退：createFabricProviderTransport 增 info.relayUrls
+      透传（空/缺省不带 → 走工厂层）；CLI 工厂 toOpts 改逐次解析
+      flag > ring/链接内嵌 > env > file（复用 resolveRelayUrls，flag 仍可覆盖）；
+      四个调用点（run/status/import/engine-host）按 ring 传 relayUrls——
+      engine-host 侧即 ring > settings.relayUrls（app 内消费网关同享修复）。
+      单测：transport 透传 3 例；实机决定性复验：dweb-server 一行命令起本地
+      relay，provider 走它，consumer run 不带 --relay → 双组（openai/anthropic
+      形态）全链路收到真实上游 401 预期错误正文。回归 494/494 + typecheck ✓

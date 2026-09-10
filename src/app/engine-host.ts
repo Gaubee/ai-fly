@@ -227,6 +227,9 @@ export class EngineHost {
         createFabricProviderTransport(factory, {
           dataDir: join(this.consumersRoot, ring.endpointId.slice(0, 8), "fabric"),
           providerEndpointId: ring.endpointId,
+          // 链接带来的会合点优先（Owner 裁决 2026-09-13）：ring 内嵌 relay 逐环
+          // 传给 fabric（engine-host toOpts：opts.relayUrls 优先于 host settings）
+          ...(ring.relayUrls.length > 0 ? { relayUrls: ring.relayUrls } : {}),
         }),
       onNotice: (line) => this.notify("consumer-notice", { message: line }),
     });

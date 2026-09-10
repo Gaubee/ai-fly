@@ -33,7 +33,10 @@ export function ctxHomedir(ctx: CommandContext): string {
  * 真实 Fabric 工厂（CLI 层唯一触 SDK 的位置）：动态 import 规避 vitest worker 与
  * 原生模块的不兼容；relay 配置映射为 SDK FabricOptions.relay（custom urls），
  * 未配置时缺省走 SDK 默认（n0）。
- * @param linkRelayUrls aifly1. 链接内嵌 relay（import 命令传入；层级见 config.ts）
+ * 解析层级（Owner 裁决 2026-09-13：链接带来的会合点优先于环境/配置默认——
+ * provider 在那个 relay 上，不拨它就永远会不了面）：逐次解析为
+ * flag > ring/链接内嵌 relay（opts.relayUrls，调用侧按 ring 传入）> env > file。
+ * @param linkRelayUrls aifly1. 链接内嵌 relay（import 的 join 阶段用；空 = 缺席）
  */
 export async function createSdkFabricFactory(
   relayFlag: readonly string[] | undefined,
@@ -41,15 +44,15 @@ export async function createSdkFabricFactory(
   linkRelayUrls?: readonly string[],
 ): Promise<FabricFactory> {
   const sdk = await loadSdk();
-  const relayUrls = resolveRelayUrls({
-    ...(relayFlag !== undefined ? { flag: relayFlag } : {}),
-    ...(linkRelayUrls !== undefined ? { link: linkRelayUrls } : {}),
-    env: process.env.AIFLY_RELAY,
-    file: loadConfig(ctxHomedir(ctx)),
-  });
   const toOpts = (opts: { dataDir: string; relayUrls?: string[] }): FabricOptions => {
     const fabricOpts: FabricOptions = { dataDir: opts.dataDir };
-    const urls = opts.relayUrls ?? relayUrls;
+    const link = opts.relayUrls ?? linkRelayUrls;
+    const urls = resolveRelayUrls({
+      ...(relayFlag !== undefined ? { flag: relayFlag } : {}),
+      ...(link !== undefined ? { link } : {}),
+      env: process.env.AIFLY_RELAY,
+      file: loadConfig(ctxHomedir(ctx)),
+    });
     if (urls !== undefined && urls.length > 0) {
       fabricOpts.relay = { mode: "custom", urls: urls as [string, ...string[]] };
     }

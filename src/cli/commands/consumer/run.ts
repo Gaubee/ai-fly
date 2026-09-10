@@ -40,6 +40,8 @@ export async function run(argv: readonly string[], ctx: CommandContext = {}): Pr
       createFabricProviderTransport(factory, {
         dataDir: `${root}/${ring.endpointId.slice(0, 8)}/fabric`,
         providerEndpointId: ring.endpointId,
+        // 链接带来的会合点优先（Owner 裁决 2026-09-13）：ring 内嵌 relay 逐环传给 fabric
+        ...(ring.relayUrls.length > 0 ? { relayUrls: ring.relayUrls } : {}),
       }),
     strictPorts: options["strict-ports"] === true,
     onNotice: out,
