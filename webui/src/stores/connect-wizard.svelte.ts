@@ -87,6 +87,8 @@ export const connectW = $state({
   // ③（M3-r4）按标准路由与连通测试
   /** serviceId → 声明的按标准路由（缺项 = legacy 透传；来自 consumer.status 披露）。 */
   serviceRoutes: {} as Record<string, ServiceRouteView[]>,
+  /** serviceId → detail.upstream（M3-r5：端点行「转发到哪」映射注记）。 */
+  serviceUpstream: {} as Record<string, string>,
   /** 连通测试在途的 form（null = 空闲；单飞防重入）。 */
   testBusy: null as RouteForm | null,
   /** 连通测试结果（per-form；RPC 层失败合成为 ok=false 结果就地展示）。 */
@@ -117,6 +119,7 @@ export function resetConnect(): void {
   connectW.writerError = null;
   connectW.writerDone = false;
   connectW.serviceRoutes = {};
+  connectW.serviceUpstream = {};
   connectW.testBusy = null;
   connectW.testResults = {};
 }
@@ -178,12 +181,16 @@ async function refreshImportedPorts(endpointId: string): Promise<void> {
   const storageRow = portsResult.providers.find((row) => row.endpointId === endpointId);
   const liveRow = statusResult.providers.find((row) => row.endpointId === endpointId);
   // M3-r4：status 的服务条目（wire ServiceEntry 形状）携带 detail.routes 披露
-  // → 捕获成 serviceId → routes 表，③ 步端点区与可用性判定消费
+  // → 捕获成 serviceId → routes 表，③ 步端点区与可用性判定消费；
+  // M3-r5：同时捕获 detail.upstream（端点行展示「转发到哪」的映射注记）
   const routesById: Record<string, ServiceRouteView[]> = {};
+  const upstreamById: Record<string, string> = {};
   for (const service of liveRow?.services ?? []) {
     if (service.detail?.routes !== undefined) routesById[service.serviceId] = service.detail.routes;
+    if (service.detail?.upstream !== undefined) upstreamById[service.serviceId] = service.detail.upstream;
   }
   connectW.serviceRoutes = routesById;
+  connectW.serviceUpstream = upstreamById;
   const rows: PortRowView[] = (storageRow?.services ?? []).map((service) => {
     const port = liveRow?.ports[service.serviceId] ?? service.port;
     return {

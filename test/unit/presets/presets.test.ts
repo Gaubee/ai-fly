@@ -51,12 +51,13 @@ describe("curated presets", () => {
     for (const id of required) expect(ids.has(id), `missing preset: ${id}`).toBe(true);
   });
 
-  it("M3-r4 按标准路由：deepseek 双标准（anthropic → /anthropic）、openai 双 openai 形态", () => {
+  it("M3-r4 按标准路由：deepseek 三路由（含 responses，官方支持 codex）、openai 双 openai 形态", () => {
     const curated = loadCuratedPresets();
     const deepseek = curated.find((p) => p.id === "deepseek")!;
     expect(deepseek.routes).toEqual(
       expect.arrayContaining([
         { form: "openai-chat", upstreamPrefix: "" },
+        { form: "openai-responses", upstreamPrefix: "" },
         { form: "anthropic", upstreamPrefix: "/anthropic" },
       ]),
     );

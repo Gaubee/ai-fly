@@ -10,6 +10,7 @@ import {
   resolveHeaderValue,
   RewriteError,
   SecretMissingError,
+  PathNotOfferedError,
 } from "../../../src/provider/rewrite.ts";
 import type { ServiceConfig } from "../../../src/provider/store.ts";
 
@@ -267,14 +268,20 @@ describe("按标准路由（M3-r4）", () => {
     expect(plan.url.href).toBe("https://api.deepseek.com/v1/chat/completions");
   });
 
-  it("段边界：/anthropicapi 不命中 anthropic 路由（原样透传）", () => {
-    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/anthropicapi/v1" }), {});
-    expect(plan.url.pathname).toBe("/anthropicapi/v1");
+  it("段边界：/anthropicapi 不命中 anthropic 路由 -> PathNotOfferedError（白名单外）", () => {
+    expect(() => buildUpstreamRequest(deepseek, makeReq({ path: "/anthropicapi/v1" }), {})).toThrow(
+      PathNotOfferedError,
+    );
   });
 
-  it("未命中路径原样透传（旧行为不变）", () => {
-    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/v1/chat/completions" }), {});
-    expect(plan.url.href).toBe("https://api.deepseek.com/v1/chat/completions");
+  it("未命中路径拒绝（M3-r5 白名单语义：路由表外零上游请求）", () => {
+    expect(() => buildUpstreamRequest(deepseek, makeReq({ path: "/v1/chat/completions" }), {})).toThrow(
+      PathNotOfferedError,
+    );
+    // 个人信息端点保护：/user、/balance 等不在声明标准内
+    expect(() => buildUpstreamRequest(deepseek, makeReq({ path: "/user/balance" }), {})).toThrow(
+      PathNotOfferedError,
+    );
   });
 
   it("路由前缀根命中：/anthropic -> upstream /anthropic", () => {

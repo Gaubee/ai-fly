@@ -1,19 +1,40 @@
 // 提供方分享向导状态机（B 3.2 / M3 3.2·3.3·6.2·6.3，#/share 三步）：
 // ①服务来源（预设卡片 / 自定义 URL）→ ②命名与分组（可新建组、密钥选择器
 // secretName、连通测试；限额收进 advanced options）→ ③生成分享
-// （applyAsService/services.add + 分组落位 + daemon 幂等启动 +
-// share.create → 链接 + 警示 + TTL）。选中密钥时：preset 路径传
-// secretName（服务端写 $secret:<name>）；custom 路径手组
-// rewrite.headerSet.authorization = $secret:<name>，match 留空时由
-// upstream hostname 派生单条 exact（M3-acceptance ③）。
-// custom 路径可按标准声明 routes（M3-r4 ⑦：chat/responses/anthropic 三个
-// upstream 前缀输入，空 = 该标准不提供；全空不带 routes）。
+// （services.add + 分组落位 + daemon 幂等启动 + share.create → 链接 +
+// 警示 + TTL）。M3-r5：预设 = 预填的 Custom——选预设展开 upstream/match/
+// 路由进 ② 表单，一切可改；两种模式走同一条本地组装提交路径。
+// 选中密钥时手组 rewrite.headerSet.authorization = $secret:<name>；
+// match 留空时由 upstream hostname 派生（M3-acceptance ③）。
+// 路由输入语义（M3-r5）：字段持「该标准的端点完整路径」，提交时剥掉标准
+// 尾段得 upstream 前缀（/anthropic/v1/messages → 前缀 /anthropic）；
+// 空 = 该标准不提供；全空不带 routes（legacy 透传）。
 // 每步可回退；成功后锁定结果视图（回退会重复建服务，故隐藏 Back）。
 import { toRpcError, type RpcError } from "$lib/rpc-client";
-import type { Preset, RouteForm } from "$shared/rpc-contract.ts";
+import { ROUTE_LOCAL_PREFIX, type Preset, type RouteForm } from "$shared/rpc-contract.ts";
 import { call } from "./rpc.svelte.ts";
 import { toastRpcError, toastSuccess } from "./toast.svelte.ts";
 import { refresh } from "./app.svelte.ts";
+
+/** 各标准的端点尾段（路由输入占位/校验/前缀推导共用）。 */
+export const ROUTE_ENDPOINT_SUFFIX: Readonly<Record<RouteForm, string>> = {
+  "openai-chat": "/v1/chat/completions",
+  "openai-responses": "/v1/responses",
+  anthropic: "/v1/messages",
+};
+
+/** 端点路径 → upstream 前缀：必须以标准尾段结尾，剥掉即前缀（"" = 根）。 */
+export function routePrefixFromEndpointPath(form: RouteForm, endpointPath: string): string | null {
+  const suffix = ROUTE_ENDPOINT_SUFFIX[form];
+  if (!endpointPath.endsWith(suffix)) return null;
+  const prefix = endpointPath.slice(0, -suffix.length);
+  return prefix === "" || prefix.startsWith("/") ? prefix : `/${prefix}`;
+}
+
+/** upstream 前缀 → 端点路径（预设预填用）。 */
+export function routeEndpointPathFromPrefix(form: RouteForm, upstreamPrefix: string): string {
+  return `${upstreamPrefix}${ROUTE_ENDPOINT_SUFFIX[form]}`;
+}
 
 /** 分享链接 TTL 选项（契约范围 1s..30d；缺省引擎 60min）。 */
 export const TTL_OPTIONS: ReadonlyArray<{ label: string; ttlMs: number }> = [
@@ -88,12 +109,24 @@ export function resetShare(): void {
   share.result = null;
 }
 
-/** ① 选择预设 → 预填 ② 并前进（密钥选择器留空，由用户挑选）。 */
+/** ① 选择预设 → 展开预填 ②（M3-r5：预设 = 预填的 Custom，一切可改）并前进。 */
 export function choosePreset(preset: Preset): void {
   share.mode = "preset";
   share.presetId = preset.id;
   share.name = preset.id;
   share.port = String(preset.defaultPort);
+  share.customUpstream = preset.baseUrl;
+  share.customMatch = preset.matchDomains.join(", ");
+  // 路由端点路径预填：预设 routes 前缀 + 标准尾段；未声明的标准留空（不提供）
+  const byForm = new Map((preset.routes ?? []).map((r) => [r.form, r.upstreamPrefix]));
+  share.customRouteChat =
+    byForm.get("openai-chat") !== undefined ? routeEndpointPathFromPrefix("openai-chat", byForm.get("openai-chat")!) : "";
+  share.customRouteResponses =
+    byForm.get("openai-responses") !== undefined
+      ? routeEndpointPathFromPrefix("openai-responses", byForm.get("openai-responses")!)
+      : "";
+  share.customRouteAnthropic =
+    byForm.get("anthropic") !== undefined ? routeEndpointPathFromPrefix("anthropic", byForm.get("anthropic")!) : "";
   share.error = null;
   share.step = 2;
 }
@@ -124,11 +157,19 @@ export function customSourceValid(): boolean {
   return share.customMatch.trim() !== "" || customMatchRules() !== null;
 }
 
-/** 自定义 match 组装：手填 → suffix；留空 → new URL(upstream).hostname 单条
- *  exact（解析失败返回 null——维持既有校验错误文案）。 */
+/** 自定义 match 组装：手填（逗号/空白分隔多域名 → 多条 suffix）→ 留空用
+ *  new URL(upstream).hostname 单条 exact（解析失败返回 null——维持既有校验
+ *  错误文案）。 */
 function customMatchRules(): Array<{ type: "exact" | "suffix"; value: string }> | null {
   const manual = share.customMatch.trim();
-  if (manual !== "") return [{ type: "suffix", value: manual }];
+  if (manual !== "") {
+    const domains = manual
+      .split(/[\s,]+/)
+      .map((d) => d.trim())
+      .filter((d) => d !== "");
+    if (domains.length === 0) return null;
+    return domains.map((value) => ({ type: "suffix" as const, value }));
+  }
   try {
     return [{ type: "exact", value: new URL(share.customUpstream.trim()).hostname }];
   } catch {
@@ -136,23 +177,47 @@ function customMatchRules(): Array<{ type: "exact" | "suffix"; value: string }> 
   }
 }
 
-/** 自定义路由组装（M3-r4 ⑦）：三个标准前缀只收非空项；全空 = undefined
- *  （不带 routes，legacy 透传）。前缀规范化（前导斜杠等）在引擎 store 写入期。 */
-function customRoutes(): Array<{ form: RouteForm; upstreamPrefix: string }> | undefined {
+/** 路由组装（M3-r5 端点路径语义）：字段持完整端点路径，剥标准尾段得 upstream
+ *  前缀；非法（不以尾段结尾）返回 null（校验错误在 namingValid 给出）。
+ *  全空 = undefined（不带 routes，legacy 透传）。 */
+function customRoutes(): Array<{ form: RouteForm; upstreamPrefix: string }> | null | undefined {
   const entries: Array<{ form: RouteForm; upstreamPrefix: string }> = [];
-  const chat = share.customRouteChat.trim();
-  const responses = share.customRouteResponses.trim();
-  const anthropic = share.customRouteAnthropic.trim();
-  if (chat !== "") entries.push({ form: "openai-chat", upstreamPrefix: chat });
-  if (responses !== "") entries.push({ form: "openai-responses", upstreamPrefix: responses });
-  if (anthropic !== "") entries.push({ form: "anthropic", upstreamPrefix: anthropic });
+  const fields: Array<{ form: RouteForm; value: string }> = [
+    { form: "openai-chat", value: share.customRouteChat.trim() },
+    { form: "openai-responses", value: share.customRouteResponses.trim() },
+    { form: "anthropic", value: share.customRouteAnthropic.trim() },
+  ];
+  for (const field of fields) {
+    if (field.value === "") continue;
+    const prefix = routePrefixFromEndpointPath(field.form, field.value);
+    if (prefix === null) return null;
+    entries.push({ form: field.form, upstreamPrefix: prefix });
+  }
   return entries.length > 0 ? entries : undefined;
 }
 
-/** ② → ③ 校验：名称、分组名非空；端口/限额可解析。 */
+/** 路由输入校验：非空字段必须以该标准的端点尾段结尾（给出人话错误）。 */
+export function routeInputError(): string | null {
+  const fields: Array<{ form: RouteForm; value: string; label: string }> = [
+    { form: "openai-chat", value: share.customRouteChat.trim(), label: "openai chat completions path" },
+    { form: "openai-responses", value: share.customRouteResponses.trim(), label: "openai responses path" },
+    { form: "anthropic", value: share.customRouteAnthropic.trim(), label: "anthropic messages path" },
+  ];
+  for (const field of fields) {
+    if (field.value !== "" && routePrefixFromEndpointPath(field.form, field.value) === null) {
+      return `${field.label} must end with ${ROUTE_ENDPOINT_SUFFIX[field.form]}`;
+    }
+  }
+  return null;
+}
+
+/** ② → ③ 校验：名称、分组名非空；端口/限额/路由端点路径可解析（两模式同规——
+    预设即预填的 Custom）。 */
 export function namingValid(): string | null {
   if (share.name.trim() === "") return "service name is required";
   if (share.groupName.trim() === "") return "group name is required";
+  // M3-r5：两模式同规——预设的 upstream 也在表单里可改，需同校验
+  if (!/^https?:\/\//.test(share.customUpstream.trim())) return "https upstream url is required";
   if (share.port.trim() !== "" && parsePositiveInt(share.port) === undefined) {
     return "port must be a positive integer";
   }
@@ -162,6 +227,8 @@ export function namingValid(): string | null {
   if (share.limitsDaily.trim() !== "" && parsePositiveInt(share.limitsDaily) === undefined) {
     return "daily limit must be a positive integer";
   }
+  const routeProblem = routeInputError();
+  if (routeProblem !== null) return routeProblem;
   return null;
 }
 
@@ -221,42 +288,35 @@ export async function generateShare(): Promise<void> {
   share.error = null;
   try {
     share.busy = "service";
-    let serviceName: string;
-    if (share.mode === "preset") {
-      const applied = await call((c) =>
-        c.presets.applyAsService({
-          presetId: share.presetId,
-          ...(share.name.trim() !== "" ? { name: share.name.trim() } : {}),
-          ...(parsePositiveInt(share.port) !== undefined ? { port: parsePositiveInt(share.port) } : {}),
-          ...(share.secretName !== undefined ? { secretName: share.secretName } : {}),
-        }),
-      );
-      serviceName = applied.service.name;
-    } else {
-      // match：手填 suffix；留空 → upstream hostname 单条 exact（M3-acceptance ③）
-      const match = customMatchRules();
-      if (match === null) {
-        share.error = { code: "INVALID_INPUT", message: "name, https upstream and match domain are required" };
-        return;
-      }
-      // routes：按标准 upstream 前缀（M3-r4 ⑦；全空 = undefined 不带）
-      const routes = customRoutes();
-      const added = await call((c) =>
-        c.provider.services.add({
-          name: share.name.trim(),
-          upstream: share.customUpstream.trim(),
-          match,
-          ...(parsePositiveInt(share.port) !== undefined
-            ? { defaultPort: parsePositiveInt(share.port) }
-            : {}),
-          ...(share.secretName !== undefined
-            ? { rewrite: { headerSet: { authorization: `$secret:${share.secretName}` } } }
-            : {}),
-          ...(routes !== undefined ? { routes } : {}),
-        }),
-      );
-      serviceName = added.service.name;
+    // M3-r5：预设 = 预填的 Custom——两模式走同一条本地组装提交路径
+    // （applyAsService 保留给 CLI；向导不再依赖服务端展开）。
+    // match：手填 suffix（多域名）；留空 → upstream hostname 单条 exact
+    const match = customMatchRules();
+    if (match === null) {
+      share.error = { code: "INVALID_INPUT", message: "name, https upstream and match domain are required" };
+      return;
     }
+    // routes：端点路径剥标准尾段得 upstream 前缀（全空 = undefined 不带）
+    const routes = customRoutes();
+    if (routes === null) {
+      share.error = { code: "INVALID_INPUT", message: routeInputError() ?? "invalid route path" };
+      return;
+    }
+    const added = await call((c) =>
+      c.provider.services.add({
+        name: share.name.trim(),
+        upstream: share.customUpstream.trim(),
+        match,
+        ...(parsePositiveInt(share.port) !== undefined
+          ? { defaultPort: parsePositiveInt(share.port) }
+          : {}),
+        ...(share.secretName !== undefined
+          ? { rewrite: { headerSet: { authorization: `$secret:${share.secretName}` } } }
+          : {}),
+        ...(routes !== undefined ? { routes } : {}),
+      }),
+    );
+    const serviceName = added.service.name;
 
     share.busy = "group";
     await ensureGroupWithService(serviceName);

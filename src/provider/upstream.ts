@@ -17,7 +17,7 @@ import type { WireSession } from "../wire/mux.ts";
 import type { ServiceConfig } from "./store.ts";
 import type { UsageRecord } from "./limits.ts";
 import { buildUpstreamRequest, type EnvSource, type SecretSource, type UpstreamPlan } from "./rewrite.ts";
-import { RewriteError, SecretMissingError } from "./rewrite.ts";
+import { PathNotOfferedError, RewriteError, SecretMissingError } from "./rewrite.ts";
 import type { WsRelayHandle } from "./ws-upstream.ts";
 import { forwardWsUpgrade } from "./ws-upstream.ts";
 
@@ -142,12 +142,17 @@ export async function forwardRequest(ctx: ForwardCtx): Promise<void> {
   try {
     plan = buildUpstreamRequest(ctx.service, ctx.req, ctx.env ?? process.env, ctx.secrets);
   } catch (err) {
-    // 分类：$secret 未命中（secret_missing）> RewriteError（protocol_error）> 兜底。
-    // 两类都是零上游请求；message 不含密钥名与值。
+    // 分类：$secret 未命中（secret_missing）> 路由白名单外（path_not_offered，
+    // 消费侧 404）> RewriteError（protocol_error）> 兜底。前三类都是零上游请求；
+    // message 不含密钥名与值。
     const code =
-      err instanceof SecretMissingError ? ERROR_CODE.secret_missing : ERROR_CODE.protocol_error;
+      err instanceof SecretMissingError
+        ? ERROR_CODE.secret_missing
+        : err instanceof PathNotOfferedError
+          ? ERROR_CODE.path_not_offered
+          : ERROR_CODE.protocol_error;
     const message =
-      err instanceof RewriteError || err instanceof SecretMissingError
+      err instanceof RewriteError || err instanceof SecretMissingError || err instanceof PathNotOfferedError
         ? err.message
         : "request rewrite failed";
     await sendError(ctx.session, ctx.id, code, message);

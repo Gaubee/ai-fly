@@ -46,9 +46,10 @@
       ],
       "routes": [
         { "form": "openai-chat", "upstreamPrefix": "" },
+        { "form": "openai-responses", "upstreamPrefix": "" },
         { "form": "anthropic", "upstreamPrefix": "/anthropic" }
       ],
-      "notes": "OpenAI-compatible at /v1/*; Anthropic-compatible surface at /anthropic/* (per vendor docs).",
+      "notes": "OpenAI-compatible at /v1/* (chat completions + responses, codex-ready); Anthropic-compatible surface at /anthropic/* (per vendor docs).",
       "source": "https://models.dev/api.json + https://api-docs.deepseek.com/guides/anthropic_api"
     }
   ]

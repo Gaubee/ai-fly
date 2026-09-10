@@ -39,12 +39,13 @@
     choosePreset,
     chooseCustom,
     shareBack,
-    customSourceValid,
     namingNext,
     generateShare,
     TTL_OPTIONS,
+    routePrefixFromEndpointPath,
+    ROUTE_ENDPOINT_SUFFIX,
   } from "../stores/share-wizard.svelte.ts";
-  import { presetLogoUrl, type Preset } from "$shared/rpc-contract.ts";
+  import { presetLogoUrl, type Preset, type RouteForm } from "$shared/rpc-contract.ts";
 
   onMount(() => {
     // 首次进入拉预设；重新进入（reset 后）复用已拉取的清单
@@ -59,6 +60,20 @@
       return localDiff !== 0 ? localDiff : a.label.localeCompare(b.label);
     }),
   );
+  /** 路由映射预览（M3-r5）：本地标准端点 → upstream 完整 URL（输入合法才显示；
+      "$LOCAL → $UPSTREAM" 的 $UPSTREAM 部分，本地部分在模板行首）。 */
+  function routeTarget(form: RouteForm, value: string): string | null {
+    const v = value.trim();
+    if (v === "") return null;
+    const prefix = routePrefixFromEndpointPath(form, v);
+    if (prefix === null) return null;
+    const base = share.customUpstream.trim().replace(/\/+$/, "");
+    return `${base}${prefix}${ROUTE_ENDPOINT_SUFFIX[form]}`;
+  }
+  const routePreviewChat = $derived(routeTarget("openai-chat", share.customRouteChat));
+  const routePreviewResponses = $derived(routeTarget("openai-responses", share.customRouteResponses));
+  const routePreviewAnthropic = $derived(routeTarget("anthropic", share.customRouteAnthropic));
+
   /** 长尾展开（默认收起——20/80 法则：精选直达，长尾按需）。 */
   let showLongTail = $state(false);
 
@@ -241,21 +256,20 @@
       </div>
     {/if}
 
-  <!-- ② 命名与分组（预设与自定义共用；自定义补 upstream/match） -->
+  <!-- ② 命名与分组（M3-r5：预设 = 预填的 Custom——upstream/match/路由/端口
+       全部展开可编辑，两模式同一条组装提交路径） -->
   {:else if share.step === 2}
     <Card title="name & group" scroll={false}>
       <div class="flex flex-col gap-3 p-3">
-        {#if share.mode === "custom"}
-          <Input
-            label="upstream URL"
-            placeholder="https://api.example.com/v1"
-            autocapitalize="none"
-            autocorrect="off"
-            spellcheck={false}
-            bind:value={share.customUpstream}
-          />
-          <Separator />
-        {/if}
+        <Input
+          label="upstream URL"
+          placeholder="https://api.example.com"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck={false}
+          bind:value={share.customUpstream}
+        />
+        <Separator />
 
         <Input
           label="service name"
@@ -284,76 +298,97 @@
           <AccordionItem>
             {#snippet summary()}advanced options{/snippet}
             <div class="flex flex-col gap-3">
-              <!-- 分组限额已归口 GroupsDialog（M3-r3 ①）；此处仅端口与 match -->
+              <!-- 分组限额已归口 GroupsDialog（M3-r3 ①）；此处端口/match/路由 -->
               <div class="flex flex-col gap-1.5">
                 <Input label="default consumer port" bind:value={share.port} />
                 <p class="text-[11px] leading-relaxed text-muted-foreground">
                   the local port friends will use on their machines - they can change it later.
                 </p>
               </div>
-              {#if share.mode === "custom"}
-                <!-- match 仅自定义模式（预设 match 来自 preset）；留空 =
-                     提交时用 upstream host（store 组装处派生） -->
+              <!-- match（M3-r5 两模式通用，预设预填官方域名）；留空 =
+                   提交时用 upstream host -->
+              <div class="flex flex-col gap-1.5">
+                <Input
+                  label="match domains (default: use the upstream host)"
+                  placeholder="auto: api.example.com"
+                  autocapitalize="none"
+                  autocorrect="off"
+                  spellcheck={false}
+                  bind:value={share.customMatch}
+                />
+                <p class="text-[11px] leading-relaxed text-muted-foreground">
+                  requests whose host matches are captured - comma-separated for several.
+                </p>
+              </div>
+              <!-- API routes（M3-r5）：端点完整路径（默认与官方 path 一致），
+                   声明了的标准经本地前缀转发到该路径；空 = 不提供该标准。
+                   路由表即白名单——未声明的路径本地 404，不透传。 -->
+              <div class="flex flex-col gap-3">
+                <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
+                  api routes (optional)
+                </span>
                 <div class="flex flex-col gap-1.5">
                   <Input
-                    label="match domains (default: use the upstream host)"
-                    placeholder="auto: api.example.com"
+                    label="openai chat completions path"
+                    placeholder="/v1/chat/completions"
                     autocapitalize="none"
                     autocorrect="off"
                     spellcheck={false}
-                    bind:value={share.customMatch}
+                    bind:value={share.customRouteChat}
                   />
-                  <p class="text-[11px] leading-relaxed text-muted-foreground">
-                    requests whose host matches are captured - leave empty to use the upstream host.
-                  </p>
+                  {#if routePreviewChat !== null}
+                    <p class="font-mono text-[11px] leading-relaxed text-muted-foreground">
+                      /openai/v1/chat/completions → {routePreviewChat}
+                    </p>
+                  {:else if share.customRouteChat.trim() !== ""}
+                    <p class="text-[11px] leading-relaxed text-destructive">
+                      must end with /v1/chat/completions
+                    </p>
+                  {/if}
                 </div>
-                <!-- API routes（M3-r4 ⑦）：可选按标准声明 upstream 路径前缀；
-                     空 = 该标准不提供（store 组装处只收非空项；预设自带 routes） -->
-                <div class="flex flex-col gap-3">
-                  <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-                    api routes (optional)
-                  </span>
-                  <div class="flex flex-col gap-1.5">
-                    <Input
-                      label="openai chat completions path"
-                      placeholder="/v1"
-                      autocapitalize="none"
-                      autocorrect="off"
-                      spellcheck={false}
-                      bind:value={share.customRouteChat}
-                    />
-                    <p class="text-[11px] leading-relaxed text-muted-foreground">
-                      upstream path prefix for this standard - empty = not offered
+                <div class="flex flex-col gap-1.5">
+                  <Input
+                    label="openai responses path"
+                    placeholder="/v1/responses"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    bind:value={share.customRouteResponses}
+                  />
+                  {#if routePreviewResponses !== null}
+                    <p class="font-mono text-[11px] leading-relaxed text-muted-foreground">
+                      /responses/v1/responses → {routePreviewResponses}
                     </p>
-                  </div>
-                  <div class="flex flex-col gap-1.5">
-                    <Input
-                      label="openai responses path"
-                      placeholder="/v1"
-                      autocapitalize="none"
-                      autocorrect="off"
-                      spellcheck={false}
-                      bind:value={share.customRouteResponses}
-                    />
-                    <p class="text-[11px] leading-relaxed text-muted-foreground">
-                      upstream path prefix for this standard - empty = not offered
+                  {:else if share.customRouteResponses.trim() !== ""}
+                    <p class="text-[11px] leading-relaxed text-destructive">
+                      must end with /v1/responses
                     </p>
-                  </div>
-                  <div class="flex flex-col gap-1.5">
-                    <Input
-                      label="anthropic messages path"
-                      placeholder="/v1"
-                      autocapitalize="none"
-                      autocorrect="off"
-                      spellcheck={false}
-                      bind:value={share.customRouteAnthropic}
-                    />
-                    <p class="text-[11px] leading-relaxed text-muted-foreground">
-                      upstream path prefix for this standard - empty = not offered
-                    </p>
-                  </div>
+                  {/if}
                 </div>
-              {/if}
+                <div class="flex flex-col gap-1.5">
+                  <Input
+                    label="anthropic messages path"
+                    placeholder="/anthropic/v1/messages"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    bind:value={share.customRouteAnthropic}
+                  />
+                  {#if routePreviewAnthropic !== null}
+                    <p class="font-mono text-[11px] leading-relaxed text-muted-foreground">
+                      /anthropic/v1/messages → {routePreviewAnthropic}
+                    </p>
+                  {:else if share.customRouteAnthropic.trim() !== ""}
+                    <p class="text-[11px] leading-relaxed text-destructive">
+                      must end with /v1/messages
+                    </p>
+                  {/if}
+                </div>
+                <p class="text-[11px] leading-relaxed text-muted-foreground">
+                  paths default to the official ones - empty = this standard is not offered
+                  (declared routes only; anything else is rejected with 404).
+                </p>
+              </div>
             </div>
           </AccordionItem>
         </Accordion>
@@ -362,7 +397,7 @@
         <SecretPicker value={share.secretName} onchange={(name) => (share.secretName = name)} />
 
         <TestConnection
-          upstream={share.mode === "custom" ? share.customUpstream.trim() : selectedPreset?.baseUrl ?? ""}
+          upstream={share.customUpstream.trim()}
           apiForm={selectedPreset?.apiForm}
           secretName={share.secretName}
           presetId={share.mode === "preset" ? share.presetId : undefined}
@@ -374,10 +409,6 @@
           <PressButton
             variant="fill"
             onclick={() => {
-              if (share.mode === "custom" && !customSourceValid()) {
-                share.error = { code: "INVALID_INPUT", message: "name, https upstream and match domain are required" };
-                return;
-              }
               namingNext();
             }}
           >
@@ -411,6 +442,32 @@
               <dd class="font-mono">{share.port}</dd>
             </div>
           </dl>
+          <!-- 路由映射（M3-r5：分享时可见「本地标准端点 → upstream 路径」） -->
+          {#if routePreviewChat !== null || routePreviewResponses !== null || routePreviewAnthropic !== null}
+            <div class="flex flex-col gap-1 border border-border/70 p-3">
+              <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
+                api routes
+              </span>
+              {#if routePreviewChat !== null}
+                <p class="break-all font-mono text-[11px] text-muted-foreground">
+                  /openai/v1/chat/completions → {routePreviewChat}
+                </p>
+              {/if}
+              {#if routePreviewResponses !== null}
+                <p class="break-all font-mono text-[11px] text-muted-foreground">
+                  /responses/v1/responses → {routePreviewResponses}
+                </p>
+              {/if}
+              {#if routePreviewAnthropic !== null}
+                <p class="break-all font-mono text-[11px] text-muted-foreground">
+                  /anthropic/v1/messages → {routePreviewAnthropic}
+                </p>
+              {/if}
+              <p class="text-[11px] leading-relaxed text-muted-foreground">
+                declared routes only - anything else is rejected with 404.
+              </p>
+            </div>
+          {/if}
           {#if share.secretName !== undefined}
             <p class="text-[11px] leading-relaxed text-muted-foreground">
               the api key is stored in this machine's secret panel

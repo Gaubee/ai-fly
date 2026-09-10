@@ -31,6 +31,18 @@ export class RewriteError extends Error {
 }
 
 /**
+ * 服务声明了路由表但请求路径未命中任何标准前缀（path_not_offered 语义，
+ * 消费侧映射 404）：只转发声明的 API 标准面——防 /user、/balance 等
+ * 个人信息端点被提供方凭据打穿（Owner 2026-09-10 裁决：路由表即白名单）。
+ */
+export class PathNotOfferedError extends Error {
+  constructor() {
+    super("path is not offered by this service");
+    this.name = "PathNotOfferedError";
+  }
+}
+
+/**
  * `$secret:<name>` 引用未命中（secret_missing 语义）：该请求以 ERROR(secret_missing)
  * 拒绝。message 固定——MUST NOT 包含密钥名与值（错误帧会过网）。
  */
@@ -191,7 +203,8 @@ export function buildUpstreamRequest(
   const upstream = parseUpstreamUrl(service.upstream);
 
   // 1) path：防御性形状检查 -> 按标准路由（最长本地前缀段边界命中 → upstream 前缀
-  //    替换）-> 前缀剥离 -> 前缀追加 -> 基础路径拼接 -> 点段规范化。
+  //    替换；未命中 = 路由表白名单外，本地拒绝零上游请求）-> 前缀剥离 ->
+  //    前缀追加 -> 基础路径拼接 -> 点段规范化。
   //    路由改写优先于服务级 strip/append（预设/自定义只应择一使用）。
   assertFramePathShape(req.path);
   const { path: rawPath, query } = splitQuery(req.path);
@@ -205,11 +218,13 @@ export function buildUpstreamRequest(
         matched = { localPrefix: local, upstreamPrefix: route.upstreamPrefix };
       }
     }
-    if (matched !== null) {
-      const rest = requestPath.slice(matched.localPrefix.length); // "" | "/..."
-      const up = matched.upstreamPrefix;
-      requestPath = rest === "" ? (up === "" ? "/" : up) : `${up}${rest}`;
+    if (matched === null) {
+      // 路由表 = 白名单：未声明的标准前缀一律拒绝（个人信息端点保护）。
+      throw new PathNotOfferedError();
     }
+    const rest = requestPath.slice(matched.localPrefix.length); // "" | "/..."
+    const up = matched.upstreamPrefix;
+    requestPath = rest === "" ? (up === "" ? "/" : up) : `${up}${rest}`;
   }
   const strip = service.rewrite?.pathPrefixStrip;
   if (strip !== undefined && (requestPath === strip || requestPath.startsWith(strip + "/"))) {

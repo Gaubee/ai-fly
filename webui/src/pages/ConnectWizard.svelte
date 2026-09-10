@@ -128,7 +128,9 @@
   const selectedRoutes = $derived(
     connectW.agentServiceId === "" ? [] : connectW.serviceRoutes[connectW.agentServiceId] ?? [],
   );
-  /** 端点行：标签 + 本地标准 base +（若有）该 form 的测试结果。 */
+  /** 端点行：标签 + 本地标准 base + upstream 映射注记（M3-r5「转发到哪」）
+      +（若有）该 form 的测试结果。 */
+  const selectedUpstream = $derived(connectW.serviceUpstream[connectW.agentServiceId] ?? null);
   const routeRows = $derived(
     selectedPort === null
       ? []
@@ -136,6 +138,10 @@
           form: route.form,
           label: FORM_LABELS[route.form],
           base: `http://127.0.0.1:${selectedPort}${ROUTE_LOCAL_PREFIX[route.form]}`,
+          forwardsTo:
+            selectedUpstream === null
+              ? null
+              : `${selectedUpstream.replace(/\/+$/, "")}${route.upstreamPrefix}/...`,
           result: connectW.testResults[route.form] ?? null,
         })),
   );
@@ -419,6 +425,11 @@
                     onclick={() => void testServiceRoute(row.form)}
                   >test</PressButton>
                 </div>
+                {#if row.forwardsTo !== null}
+                  <p class="break-all pl-1 font-mono text-[11px] text-muted-foreground">
+                    → {row.forwardsTo}
+                  </p>
+                {/if}
                 {#if row.result !== null}
                   {#if row.result.ok}
                     <p class="font-mono text-[11px] text-[color:var(--success)]">

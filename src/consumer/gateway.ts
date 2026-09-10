@@ -51,6 +51,9 @@ export const ERROR_HTTP_MAPPING: Readonly<Record<ErrorCodeValue, HttpErrorMappin
   forbidden_header: { status: 400, type: "invalid_request_error" },
   body_too_large: { status: 413, type: "invalid_request_error" },
   unknown_service: { status: 404, type: "invalid_request_error" },
+  // 服务声明了路由表但路径未命中任何标准前缀：本地拒绝（零上游请求）——
+  // 只转发声明的 API 标准面，防 /user、/balance 等个人信息端点被凭据打穿。
+  path_not_offered: { status: 404, type: "invalid_request_error" },
   unauthorized: { status: 401, type: "authentication_error" },
   key_all_invalid: { status: 503, type: "api_error" },
   upstream_unreachable: { status: 502, type: "api_error" },
