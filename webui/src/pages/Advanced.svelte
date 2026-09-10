@@ -1,12 +1,12 @@
 <!-- 高级设置（B 3.5 + M3 6.x，#/advanced）：Tabs = 服务 / 分组 / 密钥 /
-     密钥库 / 中继与限额 / opendweb server / 设置。net-fly 通用概念（match 全集、
-     rewrite 规则、relay 配置）只出现在这里；默认一行一服务，展开 detail（$env:/$secret:
+     密钥库 / 中继与限额 / 设置。net-fly 通用概念（match 全集、rewrite 规则、
+     relay 配置）只出现在这里；默认一行一服务，展开 detail（$env:/$secret:
      注入值掩码），行内 test 连通测试（M3 6.3）。keys = 消费者侧 share 密钥
      （issue 一次性原文 dialog + revoke 两步确认）；secrets = provider 侧
-     上游密钥库（列表/增删改内联卡，值不回显，M3 6.1/6.2）。opendweb server =
-     自托管 dweb-server 子进程（settings 驱动启停/重启，Owner 裁决 2026-09-11）+
-     relay 服务器选择 Dialog（SDK 默认/自己的服务器/自定义）。状态机在
-     stores/advanced。 -->
+     上游密钥库（列表/增删改内联卡，值不回显，M3 6.1/6.2）。relay & limits
+     含中继服务器快速选择 Dialog（SDK 默认/自定义；自托管 opendweb server
+     部署在独立机器，app 只消费其 relay URL——Owner 裁决 2026-09-12）。
+     状态机在 stores/advanced。 -->
 <script lang="ts">
   import { onMount } from "svelte";
   import Card, { CardFooter } from "$lib/ui/card";
@@ -62,11 +62,6 @@
     saveRelay,
     settingsEdit,
     setModelsDev,
-    opendwebEdit,
-    initOpendwebForm,
-    refreshOpendwebStatus,
-    saveOpendweb,
-    bindAddressProblem,
   } from "../stores/advanced.svelte.ts";
 
   let tab = $state("services");
@@ -127,29 +122,9 @@
     if (tab === "secrets") void loadSecretRows();
   });
 
-  // ── opendweb server 区（Owner 裁决 2026-09-11）───────────────────
-  /** relay 选择 Dialog 开合。 */
+  // ── relay 选择 Dialog（Owner 裁决 2026-09-11/12：快速配置 SDK 默认/自定义；
+  //     自托管 server 部署在独立机器，app 只消费其 relay URL）────────────
   let relayDialogOpen = $state(false);
-  /** 进 opendweb tab：表单回填（settings 已到时一次）+ 运行态快照。 */
-  let opendwebInited = false;
-  $effect(() => {
-    if (tab !== "opendweb") return;
-    if (!opendwebInited && app.settings !== null) {
-      opendwebInited = true;
-      initOpendwebForm();
-    }
-    void refreshOpendwebStatus();
-  });
-
-  /** 当前 relay 模式摘要（relay 卡片行）。 */
-  const relayModeSummary = $derived.by(() => {
-    const urls = app.settings?.relayUrls ?? null;
-    if (urls === null) return "SDK defaults (n0 public relays)";
-    if (urls.length === 1 && opendwebEdit.status?.running === true && urls[0] === `http://${opendwebEdit.status.config?.relayBind ?? ""}`) {
-      return `my opendweb server (${urls[0]})`;
-    }
-    return `${urls.length} custom entr${urls.length === 1 ? "y" : "ies"}`;
-  });
 
   async function loadSecretRows(): Promise<void> {
     if (secretsLoading) return;
@@ -329,7 +304,6 @@
       <TabsTrigger value="keys">keys</TabsTrigger>
       <TabsTrigger value="secrets">secrets</TabsTrigger>
       <TabsTrigger value="relay">relay & limits</TabsTrigger>
-      <TabsTrigger value="opendweb">opendweb server</TabsTrigger>
       <TabsTrigger value="settings">settings</TabsTrigger>
     </TabsList>
 
@@ -905,6 +879,9 @@
           </div>
           {#snippet foot()}
             <CardFooter label="relay form actions">
+              <PressButton variant="outline" onclick={() => (relayDialogOpen = true)}>
+                choose relay server
+              </PressButton>
               <PressButton variant="fill" loading={relayForm.busy} onclick={() => void saveRelay()}>
                 save relay entries
               </PressButton>
@@ -919,109 +896,6 @@
               per-group limits (concurrency, daily requests) are managed with each group.
             </p>
             <PressButton variant="ghost" onclick={() => (tab = "groups")}>go to groups</PressButton>
-          </div>
-        </Card>
-      </div>
-    </TabsContent>
-
-    <!-- ── opendweb server（Owner 裁决 2026-09-11）──────────── -->
-    <TabsContent value="opendweb">
-      <div class="flex flex-col gap-3">
-        <Card title="opendweb server" scroll={false}>
-          <div class="flex flex-col gap-3 p-3">
-            <p class="text-xs leading-relaxed text-muted-foreground">
-              self-host the opendweb infrastructure: a dweb-server child process
-              (gateway + relay) bundled with the app. run it and point the fabric
-              relay at it to stop depending on public relays.
-            </p>
-
-            <!-- 运行态 -->
-            {#if opendwebEdit.status !== null}
-              <div class="flex flex-col gap-1 border border-border/70 p-2.5">
-                <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">status</span>
-                {#if opendwebEdit.status.running}
-                  <p class="font-mono text-[11px] text-[color:var(--success)]">
-                    running · pid {opendwebEdit.status.pid}
-                  </p>
-                  {#if opendwebEdit.status.gatewayUrl !== undefined}
-                    <p class="break-all font-mono text-[11px] text-muted-foreground">
-                      gateway {opendwebEdit.status.gatewayUrl}
-                    </p>
-                  {/if}
-                  {#if opendwebEdit.status.relayHttpUrl !== undefined}
-                    <p class="break-all font-mono text-[11px] text-muted-foreground">
-                      relay {opendwebEdit.status.relayHttpUrl}
-                    </p>
-                  {/if}
-                {:else}
-                  <p class="font-mono text-[11px] text-muted-foreground">stopped</p>
-                {/if}
-                {#if opendwebEdit.status.lastError !== undefined}
-                  <p class="break-all text-[11px] leading-relaxed text-[color:var(--warning)]">
-                    {opendwebEdit.status.lastError}
-                  </p>
-                {/if}
-              </div>
-            {/if}
-
-            <div class="grid gap-3 sm:grid-cols-2">
-              <Input
-                label="gateway bind"
-                placeholder="127.0.0.1:8787"
-                autocapitalize="none"
-                autocorrect="off"
-                spellcheck={false}
-                bind:value={opendwebEdit.gatewayBind}
-              />
-              <Input
-                label="relay bind"
-                placeholder="127.0.0.1:3340"
-                autocapitalize="none"
-                autocorrect="off"
-                spellcheck={false}
-                bind:value={opendwebEdit.relayBind}
-              />
-            </div>
-            <div class="flex flex-wrap items-center justify-between gap-3">
-              <Toggle
-                label="relay enabled"
-                checked={opendwebEdit.relayEnabled}
-                onchange={(event) => (opendwebEdit.relayEnabled = event.currentTarget.checked)}
-              />
-              <Toggle
-                label="run with app"
-                checked={opendwebEdit.enabled}
-                onchange={(event) => (opendwebEdit.enabled = event.currentTarget.checked)}
-              />
-            </div>
-          </div>
-          {#snippet foot()}
-            <CardFooter label="opendweb server actions">
-              <PressButton
-                variant="ghost"
-                loading={opendwebEdit.statusBusy}
-                onclick={() => void refreshOpendwebStatus()}
-              >refresh status</PressButton>
-              <PressButton variant="fill" loading={opendwebEdit.busy} onclick={() => void saveOpendweb()}>
-                save &amp; apply
-              </PressButton>
-            </CardFooter>
-          {/snippet}
-        </Card>
-        <ErrorAlert error={opendwebEdit.error} />
-
-        <Card title="relay server" scroll={false}>
-          <div class="flex flex-wrap items-center justify-between gap-2 p-3">
-            <div class="flex flex-col gap-0.5">
-              <p class="text-xs text-muted-foreground">
-                where the fabric meets when direct connections fail - every share
-                link embeds it.
-              </p>
-              <p class="font-mono text-[11px] text-muted-foreground">{relayModeSummary}</p>
-            </div>
-            <PressButton variant="outline" onclick={() => (relayDialogOpen = true)}>
-              choose relay server
-            </PressButton>
           </div>
         </Card>
       </div>
@@ -1090,4 +964,4 @@
   {/if}
 </Dialog>
 
-<RelayPickerDialog bind:open={relayDialogOpen} onsave={() => void refreshOpendwebStatus()} />
+<RelayPickerDialog bind:open={relayDialogOpen} />

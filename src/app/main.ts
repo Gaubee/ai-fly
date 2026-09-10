@@ -27,7 +27,6 @@ import { createRpcRouter } from "./rpc-router.ts";
 import type { WebServerOptions } from "./web-server.ts";
 import { WebServer } from "./web-server.ts";
 import { loadSettings } from "./settings.ts";
-import { OpendwebServerManager } from "./opendweb-server.ts";
 import { ensurePrivateDir } from "../provider/store.ts";
 import { listKeyrings } from "../consumer/store.ts";
 import {
@@ -312,13 +311,8 @@ export async function assembleApp(deps: AppDeps): Promise<AppHandles> {
     notify: (event) => push(event),
   });
 
-  // [1b] 自托管 opendweb server（dweb-server 子进程；settings 驱动，失败不挡 UI）
-  const opendweb = new OpendwebServerManager(undefined, {
-    error: (message) => log.error(message),
-  });
-
   // [2] RPC router（契约 → 引擎宿主）
-  const router = deps.createRouter({ host, home, opendweb });
+  const router = deps.createRouter({ host, home });
 
   // [3] WebServer（构造后回绑 notify：引擎事件直达 ws 订阅者）
   const webServer = deps.createServer({ webuiDir, router });
@@ -348,13 +342,6 @@ export async function assembleApp(deps: AppDeps): Promise<AppHandles> {
     });
   }
 
-  // [5b] opendweb server：settings.opendwebServer.enabled 即随 app 启动
-  if (settings.opendwebServer !== null && settings.opendwebServer.enabled) {
-    await opendweb.apply(settings.opendwebServer).catch((error: unknown) => {
-      log.error(`opendweb server apply failed: ${errorMessage(error)}`);
-    });
-  }
-
   // [6] 主窗口入口：dev → vite dev server（token 仍由本服务签发，前端经 /ws
   // 代理兑换）；产线 → uiUrl（token 一次性，HttpOnly 会话承接）
   const token = webServer.issueUiToken();
@@ -372,11 +359,6 @@ export async function assembleApp(deps: AppDeps): Promise<AppHandles> {
       await host.stop();
     } catch (error) {
       log.error(`host stop failed: ${errorMessage(error)}`);
-    }
-    try {
-      await opendweb.stop();
-    } catch (error) {
-      log.error(`opendweb server stop failed: ${errorMessage(error)}`);
     }
     try {
       await webServer.stop();

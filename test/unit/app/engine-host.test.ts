@@ -208,7 +208,7 @@ describe("EngineHost consumer surface (no engine started)", () => {
 describe("settings persistence", () => {
   it("returns defaults when no file exists", () => {
     const settings = loadSettings(base);
-    expect(settings).toEqual({ theme: "system", modelsDevEnabled: true, relayUrls: null, opendwebServer: null });
+    expect(settings).toEqual({ theme: "system", modelsDevEnabled: true, relayUrls: null });
   });
 
   it("saves patches without touching unsubmitted fields", () => {

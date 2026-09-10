@@ -1,23 +1,17 @@
-<!-- 中继服务器选择器（Owner 裁决 2026-09-11）：opendweb server 配置与
-     relay & limits 共用的快速配置 Dialog——三选：SDK 默认（n0 公网）/ 自己的
-     opendweb server（须在跑）/ 自定义清单（http(s)://，≤8 行）。
+<!-- 中继服务器选择器（Owner 裁决 2026-09-11/12）：relay & limits 的快速
+     配置 Dialog——两选：SDK 默认（n0 公网）/ 自定义清单（http(s)://，≤8 行；
+     自托管 opendweb server 部署在独立机器，把它的 relay URL 填这里即可）。
      保存即 system.settings.set relayUrls；fabric 侧生效需 app 重启（引擎
      启动时读 settings——footer 明示，不静默）。 -->
 <script lang="ts">
   import Dialog, { DialogFooter } from "$lib/ui/dialog";
   import PressButton from "$lib/ui/press-button";
   import Separator from "$lib/ui/separator";
-  import Badge from "$lib/ui/badge";
   import { untrack } from "svelte";
   import { toRpcError, type RpcError } from "$lib/rpc-client";
   import { app } from "../stores/app.svelte.ts";
   import { toastRpcError, toastSuccess } from "../stores/toast.svelte.ts";
-  import {
-    opendwebEdit,
-    refreshOpendwebStatus,
-    ownServerRelayUrl,
-    saveRelayChoice,
-  } from "../stores/advanced.svelte.ts";
+  import { saveRelayChoice } from "../stores/advanced.svelte.ts";
 
   interface Props {
     /** bindable 开合（× / esc 关闭写回）。 */
@@ -27,32 +21,24 @@
   }
   let { open = $bindable(false), onsave }: Props = $props();
 
-  type Mode = "sdk" | "own" | "custom";
+  type Mode = "sdk" | "custom";
 
   let mode = $state<Mode>("sdk");
   let customText = $state("");
   let busy = $state(false);
   let error = $state<RpcError | null>(null);
 
-  // 打开上升沿初始化一次：untrack 读初值——status/settings 异步到达（refresh
-  // 落定）不再重跑本段，避免把用户已选的 mode 打回推断值
+  // 打开上升沿初始化一次：untrack 读初值——settings 异步到达不再重跑本段，
+  // 避免把用户已选的 mode 打回推断值
   let wasOpen = false;
   $effect(() => {
     const nowOpen = open;
     if (nowOpen && !wasOpen) {
       error = null;
-      void refreshOpendwebStatus();
       untrack(() => {
         const urls = app.settings?.relayUrls ?? null;
-        const statusNow = opendwebEdit.status;
         if (urls === null) {
           mode = "sdk";
-        } else if (
-          urls.length === 1 &&
-          statusNow?.running === true &&
-          urls[0] === `http://${statusNow.config?.relayBind ?? ""}`
-        ) {
-          mode = "own";
         } else {
           mode = "custom";
           customText = urls.join("\n");
@@ -61,9 +47,6 @@
     }
     wasOpen = nowOpen;
   });
-
-  const ownUrl = $derived(ownServerRelayUrl());
-  const ownRunning = $derived(opendwebEdit.status?.running ?? false);
 
   const customLines = $derived(
     customText
@@ -86,12 +69,11 @@
     busy = true;
     error = null;
     try {
-      const urls =
-        mode === "sdk" ? null : mode === "own" ? [ownUrl!] : customLines;
+      const urls = mode === "sdk" ? null : customLines;
       await saveRelayChoice(urls);
       toastSuccess(
         "Relay server saved",
-        mode === "sdk" ? "using SDK defaults" : mode === "own" ? ownUrl! : `${customLines.length} entr(y|ies)`,
+        mode === "sdk" ? "using SDK defaults" : `${customLines.length} entr(y|ies)`,
       );
       onsave?.();
       open = false;
@@ -108,7 +90,8 @@
   <div class="flex flex-col gap-3 p-3">
     <p class="text-xs leading-relaxed text-muted-foreground">
       where both sides meet when a direct connection is not possible. every share
-      link embeds this choice.
+      link embeds this choice. self-hosted? deploy the opendweb server on its own
+      machine and paste its relay URL under custom.
     </p>
 
     <div class="flex flex-col gap-2">
@@ -117,28 +100,6 @@
         <span class="flex flex-col gap-0.5">
           <span class="text-xs font-medium">SDK defaults</span>
           <span class="text-[11px] text-muted-foreground">n0 public relays (no setup, shared infra)</span>
-        </span>
-      </label>
-
-      <label
-        class="flex items-start gap-2 border border-border p-2.5 {mode === 'own' ? 'bg-primary/10' : ''} {ownRunning ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}"
-        aria-disabled={!ownRunning}
-      >
-        <input type="radio" name="relay-mode" value="own" bind:group={mode} disabled={!ownRunning} class="mt-0.5" />
-        <span class="flex flex-col gap-0.5">
-          <span class="flex items-center gap-1.5 text-xs font-medium">
-            my opendweb server
-            {#if ownRunning}
-              <Badge variant="tonal" class="jx-hue-success">running</Badge>
-            {:else}
-              <Badge variant="outline">stopped</Badge>
-            {/if}
-          </span>
-          {#if ownRunning && ownUrl !== null}
-            <span class="break-all font-mono text-[11px] text-muted-foreground">{ownUrl}</span>
-          {:else}
-            <span class="text-[11px] text-muted-foreground">start it in the opendweb server tab first</span>
-          {/if}
         </span>
       </label>
 
@@ -180,7 +141,7 @@
       <PressButton
         variant="fill"
         loading={busy}
-        class={customProblem !== null || (mode === "own" && !ownRunning) ? "pointer-events-none opacity-50" : undefined}
+        class={customProblem !== null ? "pointer-events-none opacity-50" : undefined}
         onclick={() => void save()}
       >save</PressButton>
     </DialogFooter>

@@ -22,7 +22,6 @@ import { testServiceRoute } from "../provider/route-test.ts";
 import { applyWriter, previewWriter } from "./writers/index.ts";
 import { resolveTargetPort } from "./writers/common.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
-import type { OpendwebServerManager } from "./opendweb-server.ts";
 import {
   deriveModels,
   fetchModelsDevPresets,
@@ -38,8 +37,6 @@ export interface RpcRouterDeps {
   host: EngineHost;
   /** 应用 home 基准（settings/models-dev 缓存/写手定位；默认 os.homedir()）。 */
   home?: string;
-  /** 自托管 opendweb server 管理（settings.opendwebServer 变更对账）。 */
-  opendweb?: OpendwebServerManager;
 }
 
 /** 密钥记录 → 契约视图（去哈希：哈希与原文都不进 RPC 面）。 */
@@ -607,24 +604,7 @@ export function createRpcRouter(deps: RpcRouterDeps) {
     system: {
       settings: {
         get: rpc.system.settings.get.handler(() => loadSettings(home())),
-        // opendwebServer 字段变更即对账子进程（启停/重启）；启动失败不回滚
-        // 设置——lastError 经 opendweb.status 披露，UI 就地呈现
-        set: rpc.system.settings.set.handler(async ({ input }) => {
-          const next = saveSettings(input, home());
-          if (input.opendwebServer !== undefined) {
-            const manager = deps.opendweb;
-            if (manager !== undefined) await manager.apply(next.opendwebServer);
-          }
-          return next;
-        }),
-      },
-      opendweb: {
-        status: rpc.system.opendweb.status.handler(() => {
-          const manager = deps.opendweb;
-          return manager === undefined
-            ? { running: false, config: null }
-            : manager.status();
-        }),
+        set: rpc.system.settings.set.handler(({ input }) => saveSettings(input, home())),
       },
       notifyChannels: rpc.system.notifyChannels.handler(() => ({
         rpcPath: "/ws/rpc" as const,

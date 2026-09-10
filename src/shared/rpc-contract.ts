@@ -287,32 +287,10 @@ export const WRITER_APPLY_SCHEMA = z.strictObject({
 
 // ---------------------------------------------------------------------------
 // 系统设置（~/.aifly/settings.json；持久化实现见 src/app/settings.ts）
+// 注：自托管 opendweb server 不入 app 管理（Owner 裁决 2026-09-12：dweb-server
+// 一行命令即可启动，部署在独立机器上；ai-fly 只消费它的 relay URL——见
+// relay entries / RelayPickerDialog）。
 // ---------------------------------------------------------------------------
-
-/** 绑定地址（host:port；host = 主机名/IPv4/[IPv6]，port 1..65535）。 */
-const BIND_ADDRESS_SCHEMA = z
-  .string()
-  .regex(/^[a-zA-Z0-9.\-]+:\d{1,5}$/, "bind must be host:port")
-  .refine((value) => {
-    const port = Number.parseInt(value.split(":")[1] ?? "", 10);
-    return Number.isInteger(port) && port >= 1 && port <= 65535;
-  }, "port must be in 1..65535");
-
-/** 自托管 opendweb server（dweb-server 子进程）配置。 */
-export const OPENWEB_SERVER_CONFIG_SCHEMA = z
-  .strictObject({
-    enabled: z.boolean(),
-    /** gateway（rendezvous/healthz/services.json）监听；默认 127.0.0.1:8787。 */
-    gatewayBind: BIND_ADDRESS_SCHEMA,
-    /** relay（iroh relay HTTP）监听；默认 127.0.0.1:3340。 */
-    relayBind: BIND_ADDRESS_SCHEMA,
-    relayEnabled: z.boolean(),
-  })
-  .refine((config) => config.gatewayBind !== config.relayBind || !config.relayEnabled, {
-    message: "gateway and relay binds must differ",
-  });
-
-export type OpendwebServerConfig = z.infer<typeof OPENWEB_SERVER_CONFIG_SCHEMA>;
 
 /** 按标准测试的结果（消费侧 wire 链路 / 提供方 route 直打共用形状）。 */
 export const SERVICE_TEST_RESULT_SCHEMA = z.strictObject({
@@ -333,8 +311,6 @@ export const SETTINGS_SCHEMA = z.strictObject({
   modelsDevEnabled: z.boolean(),
   /** relay 入口列表（provider/consumer 共用；null = 未配置，走 SDK 默认）。 */
   relayUrls: z.array(z.string().min(1).max(2048)).max(8).nullable(),
-  /** 自托管 opendweb server（null = 未配置即不启动；default 兼容旧文件迁移）。 */
-  opendwebServer: OPENWEB_SERVER_CONFIG_SCHEMA.nullable().default(null),
 });
 
 // ---------------------------------------------------------------------------
@@ -736,34 +712,18 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
   },
   system: {
     settings: {
-      /** 读取应用设置（主题/models.dev 开关/relay/opendweb server）。 */
+      /** 读取应用设置（主题/models.dev 开关/relay）。 */
       get: oc.input(z.object({})).output(SETTINGS_SCHEMA),
-      /** 补丁式更新（仅提交的字段变更；opendwebServer 变更即触发子进程对账）。 */
+      /** 补丁式更新（仅提交的字段变更）。 */
       set: oc
         .input(
           z.strictObject({
             theme: z.enum(["dark", "light", "system"]).optional(),
             modelsDevEnabled: z.boolean().optional(),
             relayUrls: z.array(z.string().min(1).max(2048)).max(8).nullable().optional(),
-            opendwebServer: OPENWEB_SERVER_CONFIG_SCHEMA.nullable().optional(),
           }),
         )
         .output(SETTINGS_SCHEMA),
-    },
-    /** 自托管 opendweb server（dweb-server 子进程）运行态。 */
-    opendweb: {
-      status: oc
-        .input(z.object({}))
-        .output(
-          z.strictObject({
-            running: z.boolean(),
-            pid: z.number().int().optional(),
-            gatewayUrl: z.string().optional(),
-            relayHttpUrl: z.string().optional(),
-            lastError: z.string().optional(),
-            config: OPENWEB_SERVER_CONFIG_SCHEMA.nullable(),
-          }),
-        ),
     },
     /** 通知通道常量（前端 ws 订阅地址；与 web-server 实现保持同源）。 */
     notifyChannels: oc

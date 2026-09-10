@@ -118,3 +118,14 @@
       网关走 settings.relayUrls 不受影响；run 回退 ring 内嵌 relay 列为跟进项）
 - [x] 30. 回归：vitest 499/499 + 集成 25/25 + svelte-check 基线 30 + typecheck ✓；
       e2e 资产全清（tmp 数据/服务/分组/key/Owner settings relayUrls 复位）
+
+## M3-r10 追加（Owner 裁决 2026-09-12：自托管 server 不入 app 管理）
+
+- [x] 31. 拆除嵌入管理：opendweb server 本就是一行命令可启动的基础设施，
+      部署形态是独立机器（VPS/Docker ghcr.io/gaubee/dweb）；ai-fly 只消费
+      它的 relay URL（单 URL——gateway/relay 双绑定是 server 自身架构，
+      不该泄漏到 ai-fly UI）。删除 settings.opendwebServer/管理器/
+      system.opendweb RPC/main 接线/Advanced tab/Dialog"own"选项；
+      RelayPickerDialog 简化为 SDK 默认/自定义两选，入口移至 relay & limits
+      卡片 footer；Owner settings.json 清理 + 残留子进程回收。
+      回归：vitest 491/491 + svelte-check 基线 + typecheck ✓
