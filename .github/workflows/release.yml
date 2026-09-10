@@ -37,6 +37,11 @@ jobs:
       - name: install
         run: pnpm install --frozen-lockfile
 
+      # 生成 app 图标（resources/app-icons 是 gitignore 的构建产物，单测
+      # projectAppIcon 依赖其存在；sharp/@opentray 生成器在 ubuntu 可用）
+      - name: app icons
+        run: pnpm app:icons
+
       - name: typecheck
         run: pnpm typecheck
 
