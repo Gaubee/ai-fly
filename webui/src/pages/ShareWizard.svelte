@@ -23,6 +23,7 @@
   import NativeSelect from "$lib/ui/native-select";
   import { slide } from "svelte/transition";
   import StepHeader from "../components/StepHeader.svelte";
+  import { t } from "$lib/i18n.svelte.ts";
   import ErrorAlert from "../components/ErrorAlert.svelte";
   import CopyField from "../components/CopyField.svelte";
   import SecretPicker from "../components/SecretPicker.svelte";
@@ -168,11 +169,11 @@
 
 <div class="mx-auto flex max-w-3xl flex-col gap-4 p-4 md:p-6">
   <header class="flex flex-col gap-2">
-    <h1 class="font-nav text-base uppercase tracking-[0.1em]">Share a service</h1>
+    <h1 class="font-nav text-base uppercase tracking-[0.1em]">{t("share.title")}</h1>
     <StepHeader
       step={share.step}
       locked={share.result !== null}
-      titles={["source", "name & group", "share link"]}
+      titles={[t("share.step1"), t("share.step2"), t("share.step3")]}
     />
   </header>
 
@@ -187,7 +188,7 @@
         {/each}
       </div>
     {:else if presets.error !== null}
-      <Alert variant="tonal" class="jx-hue-error" assertive title="Failed to load presets">
+      <Alert variant="tonal" class="jx-hue-error" assertive title={t("share.presetsFail")}>
         {presets.error}
       </Alert>
     {:else}
@@ -204,7 +205,7 @@
               {#if isLocalPreset(preset)}
                 <Badge variant="tonal" class="jx-hue-success">local</Badge>
               {/if}
-              <Badge variant="outline">featured</Badge>
+              <Badge variant="outline">{t("share.preset.featured")}</Badge>
             </span>
             <span class="font-mono text-[11px] text-muted-foreground">{preset.baseUrl}</span>
             <span class="mt-auto flex items-center gap-2 text-[11px] text-muted-foreground">
@@ -219,15 +220,15 @@
           class="flex min-h-24 flex-col gap-1.5 border border-dashed border-border bg-card/50 p-3.5 text-left transition-colors hover:border-primary/50"
           onclick={chooseCustom}
         >
-          <span class="font-nav text-xs uppercase tracking-[0.1em]">custom URL</span>
+          <span class="font-nav text-xs uppercase tracking-[0.1em]">{t("share.custom.title")}</span>
           <span class="text-[11px] leading-relaxed text-muted-foreground">
-            any HTTP endpoint you own - you fill in the upstream, match domain and port next.
+            {t("share.custom.body")}
           </span>
         </button>
       </div>
       {#if search.trim() !== "" && visibleCurated.length === 0 && visibleLongTail.length === 0}
         <p class="text-[11px] text-muted-foreground">
-          no providers match "{search.trim()}" - the custom URL card still lets you share any endpoint.
+          {t("share.search.none", { query: search.trim() })}
         </p>
       {/if}
 
@@ -236,10 +237,10 @@
       <div class="flex flex-col gap-2">
         <div class="flex items-center gap-2">
           <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-            long tail ({visibleLongTail.length})
+            {t("share.longtail", { count: visibleLongTail.length })}
           </span>
           {#if presets.modelsDevError}
-            <Badge variant="tonal" class="jx-hue-warning">expansion unavailable</Badge>
+            <Badge variant="tonal" class="jx-hue-warning">{t("share.longtail.unavailable")}</Badge>
           {/if}
           {#if presets.modelsDev.length > 0}
             <button
@@ -247,7 +248,7 @@
               class="text-[11px] text-primary underline-offset-2 hover:underline"
               onclick={() => (showLongTail = !longTailOpen)}
             >
-              {longTailOpen ? "hide" : "show"}
+              {t(longTailOpen ? "share.longtail.hide" : "share.longtail.show")}
             </button>
           {/if}
         </div>
@@ -267,7 +268,7 @@
                   <span class="font-nav text-xs uppercase tracking-[0.1em]">{preset.label}</span>
                   <Badge variant="outline">models.dev</Badge>
                   {#if preset.unverified}
-                    <Badge variant="tonal" class="jx-hue-warning">unverified</Badge>
+                    <Badge variant="tonal" class="jx-hue-warning">{t("share.unverified")}</Badge>
                   {/if}
                 </span>
                 <span class="font-mono text-[11px] text-muted-foreground">{preset.baseUrl}</span>
@@ -284,7 +285,7 @@
     <Card title="name & group" scroll={false}>
       <div class="flex flex-col gap-3 p-3">
         <Input
-          label="upstream URL"
+          label={t("f.upstreamUrl")}
           placeholder="https://api.example.com"
           autocapitalize="none"
           autocorrect="off"
@@ -306,21 +307,21 @@
                 <span class="flex shrink-0 items-center gap-0.5">
                   <PressButton
                     variant="ghost"
-                    ariaLabel="move route up"
+                    ariaLabel={t("share.routes.moveUp")}
                     class={index === 0 ? "px-1.5 pointer-events-none opacity-40" : "px-1.5"}
                     onclick={() => moveRouteRow(row.id, -1)}
                   >↑</PressButton>
                   <PressButton
                     variant="ghost"
-                    ariaLabel="move route down"
+                    ariaLabel={t("share.routes.moveDown")}
                     class={index === share.routeRows.length - 1 ? "px-1.5 pointer-events-none opacity-40" : "px-1.5"}
                     onclick={() => moveRouteRow(row.id, 1)}
                   >↓</PressButton>
                 </span>
                 <div class="w-28 shrink-0">
-                  <NativeSelect aria-label="route mode" value={row.mode} onchange={(event) => onRowMode(row.id, event)}>
-                    <option value="prefix">prefix</option>
-                    <option value="pattern">pattern</option>
+                  <NativeSelect aria-label={t("share.routes.mode")} value={row.mode} onchange={(event) => onRowMode(row.id, event)}>
+                    <option value="prefix">{t("share.routes.prefix")}</option>
+                    <option value="pattern">{t("share.routes.pattern")}</option>
                   </NativeSelect>
                 </div>
                 {#if row.mode === "pattern"}
@@ -375,7 +376,7 @@
                 {#if share.routeRows.length > 1}
                   <PressButton
                     variant="ghost"
-                    ariaLabel="remove route"
+                    ariaLabel={t("share.routes.remove")}
                     class="shrink-0 px-2"
                     onclick={() => removeRouteRow(row.id)}
                   >x</PressButton>
@@ -398,18 +399,16 @@
             variant="ghost"
             class={share.routeRows.length >= 4 ? "pointer-events-none opacity-50" : undefined}
             onclick={() => addRouteRow()}
-          >+ add route</PressButton>
+          >{t("share.routes.add")}</PressButton>
           <p class="text-[11px] leading-relaxed text-muted-foreground">
-            bind keeps both paths identical (default 1:1); unbind to forward a local
-            prefix to a different upstream path. empty "to" = upstream root.
-            declared routes only - anything else is rejected with 404.
+            {t("share.routes.note")}
           </p>
         </div>
         <Separator />
 
         <Input
-          label="service name"
-          placeholder={share.mode === "preset" ? share.name : "my-service"}
+          label={t("share.name.label")}
+          placeholder={share.mode === "preset" ? share.name : t("share.name.ph")}
           autocapitalize="none"
           autocorrect="off"
           spellcheck={false}
@@ -421,31 +420,31 @@
         <GroupPicker value={share.groupName || undefined} onchange={(name) => (share.groupName = name ?? "")} />
         {#if share.groupName !== ""}
           <p class="text-[11px] text-muted-foreground">
-            the service will be added to group
+            {t("share.group.note")}
             <code class="font-mono">{share.groupName}</code>
-            (limits stay as created - edit them in manage groups).
+            {t("share.group.note2")}
           </p>
         {/if}
 
-        <!-- advanced options（M3-acceptance ③：ghost accordion，默认折叠——
+        <!-- {t('share.advanced')}（M3-acceptance ③：ghost accordion，默认折叠——
              default consumer port + match domains；路由已按 Owner 裁决
              提升主面板） -->
         <Accordion ghost>
           <AccordionItem>
-            {#snippet summary()}advanced options{/snippet}
+            {#snippet summary()}{t('share.advanced')}{/snippet}
             <div class="flex flex-col gap-3">
               <!-- 分组限额已归口 GroupsDialog（M3-r3 ①）；此处端口/match -->
               <div class="flex flex-col gap-1.5">
-                <Input label="default consumer port" bind:value={share.port} />
+                <Input label={t("share.port.label")} bind:value={share.port} />
                 <p class="text-[11px] leading-relaxed text-muted-foreground">
-                  the local port friends will use on their machines - they can change it later.
+                  {t("share.port.note")}
                 </p>
               </div>
               <!-- match（M3-r5 两模式通用，预设预填官方域名）；留空 =
                    提交时用 upstream host -->
               <div class="flex flex-col gap-1.5">
                 <Input
-                  label="match domains (default: use the upstream host)"
+                  label={t("share.match.label")}
                   placeholder="auto: api.example.com"
                   autocapitalize="none"
                   autocorrect="off"
@@ -453,7 +452,7 @@
                   bind:value={share.customMatch}
                 />
                 <p class="text-[11px] leading-relaxed text-muted-foreground">
-                  requests whose host matches are captured - comma-separated for several.
+                  {t("share.match.note")}
                 </p>
               </div>
             </div>
@@ -489,11 +488,11 @@
   <!-- ③ 生成分享 -->
   {:else}
     {#if share.result === null}
-      <Card title="generate the share link" scroll={false}>
+      <Card title={t("share.generate.title")} scroll={false}>
         <div class="flex flex-col gap-3 p-3">
           <dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
-              <dt class="text-muted-foreground">service</dt>
+              <dt class="text-muted-foreground">{t("common.service")}</dt>
               <dd class="font-mono">{share.name}</dd>
             </div>
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
@@ -501,7 +500,7 @@
               <dd class="font-mono">{share.groupName}</dd>
             </div>
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
-              <dt class="text-muted-foreground">source</dt>
+              <dt class="text-muted-foreground">{t("share.step1")}</dt>
               <dd class="font-mono">{share.mode === "preset" ? share.presetId : "custom"}</dd>
             </div>
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
@@ -523,27 +522,26 @@
                 {/if}
               {/each}
               <p class="text-[11px] leading-relaxed text-muted-foreground">
-                declared routes only - anything else is rejected with 404.
+                {t("share.generate.routesNote")}
               </p>
             </div>
           {/if}
           {#if share.secretName !== undefined}
             <p class="text-[11px] leading-relaxed text-muted-foreground">
-              the api key is stored in this machine's secret panel
+              {t("share.generate.secret")}
               (<code class="font-mono">{share.secretName}</code>) - consumers only ever see
               <code class="font-mono">&#9679;</code>.
             </p>
           {/if}
           <div class="max-w-56">
             <Select
-              label="link TTL"
+              label={t("share.ttl.label")}
               options={TTL_OPTIONS.map((option) => ({ value: String(option.ttlMs), label: option.label }))}
               bind:value={ttlSel}
             />
           </div>
-          <Alert variant="tonal" title="the link itself is the credential">
-            anyone holding this link can use the service until it expires. share it over a
-            channel you trust, and revoke keys in Advanced when done.
+          <Alert variant="tonal" title={t("share.credential.title")}>
+            {t("share.credential.body")}
           </Alert>
         </div>
         {#snippet foot()}
@@ -555,12 +553,12 @@
               onclick={() => void generateShare()}
             >
               {share.busy === "service" || share.busy === "group"
-                ? "creating service..."
+                ? t("share.busy.service")
                 : share.busy === "daemon"
-                  ? "starting daemon..."
+                  ? t("share.busy.daemon")
                   : share.busy === "share"
-                    ? "creating link..."
-                    : "generate share link"}
+                    ? t("share.busy.share")
+                    : t("share.busy.generate")}
             </PressButton>
           </CardFooter>
         {/snippet}
@@ -577,7 +575,7 @@
           {#each share.result.warnings as warning (warning)}
             <Alert variant="tonal" class="jx-hue-warning" title="warning">{warning}</Alert>
           {/each}
-          <Alert variant="tonal" title="the link itself is the credential">
+          <Alert variant="tonal" title={t("share.credential.title")}>
             it expires after the chosen TTL. anyone holding it can use the service until then.
           </Alert>
         </div>
@@ -592,7 +590,7 @@
             >
               share another
             </PressButton>
-            <PressButton variant="fill" href="#/dashboard" external={false}>go to dashboard</PressButton>
+            <PressButton variant="fill" href="#/dashboard" external={false}>{t("share.goDashboard")}</PressButton>
           </CardFooter>
         {/snippet}
       </Card>

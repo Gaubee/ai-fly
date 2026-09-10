@@ -12,6 +12,7 @@
   import Skeleton from "$lib/ui/skeleton";
   import Toggle from "$lib/ui/toggle";
   import { secrets, refreshSecrets, setSecret, removeSecret } from "../stores/secrets.svelte.ts";
+  import { t } from "$lib/i18n.svelte.ts";
 
   interface Props {
     /** bindable 开合（× / esc / done 关闭写回）。 */
@@ -110,10 +111,10 @@
                   class="jx-pair-destructive"
                   loading={removing === secretName}
                   onclick={() => void removeRow(secretName)}
-                >confirm remove</PressButton>
-                <PressButton variant="ghost" onclick={() => (confirmName = null)}>cancel</PressButton>
+                >{t("common.confirmRemove")}</PressButton>
+                <PressButton variant="ghost" onclick={() => (confirmName = null)}>{t("common.cancel")}</PressButton>
               {:else}
-                <PressButton variant="ghost" onclick={() => (confirmName = secretName)}>remove</PressButton>
+                <PressButton variant="ghost" onclick={() => (confirmName = secretName)}>{t("common.remove")}</PressButton>
               {/if}
             </span>
           </div>
@@ -128,8 +129,8 @@
         {editing !== null ? `overwrite "${editing}"` : "add a secret"}
       </span>
       <Input
-        label="name"
-        placeholder="openai"
+        label={t("f.name")}
+        placeholder={t("f.secrets.ph.name")}
         autocapitalize="none"
         autocorrect="off"
         spellcheck={false}
@@ -138,8 +139,8 @@
       />
       <Input
         type="password"
-        label="value"
-        placeholder="sk-..."
+        label={t("f.value")}
+        placeholder={t("f.secrets.ph.value")}
         autocomplete="off"
         bind:value={value}
       />
@@ -164,7 +165,7 @@
           {editing !== null ? "overwrite" : "save"}
         </PressButton>
         {#if editing !== null}
-          <PressButton variant="ghost" onclick={resetForm}>cancel</PressButton>
+          <PressButton variant="ghost" onclick={resetForm}>{t("common.cancel")}</PressButton>
         {/if}
       </div>
     </div>

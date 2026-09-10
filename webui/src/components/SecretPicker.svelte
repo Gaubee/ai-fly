@@ -7,6 +7,7 @@
   import NativeSelect from "$lib/ui/native-select";
   import SecretsDialog from "./SecretsDialog.svelte";
   import { secrets, refreshSecrets } from "../stores/secrets.svelte.ts";
+  import { t } from "$lib/i18n.svelte.ts";
 
   interface Props {
     /** 当前选中密钥名（undefined = 不注入 authorization）。 */
@@ -59,15 +60,15 @@
 
 <div class="flex flex-col gap-1.5">
   <!-- bind：用户选择先写 selected，onchange 再分流（manage 哨兵写回原值恢复显示） -->
-  <NativeSelect label="api key (optional)" bind:value={selected} onchange={handleChange}>
-    <option value={NONE}>none (no auth header)</option>
+  <NativeSelect label={t("f.secretpicker.label")} bind:value={selected} onchange={handleChange}>
+    <option value={NONE}>{t("f.secretpicker.none")}</option>
     {#each secrets.names as secretName (secretName)}
       <option value={secretName}>{secretName}</option>
     {/each}
-    <option value={MANAGE}>manage secrets...</option>
+    <option value={MANAGE}>{t("f.secretpicker.manage")}</option>
   </NativeSelect>
   <p class="text-[11px] leading-relaxed text-muted-foreground">
-    stored in the provider's local secret panel; consumers only ever see
+    {t("f.secretpicker.note")}
     <code class="font-mono">&#9679;</code>
   </p>
 </div>

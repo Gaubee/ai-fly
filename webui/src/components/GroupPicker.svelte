@@ -6,6 +6,7 @@
   import { onMount } from "svelte";
   import NativeSelect from "$lib/ui/native-select";
   import GroupsDialog from "./GroupsDialog.svelte";
+  import { t } from "$lib/i18n.svelte.ts";
   import { app, refresh } from "../stores/app.svelte.ts";
 
   interface Props {
@@ -63,12 +64,12 @@
 </script>
 
 <div class="flex flex-col gap-1.5">
-  <NativeSelect label="group" bind:value={selected} onchange={handleChange}>
-    <option value={NONE}>pick a group...</option>
+  <NativeSelect label={t("grouppicker.label")} bind:value={selected} onchange={handleChange}>
+    <option value={NONE}>{t("grouppicker.pick")}</option>
     {#each app.groups as group (group.name)}
       <option value={group.name}>{group.name}</option>
     {/each}
-    <option value={MANAGE}>manage groups...</option>
+    <option value={MANAGE}>{t("grouppicker.manage")}</option>
   </NativeSelect>
   <p class="text-[11px] leading-relaxed text-muted-foreground">
     groups scope what each shared key can reach - create or edit them in the manager.

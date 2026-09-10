@@ -13,6 +13,7 @@
   import { app } from "../stores/app.svelte.ts";
   import { toastRpcError, toastSuccess } from "../stores/toast.svelte.ts";
   import { saveRelayChoice } from "../stores/advanced.svelte.ts";
+  import { t } from "$lib/i18n.svelte.ts";
 
   interface Props {
     /** bindable 开合（× / esc 关闭写回）。 */
@@ -87,27 +88,25 @@
   }
 </script>
 
-<Dialog bind:open title="relay server">
+<Dialog bind:open title={t("relaydlg.title")}>
   <div class="flex flex-col gap-3 p-3">
     <p class="text-xs leading-relaxed text-muted-foreground">
-      where both sides meet when a direct connection is not possible. every share
-      link embeds this choice. self-hosted? deploy the opendweb server on its own
-      machine and paste its relay URL under custom.
+      {t("relaydlg.intro")}
     </p>
 
     <div class="flex flex-col gap-2">
       <label class="flex cursor-pointer items-start gap-2 border border-border p-2.5 {mode === 'sdk' ? 'bg-primary/10' : ''}">
         <input type="radio" name="relay-mode" value="sdk" bind:group={mode} class="mt-0.5" />
         <span class="flex flex-col gap-0.5">
-          <span class="text-xs font-medium">SDK defaults</span>
-          <span class="text-[11px] text-muted-foreground">n0 public relays (no setup, shared infra)</span>
+          <span class="text-xs font-medium">{t("relaydlg.sdk")}</span>
+          <span class="text-[11px] text-muted-foreground">{t("relaydlg.sdkNote")}</span>
         </span>
       </label>
 
       <label class="flex cursor-pointer items-start gap-2 border border-border p-2.5 {mode === 'custom' ? 'bg-primary/10' : ''}">
         <input type="radio" name="relay-mode" value="custom" bind:group={mode} class="mt-0.5" />
         <span class="flex flex-1 flex-col gap-1.5">
-          <span class="text-xs font-medium">custom</span>
+          <span class="text-xs font-medium">{t("relaydlg.custom")}</span>
           {#if mode === "custom"}
             <textarea
               class="min-h-20 border border-border bg-transparent p-2 font-mono text-xs focus:border-primary focus:outline-none"
@@ -116,9 +115,9 @@
               bind:value={customText}
               disabled={busy}
             ></textarea>
-            <span class="text-[11px] text-muted-foreground">one http(s):// URL per line, at most 8.</span>
+            <span class="text-[11px] text-muted-foreground">{t("relaydlg.perLine")}</span>
           {:else}
-            <span class="text-[11px] text-muted-foreground">self-managed relay entries</span>
+            <span class="text-[11px] text-muted-foreground">{t("relaydlg.customNote")}</span>
           {/if}
         </span>
       </label>
@@ -133,18 +132,18 @@
 
     <Separator />
     <p class="text-[11px] leading-relaxed text-muted-foreground">
-      saved now; the running fabric picks it up on the next app launch.
+      {t("relaydlg.footer")}
     </p>
   </div>
   {#snippet footer()}
     <CardFooter label="relay server actions">
-      <PressButton variant="ghost" onclick={() => (open = false)}>cancel</PressButton>
+      <PressButton variant="ghost" onclick={() => (open = false)}>{t("common.cancel")}</PressButton>
       <PressButton
         variant="fill"
         loading={busy}
         class={customProblem !== null ? "pointer-events-none opacity-50" : undefined}
         onclick={() => void save()}
-      >save</PressButton>
+      >{t("common.save")}</PressButton>
     </CardFooter>
   {/snippet}
 </Dialog>

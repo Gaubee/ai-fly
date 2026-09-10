@@ -31,6 +31,7 @@
   import type { ServiceRouteView as ServiceTestCardRoutes, RouteTestOutput } from "../stores/connect-wizard.svelte.ts";
   import type { RouteForm } from "$shared/rpc-contract.ts";
   import RelayPickerDialog from "../components/RelayPickerDialog.svelte";
+  import { t } from "$lib/i18n.svelte.ts";
   import TestConnection from "../components/TestConnection.svelte";
   import { app, refresh } from "../stores/app.svelte.ts";
   import { call } from "../stores/rpc.svelte.ts";
@@ -291,20 +292,20 @@
 
 <div class="mx-auto flex max-w-4xl flex-col gap-4 p-4 md:p-6">
   <header class="flex flex-wrap items-baseline justify-between gap-2">
-    <h1 class="font-nav text-base uppercase tracking-[0.1em]">Advanced</h1>
+    <h1 class="font-nav text-base uppercase tracking-[0.1em]">{t("adv.title")}</h1>
     <p class="text-xs text-muted-foreground">
-      net-fly internals - match sets, rewrite rules, keys, secrets, relay
+      {t("adv.subtitle")}
     </p>
   </header>
 
   <Tabs bind:value={tab}>
     <TabsList>
-      <TabsTrigger value="services">services</TabsTrigger>
-      <TabsTrigger value="groups">groups</TabsTrigger>
-      <TabsTrigger value="keys">keys</TabsTrigger>
-      <TabsTrigger value="secrets">secrets</TabsTrigger>
-      <TabsTrigger value="relay">relay & limits</TabsTrigger>
-      <TabsTrigger value="settings">settings</TabsTrigger>
+      <TabsTrigger value="services">{t("adv.tab.services")}</TabsTrigger>
+      <TabsTrigger value="groups">{t("adv.tab.groups")}</TabsTrigger>
+      <TabsTrigger value="keys">{t("adv.tab.keys")}</TabsTrigger>
+      <TabsTrigger value="secrets">{t("adv.tab.secrets")}</TabsTrigger>
+      <TabsTrigger value="relay">{t("adv.tab.relay")}</TabsTrigger>
+      <TabsTrigger value="settings">{t("adv.tab.settings")}</TabsTrigger>
     </TabsList>
 
     <!-- ── 服务 ─────────────────────────────────────────────── -->
@@ -312,9 +313,9 @@
       <div class="flex flex-col gap-3">
         <div class="flex items-center justify-between">
           <p class="text-xs text-muted-foreground">
-            default rows show name + port; expand for upstream, full match set and rewrite rules.
+            {t("adv.services.hint")}
           </p>
-          <PressButton variant="outline" onclick={openServiceAdd}>add service</PressButton>
+          <PressButton variant="outline" onclick={openServiceAdd}>{t("adv.services.add")}</PressButton>
         </div>
 
         {#if app.busy.services && app.services.length === 0}
@@ -325,7 +326,7 @@
         {:else if app.services.length === 0}
           <Card scroll={false}>
             <p class="p-4 text-xs text-muted-foreground">
-              no services yet - add one here or use the share wizard.
+              {t("adv.services.empty")}
             </p>
           </Card>
         {:else}
@@ -350,28 +351,28 @@
                       <Badge variant="tonal">{groupName}</Badge>
                     {/each}
                     {#if hasInjectedAuth(service)}
-                      <Badge variant="tonal" class="jx-hue-info">key injected</Badge>
+                      <Badge variant="tonal" class="jx-hue-info">{t("adv.services.keyInjected")}</Badge>
                     {/if}
                   </button>
                   <span class="flex items-center gap-1.5">
                     <PressButton
                       variant="ghost"
                       onclick={() => (serviceTestOpen = serviceTestOpen === service.serviceId ? null : service.serviceId)}
-                    >test</PressButton>
-                    <PressButton variant="ghost" onclick={() => openServiceEdit(service)}>edit</PressButton>
+                    >{t("common.test")}</PressButton>
+                    <PressButton variant="ghost" onclick={() => openServiceEdit(service)}>{t("common.edit")}</PressButton>
                     {#if serviceRemove.confirm === service.name}
                       <PressButton
                         variant="tonal"
                         class="jx-pair-destructive"
                         loading={serviceRemove.busy === service.name}
                         onclick={() => void removeService(service.name)}
-                      >confirm remove</PressButton>
-                      <PressButton variant="ghost" onclick={() => (serviceRemove.confirm = "")}>cancel</PressButton>
+                      >{t("common.confirmRemove")}</PressButton>
+                      <PressButton variant="ghost" onclick={() => (serviceRemove.confirm = "")}>{t("common.cancel")}</PressButton>
                     {:else}
                       <PressButton
                         variant="ghost"
                         onclick={() => (serviceRemove.confirm = service.name)}
-                      >remove</PressButton>
+                      >{t("common.remove")}</PressButton>
                     {/if}
                   </span>
                 </div>
@@ -379,7 +380,7 @@
                   <!-- detail 展开：upstream / match 全集 / rewrite（$env:/$secret: 注入值掩码） -->
                   <dl class="grid gap-x-6 gap-y-1.5 border-t border-border px-3 py-2.5 text-xs" transition:slide={{ duration: 150 }}>
                     <div class="flex gap-2">
-                      <dt class="w-20 flex-none text-muted-foreground">upstream</dt>
+                      <dt class="w-20 flex-none text-muted-foreground">{t("adv.services.upstream")}</dt>
                       <dd class="min-w-0 break-all font-mono">{service.upstream}</dd>
                     </div>
                     <div class="flex gap-2">
@@ -392,7 +393,7 @@
                     </div>
                     {#if service.rewrite}
                       <div class="flex gap-2">
-                        <dt class="w-20 flex-none text-muted-foreground">rewrite</dt>
+                        <dt class="w-20 flex-none text-muted-foreground">{t("adv.services.rewrite")}</dt>
                         <dd class="flex min-w-0 flex-col gap-0.5 font-mono">
                           {#if service.rewrite.hostHeader}<span>host: {service.rewrite.hostHeader}</span>{/if}
                           {#if service.rewrite.pathPrefixStrip}<span>strip: {service.rewrite.pathPrefixStrip}</span>{/if}
@@ -404,14 +405,14 @@
                             <span>remove header {name}</span>
                           {/each}
                           {#if !service.rewrite.hostHeader && !service.rewrite.pathPrefixStrip && !service.rewrite.pathPrefixAppend && Object.keys(service.rewrite.headerSet ?? {}).length === 0 && (service.rewrite.headerRemove ?? []).length === 0}
-                            <span class="text-muted-foreground">no rewrite rules</span>
+                            <span class="text-muted-foreground">{t("adv.services.noRewrite")}</span>
                           {/if}
                         </dd>
                       </div>
                     {:else}
                       <div class="flex gap-2">
-                        <dt class="w-20 flex-none text-muted-foreground">rewrite</dt>
-                        <dd class="font-mono text-muted-foreground">none</dd>
+                        <dt class="w-20 flex-none text-muted-foreground">{t("adv.services.rewrite")}</dt>
+                        <dd class="font-mono text-muted-foreground">{t("adv.services.none")}</dd>
                       </div>
                     {/if}
                     <div class="flex gap-2">
@@ -448,17 +449,17 @@
             <div class="flex flex-col gap-3 p-3">
               <div class="grid gap-3 sm:grid-cols-2">
                 <Input
-                  label="name"
+                  label={t("f.name")}
                   autocapitalize="none"
                   autocorrect="off"
                   spellcheck={false}
                   bind:value={serviceForm.name}
                 />
-                <Input label="port" placeholder="default 8080" bind:value={serviceForm.port} />
+                <Input label={t("f.port")} placeholder="default 8080" bind:value={serviceForm.port} />
               </div>
-              <Input label="upstream URL" placeholder="https://api.example.com/v1" autocapitalize="none" autocorrect="off" spellcheck={false} bind:value={serviceForm.upstream} />
+              <Input label={t("f.upstreamUrl")} placeholder="https://api.example.com/v1" autocapitalize="none" autocorrect="off" spellcheck={false} bind:value={serviceForm.upstream} />
               <div class="flex flex-col gap-1.5">
-                <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">match rules</span>
+                <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">{t("f.matchRules")}</span>
                 {#each serviceForm.match as rule, i (i)}
                   <div class="flex items-center gap-2">
                     <div class="w-28">
@@ -510,7 +511,7 @@
             </div>
             {#snippet foot()}
               <CardFooter label="service form actions">
-                <PressButton variant="ghost" onclick={closeServiceForm} class={serviceForm.busy ? "pointer-events-none opacity-50" : undefined}>cancel</PressButton>
+                <PressButton variant="ghost" onclick={closeServiceForm} class={serviceForm.busy ? "pointer-events-none opacity-50" : undefined}>{t("common.cancel")}</PressButton>
                 <PressButton variant="fill" loading={serviceForm.busy} onclick={() => void submitService()}>
                   {serviceForm.editingName !== "" ? "save changes" : "add service"}
                 </PressButton>
@@ -531,12 +532,12 @@
             members and limits can be replaced any time; a group with active keys
             must have them revoked before removal.
           </p>
-          <PressButton variant="outline" onclick={openGroupAdd}>add group</PressButton>
+          <PressButton variant="outline" onclick={openGroupAdd}>{t("adv.groups.add")}</PressButton>
         </div>
 
         {#if app.groups.length === 0 && !app.busy.groups}
           <Card scroll={false}>
-            <p class="p-4 text-xs text-muted-foreground">no groups yet.</p>
+            <p class="p-4 text-xs text-muted-foreground">{t("adv.groups.empty")}</p>
           </Card>
         {:else}
           <div class="flex flex-col gap-2">
@@ -553,17 +554,17 @@
                     <Badge variant="tonal" class="jx-hue-info">{group.limits.dailyRequests}/day</Badge>
                   {/if}
                   {#if !group.limits?.maxConcurrency && !group.limits?.dailyRequests}
-                    <Badge variant="outline">unlimited</Badge>
+                    <Badge variant="outline">{t("adv.groups.unlimited")}</Badge>
                   {/if}
                   <Badge variant="outline">{activeKeys} active {activeKeys === 1 ? "key" : "keys"}</Badge>
                   <span class="ml-auto flex items-center gap-1.5">
                     {#if groupEdit.open === group.name}
-                      <PressButton variant="ghost" onclick={() => (groupEdit.open = "")} class={groupEdit.busy ? "pointer-events-none opacity-50" : undefined}>close</PressButton>
+                      <PressButton variant="ghost" onclick={() => (groupEdit.open = "")} class={groupEdit.busy ? "pointer-events-none opacity-50" : undefined}>{t("f.close")}</PressButton>
                     {:else}
                       <PressButton
                         variant="ghost"
                         onclick={() => openGroupEdit(group.name, groupServiceNames, group.limits)}
-                      >edit</PressButton>
+                      >{t("common.edit")}</PressButton>
                     {/if}
                     {#if groupRemove.confirm === group.name}
                       <PressButton
@@ -571,10 +572,10 @@
                         class="jx-pair-destructive"
                         loading={groupRemove.busy === group.name}
                         onclick={() => void removeGroup(group.name)}
-                      >confirm remove</PressButton>
-                      <PressButton variant="ghost" onclick={() => (groupRemove.confirm = "")}>cancel</PressButton>
+                      >{t("common.confirmRemove")}</PressButton>
+                      <PressButton variant="ghost" onclick={() => (groupRemove.confirm = "")}>{t("common.cancel")}</PressButton>
                     {:else}
-                      <PressButton variant="ghost" onclick={() => (groupRemove.confirm = group.name)}>remove</PressButton>
+                      <PressButton variant="ghost" onclick={() => (groupRemove.confirm = group.name)}>{t("common.remove")}</PressButton>
                     {/if}
                   </span>
                 </div>
@@ -582,14 +583,14 @@
                   {#each groupServiceNames as name (name)}
                     <Badge variant="outline">{name}</Badge>
                   {:else}
-                    <span class="text-[11px] text-muted-foreground">no services</span>
+                    <span class="text-[11px] text-muted-foreground">{t("f.noServices")}</span>
                   {/each}
                 </div>
                 {#if groupEdit.open === group.name}
                   <!-- 行内编辑：名称只读（行头）；成员勾选 + 限额（保存走
                        setServices + setLimits，空限额 = 清除为无限） -->
                   <div class="mt-2 flex flex-col gap-2 border-t border-border pt-2.5" transition:slide={{ duration: 150 }}>
-                    <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">members & limits</span>
+                    <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">{t("adv.groups.members")}</span>
                     <div class="flex flex-wrap gap-x-5 gap-y-1.5">
                       {#each app.services.map((service) => service.name) as name (name)}
                         <label class="flex items-center gap-1.5 text-xs">
@@ -613,8 +614,8 @@
                       {/each}
                     </div>
                     <div class="grid gap-3 sm:grid-cols-2">
-                      <Input label="max concurrency (optional)" placeholder="unlimited" bind:value={groupEdit.limitsConcurrency} />
-                      <Input label="daily requests (optional)" placeholder="unlimited" bind:value={groupEdit.limitsDaily} />
+                      <Input label={t("f.maxConcurrency")} placeholder="unlimited" bind:value={groupEdit.limitsConcurrency} />
+                      <Input label={t("f.dailyRequests")} placeholder="unlimited" bind:value={groupEdit.limitsDaily} />
                     </div>
                     <div class="flex items-center gap-1.5">
                       <PressButton variant="fill" loading={groupEdit.busy} onclick={() => void submitGroupEdit()}>
@@ -634,7 +635,7 @@
           <Card title="add group" scroll={false}>
             <div class="flex flex-col gap-3 p-3">
               <Input
-                label="group name"
+                label={t("f.groupName")}
                 placeholder="friends"
                 autocapitalize="none"
                 autocorrect="off"
@@ -658,18 +659,18 @@
                     {name}
                   </label>
                 {:else}
-                  <span class="text-[11px] text-muted-foreground">no services to add yet.</span>
+                  <span class="text-[11px] text-muted-foreground">{t("adv.groups.noServices")}</span>
                 {/each}
               </div>
               <div class="grid gap-3 sm:grid-cols-2">
-                <Input label="max concurrency (optional)" placeholder="unlimited" bind:value={groupForm.limitsConcurrency} />
-                <Input label="daily requests (optional)" placeholder="unlimited" bind:value={groupForm.limitsDaily} />
+                <Input label={t("f.maxConcurrency")} placeholder="unlimited" bind:value={groupForm.limitsConcurrency} />
+                <Input label={t("f.dailyRequests")} placeholder="unlimited" bind:value={groupForm.limitsDaily} />
               </div>
             </div>
             {#snippet foot()}
               <CardFooter label="group form actions">
-                <PressButton variant="ghost" onclick={() => (groupForm.open = false)} class={groupForm.busy ? "pointer-events-none opacity-50" : undefined}>cancel</PressButton>
-                <PressButton variant="fill" loading={groupForm.busy} onclick={() => void submitGroupAdd()}>add group</PressButton>
+                <PressButton variant="ghost" onclick={() => (groupForm.open = false)} class={groupForm.busy ? "pointer-events-none opacity-50" : undefined}>{t("common.cancel")}</PressButton>
+                <PressButton variant="fill" loading={groupForm.busy} onclick={() => void submitGroupAdd()}>{t("adv.groups.add")}</PressButton>
               </CardFooter>
             {/snippet}
           </Card>
@@ -681,11 +682,11 @@
     <!-- ── 密钥 ─────────────────────────────────────────────── -->
     <TabsContent value="keys">
       <div class="flex flex-col gap-3">
-        <Card title="issue a key" scroll={false}>
+        <Card title={t("adv.keys.issue")} scroll={false}>
           <div class="flex flex-wrap items-end gap-3 p-3">
             <div class="w-56">
               <Select
-                label="group"
+                label={t("f.group")}
                 options={keyGroupOptions}
                 placeholder="pick a group"
                 bind:value={keyIssue.group}
@@ -705,16 +706,16 @@
 
         {#if app.keys.length === 0 && !app.busy.keys}
           <Card scroll={false}>
-            <p class="p-4 text-xs text-muted-foreground">no keys yet.</p>
+            <p class="p-4 text-xs text-muted-foreground">{t("adv.keys.empty")}</p>
           </Card>
         {:else}
           <table class="w-full border border-border bg-card text-xs shadow-2xs">
             <thead>
               <tr class="border-b border-border text-left font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
                 <th class="px-3 py-2 font-normal">key</th>
-                <th class="px-3 py-2 font-normal">group</th>
-                <th class="px-3 py-2 font-normal">created</th>
-                <th class="px-3 py-2 font-normal">status</th>
+                <th class="px-3 py-2 font-normal">{t("adv.keys.group")}</th>
+                <th class="px-3 py-2 font-normal">{t("adv.keys.created")}</th>
+                <th class="px-3 py-2 font-normal">{t("f.status")}</th>
                 <th class="px-3 py-2 font-normal"></th>
               </tr>
             </thead>
@@ -726,9 +727,9 @@
                   <td class="px-3 py-1.5 text-muted-foreground">{formatDate(key.createdAt)}</td>
                   <td class="px-3 py-1.5">
                     {#if key.revokedAt !== undefined}
-                      <Badge variant="tonal" class="jx-hue-error">revoked</Badge>
+                      <Badge variant="tonal" class="jx-hue-error">{t("adv.keys.revoked")}</Badge>
                     {:else}
-                      <Badge variant="tonal" class="jx-hue-success">active</Badge>
+                      <Badge variant="tonal" class="jx-hue-success">{t("adv.keys.active")}</Badge>
                     {/if}
                   </td>
                   <td class="px-3 py-1.5 text-right">
@@ -740,11 +741,11 @@
                             class="jx-pair-destructive"
                             loading={keyRevoke.busy === key.keyId}
                             onclick={() => void revokeKey(key.keyId)}
-                          >confirm revoke</PressButton>
-                          <PressButton variant="ghost" onclick={() => (keyRevoke.confirm = "")}>cancel</PressButton>
+                          >{t("adv.keys.confirmRevoke")}</PressButton>
+                          <PressButton variant="ghost" onclick={() => (keyRevoke.confirm = "")}>{t("common.cancel")}</PressButton>
                         </span>
                       {:else}
-                        <PressButton variant="ghost" onclick={() => (keyRevoke.confirm = key.keyId)}>revoke</PressButton>
+                        <PressButton variant="ghost" onclick={() => (keyRevoke.confirm = key.keyId)}>{t("adv.keys.revoke")}</PressButton>
                       {/if}
                     {/if}
                   </td>
@@ -763,8 +764,7 @@
         <Card title="secrets" scroll={false}>
           <div class="flex flex-col gap-3 p-3">
             <p class="text-xs leading-relaxed text-muted-foreground">
-              upstream api keys for your services - stored only in this machine's
-              secret panel; consumers only ever see
+              {t("adv.secrets.hint")}
               <code class="font-mono">&#9679;</code>.
             </p>
 
@@ -775,7 +775,7 @@
               </div>
             {:else if secretRows.length === 0}
               <p class="border border-dashed border-border px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
-                no secrets yet - add one below (e.g. the api key of the upstream you are sharing).
+                {t("f.secrets.empty")}
               </p>
             {:else}
               <div class="flex flex-col gap-1.5">
@@ -784,17 +784,17 @@
                     <span class="min-w-0 truncate font-mono text-xs">{row.name}</span>
                     <span class="text-[11px] text-muted-foreground">updated {formatDate(row.updatedAt)}</span>
                     <span class="ml-auto flex items-center gap-1.5">
-                      <PressButton variant="ghost" onclick={() => editSecretRow(row)}>edit</PressButton>
+                      <PressButton variant="ghost" onclick={() => editSecretRow(row)}>{t("common.edit")}</PressButton>
                       {#if secretConfirm === row.name}
                         <PressButton
                           variant="tonal"
                           class="jx-pair-destructive"
                           loading={secretRemoving === row.name}
                           onclick={() => void removeSecretRow(row.name)}
-                        >confirm remove</PressButton>
-                        <PressButton variant="ghost" onclick={() => (secretConfirm = null)}>cancel</PressButton>
+                        >{t("common.confirmRemove")}</PressButton>
+                        <PressButton variant="ghost" onclick={() => (secretConfirm = null)}>{t("common.cancel")}</PressButton>
                       {:else}
-                        <PressButton variant="ghost" onclick={() => (secretConfirm = row.name)}>remove</PressButton>
+                        <PressButton variant="ghost" onclick={() => (secretConfirm = row.name)}>{t("common.remove")}</PressButton>
                       {/if}
                     </span>
                   </div>
@@ -809,7 +809,7 @@
                 {secretEditing !== null ? `overwrite "${secretEditing}"` : "add a secret"}
               </span>
               <Input
-                label="name"
+                label={t("f.name")}
                 placeholder="openai"
                 autocapitalize="none"
                 autocorrect="off"
@@ -819,7 +819,7 @@
               />
               <Input
                 type="password"
-                label="value"
+                label={t("f.value")}
                 placeholder="sk-..."
                 autocomplete="off"
                 bind:value={secretValueDraft}
@@ -845,7 +845,7 @@
                   {secretEditing !== null ? "overwrite" : "save"}
                 </PressButton>
                 {#if secretEditing !== null}
-                  <PressButton variant="ghost" onclick={resetSecretForm}>cancel</PressButton>
+                  <PressButton variant="ghost" onclick={resetSecretForm}>{t("common.cancel")}</PressButton>
                 {/if}
               </div>
             </div>
@@ -857,13 +857,10 @@
     <!-- ── 中继与限额 ───────────────────────────────────────── -->
     <TabsContent value="relay">
       <div class="flex flex-col gap-3">
-        <Card title="relay entries" scroll={false}>
+        <Card title={t("adv.tab.relay")} scroll={false}>
           <div class="flex flex-col gap-3 p-3">
             <p class="text-xs leading-relaxed text-muted-foreground">
-              relay entries are the stable meeting points both sides dial when a direct
-              connection is not possible (different networks, NAT). keep at least one
-              long-lived address here - every share link embeds it, and imported links may
-              bring their own. leave empty to use the SDK default.
+              {t("adv.relay.hint")}
             </p>
             <textarea
               class="min-h-24 border border-border bg-transparent p-2.5 font-mono text-xs focus:border-primary focus:outline-none"
@@ -872,30 +869,30 @@
               bind:value={relayForm.text}
               disabled={relayForm.busy}
             ></textarea>
-            <p class="text-[11px] text-muted-foreground">one http(s):// URL per line, at most 8.</p>
+            <p class="text-[11px] text-muted-foreground">{t("adv.relay.perLine")}</p>
             {#if relayForm.savedTick > 0}
-              <p class="text-[11px] text-primary" transition:slide={{ duration: 150 }}>saved.</p>
+              <p class="text-[11px] text-primary" transition:slide={{ duration: 150 }}>{t("common.saved")}</p>
             {/if}
           </div>
           {#snippet foot()}
             <CardFooter label="relay form actions">
               <PressButton variant="outline" onclick={() => (relayDialogOpen = true)}>
-                choose relay server
+                {t("adv.relay.choose")}
               </PressButton>
               <PressButton variant="fill" loading={relayForm.busy} onclick={() => void saveRelay()}>
-                save relay entries
+                {t("adv.relay.save")}
               </PressButton>
             </CardFooter>
           {/snippet}
         </Card>
         <ErrorAlert error={relayForm.error} />
 
-        <Card title="limits" scroll={false}>
+        <Card title={t("adv.relay.limitsTitle")} scroll={false}>
           <div class="flex flex-wrap items-center justify-between gap-2 p-3">
             <p class="text-xs text-muted-foreground">
-              per-group limits (concurrency, daily requests) are managed with each group.
+              {t("adv.groups.limitsHint")}
             </p>
-            <PressButton variant="ghost" onclick={() => (tab = "groups")}>go to groups</PressButton>
+            <PressButton variant="ghost" onclick={() => (tab = "groups")}>{t("adv.groups.goGroups")}</PressButton>
           </div>
         </Card>
       </div>
@@ -908,7 +905,7 @@
           <div class="flex flex-col gap-4 p-3">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p class="font-nav text-[11px] uppercase tracking-[0.1em]">theme</p>
+                <p class="font-nav text-[11px] uppercase tracking-[0.1em]">{t("adv.settings.theme")}</p>
                 <p class="text-[11px] text-muted-foreground">
                   light / dark / system - also synced to app settings.
                 </p>
@@ -921,14 +918,14 @@
             <Separator />
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p class="font-nav text-[11px] uppercase tracking-[0.1em]">models.dev expansion</p>
+                <p class="font-nav text-[11px] uppercase tracking-[0.1em]">{t("adv.settings.modelsDev")}</p>
                 <p class="text-[11px] text-muted-foreground">
                   extend the preset list with models.dev providers (fetched once, cached a week).
                   off keeps the list curated-only and works offline.
                 </p>
               </div>
               <Toggle
-                label="models.dev expansion"
+                label={t("f.modelsDevToggle")}
                 checked={app.settings?.modelsDevEnabled ?? false}
                 disabled={settingsEdit.modelsDevBusy}
                 onchange={(event) => void setModelsDev(event.currentTarget.checked)}
@@ -943,13 +940,13 @@
 </div>
 
 <!-- 密钥一次性原文 dialog（open 由 result 驱动；× / esc 关闭写回 open → 清 result） -->
-<Dialog bind:open={keyDialogOpen} title="key issued">
+<Dialog bind:open={keyDialogOpen} title={t("adv.keys.dialogTitle")}>
   {#if keyIssue.result !== null}
     <div class="flex flex-col gap-3 p-4">
-      <Alert variant="tonal" class="jx-hue-warning" assertive title="shown once - copy it now">
-        the raw key is never shown again (only its hash is stored). paste it into
-        <code class="font-mono">aifly consumer key add</code> on the friend's machine, or share
-        the group link which carries it.
+      <Alert variant="tonal" class="jx-hue-warning" assertive title={t("adv.keys.dialogWarning")}>
+        {t("adv.keys.dialogBody")}
+        <code class="font-mono">aifly consumer key add</code>
+        {t("adv.keys.dialogCode")}
       </Alert>
       <CopyField value={keyIssue.result.key} label="key" />
       <p class="text-[11px] text-muted-foreground">
@@ -957,8 +954,8 @@
       </p>
     </div>
     {#snippet footer()}
-      <CardFooter label="key issued">
-        <PressButton variant="fill" onclick={() => (keyIssue.result = null)}>done - I saved it</PressButton>
+      <CardFooter label={t("adv.keys.dialogTitle")}>
+        <PressButton variant="fill" onclick={() => (keyIssue.result = null)}>{t("adv.keys.done")}</PressButton>
       </CardFooter>
     {/snippet}
   {/if}

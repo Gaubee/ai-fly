@@ -204,7 +204,7 @@
             <thead>
               <tr class="border-b border-border text-left font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
                 <th class="py-1.5 font-normal">{t("common.service")}</th>
-                <th class="py-1.5 font-normal">default</th>
+                <th class="py-1.5 font-normal">{t("connect.ports.table.defaultShort")}</th>
                 <th class="py-1.5 font-normal">{t("connect.ports.table.actual")}</th>
                 <th class="py-1.5 font-normal">{t("connect.ports.set")}</th>
               </tr>
@@ -278,7 +278,7 @@
     <Card title={t("connect.test.title")} scroll={false}>
       <div class="flex flex-col gap-3 p-3">
         {#if serviceOptions.length > 1}
-          <NativeSelect label="service" bind:value={serviceSel} onchange={handleServiceChange}>
+          <NativeSelect label={t("common.service")} bind:value={serviceSel} onchange={handleServiceChange}>
             {#each serviceOptions as option (option.value)}
               <option value={option.value}>{option.label}</option>
             {/each}

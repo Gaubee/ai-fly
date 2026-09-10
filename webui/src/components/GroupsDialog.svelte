@@ -13,6 +13,7 @@
   import { app, refresh } from "../stores/app.svelte.ts";
   import { toast } from "../stores/toast.svelte.ts";
   import { toRpcError } from "$lib/rpc-client";
+  import { t } from "$lib/i18n.svelte.ts";
 
   interface Props {
     /** bindable 开合。 */
@@ -178,7 +179,7 @@
             <!-- 行内编辑：成员勾选 + 限额（名称只读） -->
             <div class="flex items-center gap-2">
               <span class="font-mono text-xs">{group.name}</span>
-              <Badge variant="tonal" class="jx-hue-neutral">editing</Badge>
+              <Badge variant="tonal" class="jx-hue-neutral">{t("groupsdlg.editing")}</Badge>
             </div>
             {#if serviceNames.length > 0}
               <div class="flex flex-wrap gap-x-4 gap-y-1">
@@ -193,14 +194,14 @@
                 {/each}
               </div>
             {:else}
-              <p class="text-[11px] text-muted-foreground">no services yet - add services first.</p>
+              <p class="text-[11px] text-muted-foreground">{t("groupsdlg.noServices")}</p>
             {/if}
             <div class="grid grid-cols-2 gap-2">
-              <Input label="max concurrency" placeholder="unlimited" bind:value={limitsConcurrency} />
-              <Input label="daily requests" placeholder="unlimited" bind:value={limitsDaily} />
+              <Input label={t("groupsdlg.maxConcurrency")} placeholder="unlimited" bind:value={limitsConcurrency} />
+              <Input label={t("groupsdlg.dailyRequests")} placeholder="unlimited" bind:value={limitsDaily} />
             </div>
             <div class="flex items-center justify-end gap-2 pt-1">
-              <PressButton variant="ghost" class={busy ? "pointer-events-none opacity-50" : undefined} onclick={resetEdit}>cancel</PressButton>
+              <PressButton variant="ghost" class={busy ? "pointer-events-none opacity-50" : undefined} onclick={resetEdit}>{t("common.cancel")}</PressButton>
               <PressButton variant="fill" loading={busy} onclick={() => void saveEdit(group.name)}>save</PressButton>
             </div>
           {:else}
@@ -220,13 +221,13 @@
                   <PressButton variant="tonal" class="jx-pair-destructive" loading={busy} onclick={() => void removeGroup(group.name)}>
                     confirm remove
                   </PressButton>
-                  <PressButton variant="ghost" onclick={() => (confirmName = null)}>cancel</PressButton>
+                  <PressButton variant="ghost" onclick={() => (confirmName = null)}>{t("common.cancel")}</PressButton>
                 {:else}
                   <button
                     type="button"
                     class="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
                     onclick={() => (confirmName = group.name)}
-                  >remove</button>
+                  >{t("common.remove")}</button>
                 {/if}
               </span>
             </div>
@@ -243,7 +244,7 @@
       {/each}
 
       <div class="mt-1 flex flex-col gap-2 border-t border-border pt-3">
-        <p class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">new group</p>
+        <p class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">{t("groupsdlg.new")}</p>
         <Input
           label="name"
           placeholder="friends"
@@ -267,8 +268,8 @@
           </div>
         {/if}
         <div class="grid grid-cols-2 gap-2">
-          <Input label="max concurrency" placeholder="unlimited" bind:value={newConcurrency} />
-          <Input label="daily requests" placeholder="unlimited" bind:value={newDaily} />
+          <Input label={t("groupsdlg.maxConcurrency")} placeholder="unlimited" bind:value={newConcurrency} />
+          <Input label={t("groupsdlg.dailyRequests")} placeholder="unlimited" bind:value={newDaily} />
         </div>
         <div class="flex items-center justify-end pt-1">
           <PressButton
@@ -276,7 +277,7 @@
             loading={creating}
             class={newName.trim() === "" || newNameError !== undefined ? "pointer-events-none opacity-50" : undefined}
             onclick={() => void createGroup()}
-          >create group</PressButton>
+          >{t("groupsdlg.create")}</PressButton>
         </div>
       </div>
     </div>
