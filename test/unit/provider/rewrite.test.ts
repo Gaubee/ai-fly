@@ -249,39 +249,74 @@ describe("WS 升级识别", () => {
   });
 });
 
-describe("按标准路由（M3-r4）", () => {
+describe("路径路由（M3-r6：通用 from→to 规则 + 白名单）", () => {
+  // DeepSeek 预设镜像：/v1 → /v1（openai 家族）、/anthropic → /anthropic，全 1:1
   const deepseek = makeService({
     upstream: "https://api.deepseek.com",
     routes: [
-      { form: "openai-chat", upstreamPrefix: "" },
-      { form: "anthropic", upstreamPrefix: "/anthropic" },
+      { forms: ["openai-chat", "openai-responses"], localPrefix: "/v1", upstreamPrefix: "/v1" },
+      { forms: ["anthropic"], localPrefix: "/anthropic", upstreamPrefix: "/anthropic" },
     ],
   });
 
-  it("DeepSeek anthropic 形态：/anthropic/v1/messages -> /anthropic/v1/messages", () => {
+  it("DeepSeek anthropic 形态：/anthropic/v1/messages -> /anthropic/v1/messages（1:1）", () => {
     const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/anthropic/v1/messages" }), {});
     expect(plan.url.href).toBe("https://api.deepseek.com/anthropic/v1/messages");
   });
 
-  it("DeepSeek openai 形态：/openai/v1/chat/completions -> /v1/chat/completions", () => {
-    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/openai/v1/chat/completions" }), {});
+  it("DeepSeek openai 形态：/v1/chat/completions -> /v1/chat/completions（1:1 官方镜像）", () => {
+    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/v1/chat/completions" }), {});
     expect(plan.url.href).toBe("https://api.deepseek.com/v1/chat/completions");
   });
 
-  it("段边界：/anthropicapi 不命中 anthropic 路由 -> PathNotOfferedError（白名单外）", () => {
+  it("段边界：/v1beta 不命中 /v1 路由（不误伤）；/anthropicapi 同理", () => {
+    expect(() => buildUpstreamRequest(deepseek, makeReq({ path: "/v1beta/x" }), {})).toThrow(
+      PathNotOfferedError,
+    );
     expect(() => buildUpstreamRequest(deepseek, makeReq({ path: "/anthropicapi/v1" }), {})).toThrow(
       PathNotOfferedError,
     );
   });
 
-  it("未命中路径拒绝（M3-r5 白名单语义：路由表外零上游请求）", () => {
-    expect(() => buildUpstreamRequest(deepseek, makeReq({ path: "/v1/chat/completions" }), {})).toThrow(
-      PathNotOfferedError,
-    );
-    // 个人信息端点保护：/user、/balance 等不在声明标准内
+  it("未命中路径拒绝（白名单语义：路由表外零上游请求）", () => {
     expect(() => buildUpstreamRequest(deepseek, makeReq({ path: "/user/balance" }), {})).toThrow(
       PathNotOfferedError,
     );
+    expect(() => buildUpstreamRequest(deepseek, makeReq({ path: "/openai/v1/chat/completions" }), {})).toThrow(
+      PathNotOfferedError,
+    );
+  });
+
+  it("自定义 from→to：/foo/x -> /bar/x（解绑态自由映射）", () => {
+    const service = makeService({
+      upstream: "https://agg.test",
+      routes: [{ forms: [], localPrefix: "/foo", upstreamPrefix: "/bar" }],
+    });
+    expect(buildUpstreamRequest(service, makeReq({ path: "/foo/models" }), {}).url.pathname).toBe("/bar/models");
+    expect(() => buildUpstreamRequest(service, makeReq({ path: "/other" }), {})).toThrow(PathNotOfferedError);
+  });
+
+  it("localPrefix 缺省派生规范前缀（forms 首项）", () => {
+    const service = makeService({
+      upstream: "https://api.deepseek.com",
+      routes: [
+        { forms: ["openai-chat"], upstreamPrefix: "" },
+        { forms: ["anthropic"], upstreamPrefix: "/anthropic" },
+      ],
+    });
+    // openai-chat 的 to 为根 ""：/v1/models -> /models（from 前缀被替换掉）
+    expect(buildUpstreamRequest(service, makeReq({ path: "/v1/models" }), {}).url.pathname).toBe("/models");
+    expect(buildUpstreamRequest(service, makeReq({ path: "/anthropic/v1/messages" }), {}).url.pathname).toBe(
+      "/anthropic/v1/messages",
+    );
+  });
+
+  it("to 为根：/v1/x -> /x", () => {
+    const service = makeService({
+      upstream: "https://agg.test",
+      routes: [{ forms: [], localPrefix: "/v1", upstreamPrefix: "" }],
+    });
+    expect(buildUpstreamRequest(service, makeReq({ path: "/v1/models" }), {}).url.pathname).toBe("/models");
   });
 
   it("路由前缀根命中：/anthropic -> upstream /anthropic", () => {
@@ -289,17 +324,17 @@ describe("按标准路由（M3-r4）", () => {
     expect(plan.url.pathname).toBe("/anthropic");
   });
 
-  it("upstream 带基础路径时拼接在映射后：base /api + route /anthropic/v1/x -> /api/v1/x", () => {
+  it("upstream 带基础路径时拼接在映射后：base /api + to /v1 + /v1/x -> /api/v1/x", () => {
     const service = makeService({
       upstream: "https://agg.test/api",
-      routes: [{ form: "anthropic", upstreamPrefix: "" }],
+      routes: [{ forms: [], localPrefix: "/v1", upstreamPrefix: "/v1" }],
     });
-    const plan = buildUpstreamRequest(service, makeReq({ path: "/anthropic/v1/messages" }), {});
+    const plan = buildUpstreamRequest(service, makeReq({ path: "/v1/messages" }), {});
     expect(plan.url.href).toBe("https://agg.test/api/v1/messages");
   });
 
   it("query 保留在映射后", () => {
-    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/openai/v1/models?list=1" }), {});
+    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/v1/models?list=1" }), {});
     expect(plan.url.pathname).toBe("/v1/models");
     expect(plan.url.search).toBe("?list=1");
   });

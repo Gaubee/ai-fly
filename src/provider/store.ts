@@ -21,6 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { ROUTE_LOCAL_PREFIX } from "../shared/rpc-contract.ts";
 import { join } from "node:path";
 import { z } from "zod";
 import { randomZ32 } from "../wire/z32.ts";
@@ -68,9 +69,13 @@ export const SERVICE_REWRITE_STORE_SCHEMA = z.strictObject({
   headerRemove: z.array(z.string().min(1).max(1024)).max(32).optional(),
 });
 
-/** 按标准路由（M3-r4）：form 决定本地固定前缀，upstreamPrefix 为 upstream 侧替换前缀。 */
+/** 路径路由（M3-r6 定形）：通用 from→to 规则——localPrefix（本地端口前缀，
+ *  版本段粒度如 /v1、/anthropic）替换为 upstreamPrefix（"" = 根）；
+ *  forms 为 AI 层标注（可为空 = 未标注的通用规则；agent 可用性/writer 消费，
+ *  引擎转发与 forms 无关）。 */
 export const SERVICE_ROUTE_STORE_SCHEMA = z.strictObject({
-  form: z.enum(["openai-chat", "openai-responses", "anthropic"]),
+  forms: z.array(z.enum(["openai-chat", "openai-responses", "anthropic"])).max(3),
+  localPrefix: z.string().min(1).max(2048).optional(),
   upstreamPrefix: z.string().max(2048),
 });
 
@@ -552,26 +557,28 @@ function validateLimits(limits: GroupLimits): void {
   }
 }
 
-/** rewrite 归一化：header 名小写、headerRemove 去重、前缀字段以 / 开头。 */
-/** 路由表规范化：去空白、空表→undefined、upstreamPrefix 补 / 去尾斜杠、form 去重。 */
+/** 路由表规范化（M3-r6）：空表→undefined；localPrefix 补 / 去尾斜杠（缺省按
+ *  首个 form 的规范前缀）并持久化；upstreamPrefix 同归一（"/" → 根 ""）；
+ *  forms 去重。不做语义限制——net-fly 通用 from→to 规则在前，AI 标注在后。 */
 function normalizeRoutes(routes: ServiceRoute[] | undefined): ServiceRoute[] | undefined {
   if (routes === undefined) return undefined;
   const cleaned = routes.filter((r) => r !== null && r !== undefined);
   if (cleaned.length === 0) return undefined;
-  const seen = new Set<string>();
   const out: ServiceRoute[] = [];
   for (const route of cleaned) {
-    if (seen.has(route.form)) {
-      throw new StoreError("invalid", `error: duplicate route form '${route.form}'`);
+    const forms = [...new Set(route.forms ?? [])];
+    let local = route.localPrefix?.trim() ?? "";
+    if (local !== "") {
+      if (!local.startsWith("/")) local = `/${local}`;
+      local = local.replace(/\/+$/, "");
     }
-    seen.add(route.form);
-    let prefix = route.upstreamPrefix.trim();
-    if (prefix !== "") {
-      if (!prefix.startsWith("/")) prefix = `/${prefix}`;
-      // 尾斜杠剥净；全斜杠（"/"）归一为根 ""
-      prefix = prefix.replace(/\/+$/, "");
+    if (local === "") local = ROUTE_LOCAL_PREFIX[forms[0] ?? "openai-chat"];
+    let up = route.upstreamPrefix.trim();
+    if (up !== "") {
+      if (!up.startsWith("/")) up = `/${up}`;
+      up = up.replace(/\/+$/, "");
     }
-    out.push({ form: route.form, upstreamPrefix: prefix });
+    out.push({ forms, localPrefix: local, upstreamPrefix: up });
   }
   return out;
 }

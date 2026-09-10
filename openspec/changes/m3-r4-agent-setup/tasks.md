@@ -33,3 +33,23 @@
       不再折叠在 advanced options；port/match 维持收纳。实证：手风琴关闭态
       三路由输入均可见，DOM 序 upstream → api routes → service name →
       advanced options
+
+## M3-r6 追加（Owner 连续三裁决：路径路由客观化）
+
+- [x] 15. 拦截粒度 = 版本段（/v1 而非 /v1/responses）；路由模型改为通用
+      from→to 规则（forms 数组标注 AI 标准供消费侧判定，引擎转发与 forms
+      无关）；本地前缀 localPrefix 成为规则自带字段（缺省按 forms 派生）
+- [x] 16. 表单路由区客观化（无 OPENAI/ANTHROPIC 字样标签）：行 = from input
+      + bind toggle + to input（绑定态 to 镜像 from 只编辑一个；解绑自由
+      编辑双侧）+ 行删除 + add route；预览行 from/* → upstream+to/*；
+      零配置限制（"must end with" 校验移除，形状归一在组装期）
+- [x] 17. 预设镜像 1:1：openai /v1→/v1（chat+responses 同规则）、
+      anthropic /v1→/v1、deepseek /v1→/v1 + /anthropic→/anthropic（全绑定态
+      预填）；writers 适配（openai 家族 base=localPrefix 原样、anthropic 剥
+      尾部版本段、codex responses wire_api）；consumer.test/端点行按规则
+      localPrefix 探测
+- [x] 18. 回归与实证：vitest 461/462（1 例 8790 环境占用）+ 集成 25/25 +
+      build/check/typecheck ✓；实机：② 双行绑定态预填与预览、解绑改 to 后
+      预览随动、回绑恢复；/user/balance → 404 白名单、/v1/* 与
+      /anthropic/v1/messages → 401 governor（真实 DeepSeek，版本段拦截直通
+      官方路径）

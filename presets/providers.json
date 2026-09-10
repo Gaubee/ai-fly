@@ -12,10 +12,13 @@
         "api.openai.com"
       ],
       "routes": [
-        { "form": "openai-chat", "upstreamPrefix": "" },
-        { "form": "openai-responses", "upstreamPrefix": "" }
+        {
+          "forms": ["openai-chat", "openai-responses"],
+          "localPrefix": "/v1",
+          "upstreamPrefix": "/v1"
+        }
       ],
-      "notes": "Official OpenAI API: chat completions + responses. $env injection expects the full header value, e.g. OPENAI_API_KEY='Bearer <key>'.",
+      "notes": "Official OpenAI API: chat completions + responses under /v1. $env injection expects the full header value, e.g. OPENAI_API_KEY='Bearer <key>'.",
       "source": "https://models.dev/api.json (@ai-sdk/openai default base URL)"
     },
     {
@@ -29,7 +32,11 @@
         "api.anthropic.com"
       ],
       "routes": [
-        { "form": "anthropic", "upstreamPrefix": "" }
+        {
+          "forms": ["anthropic"],
+          "localPrefix": "/v1",
+          "upstreamPrefix": "/v1"
+        }
       ],
       "notes": "Anthropic Messages API (Claude models). Also the protocol claude-code speaks natively.",
       "source": "https://models.dev/api.json (@ai-sdk/anthropic default base URL)"
@@ -45,9 +52,16 @@
         "api.deepseek.com"
       ],
       "routes": [
-        { "form": "openai-chat", "upstreamPrefix": "" },
-        { "form": "openai-responses", "upstreamPrefix": "" },
-        { "form": "anthropic", "upstreamPrefix": "/anthropic" }
+        {
+          "forms": ["openai-chat", "openai-responses"],
+          "localPrefix": "/v1",
+          "upstreamPrefix": "/v1"
+        },
+        {
+          "forms": ["anthropic"],
+          "localPrefix": "/anthropic",
+          "upstreamPrefix": "/anthropic"
+        }
       ],
       "notes": "OpenAI-compatible at /v1/* (chat completions + responses, codex-ready); Anthropic-compatible surface at /anthropic/* (per vendor docs).",
       "source": "https://models.dev/api.json + https://api-docs.deepseek.com/guides/anthropic_api"

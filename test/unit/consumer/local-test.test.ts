@@ -26,7 +26,7 @@ describe("testLocalService 请求形状", () => {
     expect(result.httpStatus).toBe(200);
     expect(result.request).toEqual({
       method: "POST",
-      url: "http://127.0.0.1:4304/openai/v1/chat/completions",
+      url: "http://127.0.0.1:4304/v1/chat/completions",
       model: "deepseek-chat",
     });
     const headers = calls[0]!.init.headers as Record<string, string>;
@@ -37,7 +37,7 @@ describe("testLocalService 请求形状", () => {
   it("openai-responses：POST :port/responses/v1/responses", async () => {
     const { impl, calls } = captureFetch();
     await testLocalService({ port: 4300, form: "openai-responses", fetchImpl: impl, now: () => 1000 });
-    expect(calls[0]!.url).toBe("http://127.0.0.1:4300/responses/v1/responses");
+    expect(calls[0]!.url).toBe("http://127.0.0.1:4300/v1/responses");
   });
 
   it("anthropic：POST :port/anthropic/v1/messages + anthropic-version 头", async () => {

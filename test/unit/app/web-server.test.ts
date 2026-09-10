@@ -227,8 +227,7 @@ describe("orpc over ws", () => {
       headerSet: { authorization: "$env:OPENAI_API_KEY" },
     });
     expect(applied.service.routes).toEqual([
-      { form: "openai-chat", upstreamPrefix: "" },
-      { form: "openai-responses", upstreamPrefix: "" },
+      { forms: ["openai-chat", "openai-responses"], localPrefix: "/v1", upstreamPrefix: "/v1" },
     ]);
     expect(applied.envHint).toContain("OPENAI_API_KEY");
 

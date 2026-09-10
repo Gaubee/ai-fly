@@ -54,20 +54,16 @@ describe("curated presets", () => {
   it("M3-r4 按标准路由：deepseek 三路由（含 responses，官方支持 codex）、openai 双 openai 形态", () => {
     const curated = loadCuratedPresets();
     const deepseek = curated.find((p) => p.id === "deepseek")!;
-    expect(deepseek.routes).toEqual(
-      expect.arrayContaining([
-        { form: "openai-chat", upstreamPrefix: "" },
-        { form: "openai-responses", upstreamPrefix: "" },
-        { form: "anthropic", upstreamPrefix: "/anthropic" },
-      ]),
-    );
+    expect(deepseek.routes).toEqual([
+      { forms: ["openai-chat", "openai-responses"], localPrefix: "/v1", upstreamPrefix: "/v1" },
+      { forms: ["anthropic"], localPrefix: "/anthropic", upstreamPrefix: "/anthropic" },
+    ]);
     const openai = curated.find((p) => p.id === "openai")!;
     expect(openai.routes).toEqual([
-      { form: "openai-chat", upstreamPrefix: "" },
-      { form: "openai-responses", upstreamPrefix: "" },
+      { forms: ["openai-chat", "openai-responses"], localPrefix: "/v1", upstreamPrefix: "/v1" },
     ]);
     const anthropic = curated.find((p) => p.id === "anthropic")!;
-    expect(anthropic.routes).toEqual([{ form: "anthropic", upstreamPrefix: "" }]);
+    expect(anthropic.routes).toEqual([{ forms: ["anthropic"], localPrefix: "/v1", upstreamPrefix: "/v1" }]);
   });
 
   it("has unique ids and ports", () => {

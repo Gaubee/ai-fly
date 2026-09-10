@@ -14,7 +14,7 @@
 
 import { FORBIDDEN_REQ_HEADER_NAMES } from "../wire/frames.ts";
 import type { ReqHeader } from "../wire/frames.ts";
-import { ROUTE_LOCAL_PREFIX } from "../shared/rpc-contract.ts";
+import { routeLocalPrefix } from "../shared/rpc-contract.ts";
 import { parseUpstreamUrl } from "./store.ts";
 import type { ServiceConfig } from "./store.ts";
 
@@ -202,24 +202,26 @@ export function buildUpstreamRequest(
 ): UpstreamPlan {
   const upstream = parseUpstreamUrl(service.upstream);
 
-  // 1) path：防御性形状检查 -> 按标准路由（最长本地前缀段边界命中 → upstream 前缀
-  //    替换；未命中 = 路由表白名单外，本地拒绝零上游请求）-> 前缀剥离 ->
+  // 1) path：防御性形状检查 -> 路径路由（最长 localPrefix 段边界命中 → upstream
+  //    前缀替换；未命中 = 路由表白名单外，本地拒绝零上游请求）-> 前缀剥离 ->
   //    前缀追加 -> 基础路径拼接 -> 点段规范化。
   //    路由改写优先于服务级 strip/append（预设/自定义只应择一使用）。
+  //    M3-r6：localPrefix 是规则自带的 from 路径（缺省按 forms 规范前缀派生），
+  //    通用 from→to 规则——forms 标注与转发无关。
   assertFramePathShape(req.path);
   const { path: rawPath, query } = splitQuery(req.path);
   let requestPath = rawPath;
   if (service.routes !== undefined && service.routes.length > 0) {
     let matched: { localPrefix: string; upstreamPrefix: string } | null = null;
     for (const route of service.routes) {
-      const local = ROUTE_LOCAL_PREFIX[route.form];
+      const local = routeLocalPrefix(route);
       const hit = requestPath === local || requestPath.startsWith(local + "/");
       if (hit && (matched === null || local.length > matched.localPrefix.length)) {
         matched = { localPrefix: local, upstreamPrefix: route.upstreamPrefix };
       }
     }
     if (matched === null) {
-      // 路由表 = 白名单：未声明的标准前缀一律拒绝（个人信息端点保护）。
+      // 路由表 = 白名单：未声明的路径一律拒绝（个人信息端点保护）。
       throw new PathNotOfferedError();
     }
     const rest = requestPath.slice(matched.localPrefix.length); // "" | "/..."

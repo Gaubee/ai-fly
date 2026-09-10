@@ -22,29 +22,45 @@ export interface ResolvedTarget {
   /** 本地端点（http://127.0.0.1:<port>；路径追加语义由各 Agent 配置决定）。 */
   baseUrl: string;
   /**
-   * 各 API 标准的本地 base（M3-r4）：服务声明了对应路由时为
-   * `${baseUrl}${标准本地前缀}`，写手按自身协议取用；缺席 = 服务无该路由，
-   * 沿用裸 baseUrl 的旧行为（路径合成交给 upstream 自带的版本段）。
+   * 各 API 标准的本地 base（M3-r6）：按服务路由规则的 localPrefix 生成——
+   * openai 家族原样（client 追加 /chat/completions 等版本后缀）；anthropic
+   * 剥尾部 /v1（Claude Code 自带 /v1/messages）。缺席 = 无该标准路由，
+   * 沿用裸 baseUrl 的旧行为。
    */
   formBase?: Partial<Record<RouteForm, string>>;
 }
 
-export function resolveTargetPort(port: number, forms?: readonly RouteForm[]): ResolvedTarget {
+/** 路由规则的轻量投影（writers 只需要 forms + localPrefix）。 */
+export interface RouteFormView {
+  forms: RouteForm[];
+  localPrefix?: string | undefined;
+}
+
+/** anthropic 家族 base：剥尾部版本段（/v1）——client 自带版本段追加。 */
+function stripTrailingVersion(prefix: string): string {
+  return prefix.replace(/\/v\d+$/, "");
+}
+
+export function resolveTargetPort(port: number, routes?: readonly RouteFormView[]): ResolvedTarget {
   const baseUrl = `http://127.0.0.1:${port}`;
   const formBase: Partial<Record<RouteForm, string>> = {};
-  for (const form of forms ?? []) {
-    formBase[form] = `${baseUrl}${ROUTE_LOCAL_PREFIX[form]}`;
+  for (const route of routes ?? []) {
+    for (const form of route.forms) {
+      if (formBase[form] !== undefined) continue;
+      const local = route.localPrefix ?? ROUTE_LOCAL_PREFIX[form];
+      const base = form === "anthropic" ? stripTrailingVersion(local) : local;
+      formBase[form] = `${baseUrl}${base === "" ? "" : base}`;
+    }
   }
   const hasForms = Object.keys(formBase).length > 0;
   return { port, baseUrl, ...(hasForms ? { formBase } : {}) };
 }
 
-/** openai 家族 agent（cursor/cline/continue）的 base：服务声明 openai-chat 路由
-    → 标准前缀 + /v1（client 只追加 /chat/completions 等）；无路由沿用裸 base
-    （路径合成交给 upstream 自带的版本段——旧行为）。 */
+/** openai 家族 agent（cursor/cline/continue）的 base：有路由用规则 base
+    （localPrefix 已含版本段，client 只追加 /chat/completions 等）；无路由沿用
+    裸 base（路径合成交给 upstream 自带的版本段——旧行为）。 */
 export function openAiChatBase(target: ResolvedTarget): string {
-  const base = target.formBase?.["openai-chat"];
-  return base === undefined ? target.baseUrl : `${base}/v1`;
+  return target.formBase?.["openai-chat"] ?? target.baseUrl;
 }
 
 /** 写手模块：目标路径定位 + 新内容合成（compose 纯函数，不写盘）。 */

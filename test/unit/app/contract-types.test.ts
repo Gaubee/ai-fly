@@ -72,7 +72,11 @@ const checkAddInput: AssertEqual<
         }
       | undefined;
     routes?:
-      | Array<{ form: "openai-chat" | "openai-responses" | "anthropic"; upstreamPrefix: string }>
+      | Array<{
+          forms: Array<"openai-chat" | "openai-responses" | "anthropic">;
+          localPrefix?: string | undefined;
+          upstreamPrefix: string;
+        }>
       | undefined;
   }
 > = true;

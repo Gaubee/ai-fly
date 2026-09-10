@@ -23,7 +23,9 @@ export type RouteTestOutput = Out<RpcClient["consumer"]["services"]["test"]>;
  * 服务条目携带——refreshImportedPorts 顺带捕获成 serviceId → routes 表。
  */
 export interface ServiceRouteView {
-  form: RouteForm;
+  /** 该规则承载的 API 标准（AI 层标注；可为空 = 未标注的通用规则）。 */
+  forms: RouteForm[];
+  localPrefix?: string | undefined;
   upstreamPrefix: string;
 }
 

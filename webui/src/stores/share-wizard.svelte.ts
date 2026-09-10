@@ -16,24 +16,28 @@ import { call } from "./rpc.svelte.ts";
 import { toastRpcError, toastSuccess } from "./toast.svelte.ts";
 import { refresh } from "./app.svelte.ts";
 
-/** 各标准的端点尾段（路由输入占位/校验/前缀推导共用）。 */
-export const ROUTE_ENDPOINT_SUFFIX: Readonly<Record<RouteForm, string>> = {
-  "openai-chat": "/v1/chat/completions",
-  "openai-responses": "/v1/responses",
-  anthropic: "/v1/messages",
-};
-
-/** 端点路径 → upstream 前缀：必须以标准尾段结尾，剥掉即前缀（"" = 根）。 */
-export function routePrefixFromEndpointPath(form: RouteForm, endpointPath: string): string | null {
-  const suffix = ROUTE_ENDPOINT_SUFFIX[form];
-  if (!endpointPath.endsWith(suffix)) return null;
-  const prefix = endpointPath.slice(0, -suffix.length);
-  return prefix === "" || prefix.startsWith("/") ? prefix : `/${prefix}`;
+/**
+ * 路径规范化（M3-r6，Owner 裁决：不做任何配置限制——net-fly 通用转发规则
+ * 在前，AI 标注在后）：仅形状归一（补前导斜杠、剥尾斜杠），语义零约束。
+ * "/" 或空 → 视调用方语义（from 不允许根占位由行模型处理；to 根 = ""）。
+ */
+export function normalizeRoutePrefix(raw: string): string {
+  let value = raw.trim();
+  if (value === "") return "";
+  if (!value.startsWith("/")) value = `/${value}`;
+  value = value.replace(/\/+$/, "");
+  return value;
 }
 
-/** upstream 前缀 → 端点路径（预设预填用）。 */
-export function routeEndpointPathFromPrefix(form: RouteForm, upstreamPrefix: string): string {
-  return `${upstreamPrefix}${ROUTE_ENDPOINT_SUFFIX[form]}`;
+/** to 字段 → 存储 upstreamPrefix（空或 "/" = 根 ""）。 */
+export function toPrefixFromInput(raw: string): string {
+  const normalized = normalizeRoutePrefix(raw);
+  return normalized === "/" ? "" : normalized;
+}
+
+/** 存储 upstreamPrefix → to 表单值（根 "" 显示为 "/"）。 */
+export function toInputFromPrefix(upstreamPrefix: string): string {
+  return upstreamPrefix === "" ? "/" : upstreamPrefix;
 }
 
 /** 分享链接 TTL 选项（契约范围 1s..30d；缺省引擎 60min）。 */
@@ -53,6 +57,27 @@ export function parsePositiveInt(raw: string): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+/**
+ * 路径路由行（M3-r6 定形，Owner 裁决）：客观的 from→to 转发规则——
+ * from = 本地端口前缀（请求从这来），to = upstream 前缀；bound = 1:1 绑定
+ * （默认只需编辑一个 input，解绑后两侧自由编辑）。forms 为 AI 层标注
+ * （预设行携带供消费侧 agent 判定；表单不显示、用户新增行为空）。
+ * from 为空 = 该行不生成规则；to 为空或 "/" = upstream 根。零语义限制。
+ */
+export interface ShareRouteRow {
+  id: number;
+  from: string;
+  to: string;
+  bound: boolean;
+  forms: RouteForm[];
+}
+
+let routeRowSeq = 1;
+
+export function makeRouteRow(over: Partial<ShareRouteRow> = {}): ShareRouteRow {
+  return { id: routeRowSeq++, from: "/v1", to: "/v1", bound: true, forms: [], ...over };
+}
+
 export const share = $state({
   step: 1 as 1 | 2 | 3,
   /** 来源模式：preset（预设展开）/ custom（手填 services.add）。 */
@@ -63,10 +88,8 @@ export const share = $state({
   customUpstream: "",
   customMatch: "",
   customPort: "",
-  // ②（M3-r4 ⑦）自定义服务的按标准路由 upstream 前缀（空 = 该标准不提供）
-  customRouteChat: "",
-  customRouteResponses: "",
-  customRouteAnthropic: "",
+  // ② 路径路由行（默认一条 /v1 → /v1 绑定规则）
+  routeRows: [makeRouteRow()] as ShareRouteRow[],
   // ② 命名与分组（端口沿用预设 defaultPort，可覆盖）
   name: "",
   port: "",
@@ -93,9 +116,7 @@ export function resetShare(): void {
   share.customUpstream = "";
   share.customMatch = "";
   share.customPort = "";
-  share.customRouteChat = "";
-  share.customRouteResponses = "";
-  share.customRouteAnthropic = "";
+  share.routeRows = [makeRouteRow()];
   share.name = "";
   share.port = "";
   share.groupName = "";
@@ -117,16 +138,14 @@ export function choosePreset(preset: Preset): void {
   share.port = String(preset.defaultPort);
   share.customUpstream = preset.baseUrl;
   share.customMatch = preset.matchDomains.join(", ");
-  // 路由端点路径预填：预设 routes 前缀 + 标准尾段；未声明的标准留空（不提供）
-  const byForm = new Map((preset.routes ?? []).map((r) => [r.form, r.upstreamPrefix]));
-  share.customRouteChat =
-    byForm.get("openai-chat") !== undefined ? routeEndpointPathFromPrefix("openai-chat", byForm.get("openai-chat")!) : "";
-  share.customRouteResponses =
-    byForm.get("openai-responses") !== undefined
-      ? routeEndpointPathFromPrefix("openai-responses", byForm.get("openai-responses")!)
-      : "";
-  share.customRouteAnthropic =
-    byForm.get("anthropic") !== undefined ? routeEndpointPathFromPrefix("anthropic", byForm.get("anthropic")!) : "";
+  // 路由行预填（M3-r6）：预设规则即 from→to 行（默认官方镜像 1:1 绑定态）；
+  // forms 标注随行（消费侧 agent 判定），表单不显示
+  share.routeRows = (preset.routes ?? []).map((route) => {
+    const from = route.localPrefix ?? ROUTE_LOCAL_PREFIX[route.forms[0] ?? "openai-chat"];
+    const to = toInputFromPrefix(route.upstreamPrefix);
+    return makeRouteRow({ from, to, bound: to === from, forms: route.forms });
+  });
+  if (share.routeRows.length === 0) share.routeRows = [makeRouteRow()];
   share.error = null;
   share.step = 2;
 }
@@ -139,6 +158,25 @@ export function chooseCustom(): void {
   share.port = share.customPort;
   share.error = null;
   share.step = 2;
+}
+
+/** 路由行操作（② 表单）：from 变更（绑定态联动 to）、绑定切换（开启时 to 对齐
+ *  from）、增删行。零校验——形状归一在组装期。 */
+export function updateRouteFrom(row: ShareRouteRow, value: string): void {
+  row.from = value;
+  if (row.bound) row.to = value;
+}
+export function toggleRouteBound(row: ShareRouteRow, bound: boolean): void {
+  row.bound = bound;
+  if (bound) row.to = row.from;
+}
+export function addRouteRow(): void {
+  if (share.routeRows.length >= 4) return;
+  share.routeRows.push(makeRouteRow());
+}
+export function removeRouteRow(id: number): void {
+  share.routeRows = share.routeRows.filter((row) => row.id !== id);
+  if (share.routeRows.length === 0) share.routeRows = [makeRouteRow()];
 }
 
 /** 回退（成功后不可回：结果视图隐藏按钮）。 */
@@ -177,42 +215,20 @@ function customMatchRules(): Array<{ type: "exact" | "suffix"; value: string }> 
   }
 }
 
-/** 路由组装（M3-r5 端点路径语义）：字段持完整端点路径，剥标准尾段得 upstream
- *  前缀；非法（不以尾段结尾）返回 null（校验错误在 namingValid 给出）。
- *  全空 = undefined（不带 routes，legacy 透传）。 */
-function customRoutes(): Array<{ form: RouteForm; upstreamPrefix: string }> | null | undefined {
-  const entries: Array<{ form: RouteForm; upstreamPrefix: string }> = [];
-  const fields: Array<{ form: RouteForm; value: string }> = [
-    { form: "openai-chat", value: share.customRouteChat.trim() },
-    { form: "openai-responses", value: share.customRouteResponses.trim() },
-    { form: "anthropic", value: share.customRouteAnthropic.trim() },
-  ];
-  for (const field of fields) {
-    if (field.value === "") continue;
-    const prefix = routePrefixFromEndpointPath(field.form, field.value);
-    if (prefix === null) return null;
-    entries.push({ form: field.form, upstreamPrefix: prefix });
+/** 路由组装（M3-r6）：行模型 from→to → 引擎路由（from 空 = 该行跳过；形状
+ *  归一在此完成——零语义限制）。全空 = undefined（不带 routes，legacy 透传）。 */
+function routeRowsInput(): Array<{ forms: RouteForm[]; localPrefix: string; upstreamPrefix: string }> | undefined {
+  const entries: Array<{ forms: RouteForm[]; localPrefix: string; upstreamPrefix: string }> = [];
+  for (const row of share.routeRows) {
+    const local = normalizeRoutePrefix(row.from);
+    if (local === "" || local === "/") continue;
+    entries.push({ forms: row.forms, localPrefix: local, upstreamPrefix: toPrefixFromInput(row.to) });
   }
   return entries.length > 0 ? entries : undefined;
 }
 
-/** 路由输入校验：非空字段必须以该标准的端点尾段结尾（给出人话错误）。 */
-export function routeInputError(): string | null {
-  const fields: Array<{ form: RouteForm; value: string; label: string }> = [
-    { form: "openai-chat", value: share.customRouteChat.trim(), label: "openai chat completions path" },
-    { form: "openai-responses", value: share.customRouteResponses.trim(), label: "openai responses path" },
-    { form: "anthropic", value: share.customRouteAnthropic.trim(), label: "anthropic messages path" },
-  ];
-  for (const field of fields) {
-    if (field.value !== "" && routePrefixFromEndpointPath(field.form, field.value) === null) {
-      return `${field.label} must end with ${ROUTE_ENDPOINT_SUFFIX[field.form]}`;
-    }
-  }
-  return null;
-}
-
-/** ② → ③ 校验：名称、分组名非空；端口/限额/路由端点路径可解析（两模式同规——
-    预设即预填的 Custom）。 */
+/** ② → ③ 校验：名称、分组名非空；端口/限额可解析（两模式同规——预设即
+    预填的 Custom；路由行零校验，形状归一在组装期）。 */
 export function namingValid(): string | null {
   if (share.name.trim() === "") return "service name is required";
   if (share.groupName.trim() === "") return "group name is required";
@@ -227,8 +243,6 @@ export function namingValid(): string | null {
   if (share.limitsDaily.trim() !== "" && parsePositiveInt(share.limitsDaily) === undefined) {
     return "daily limit must be a positive integer";
   }
-  const routeProblem = routeInputError();
-  if (routeProblem !== null) return routeProblem;
   return null;
 }
 
@@ -296,12 +310,8 @@ export async function generateShare(): Promise<void> {
       share.error = { code: "INVALID_INPUT", message: "name, https upstream and match domain are required" };
       return;
     }
-    // routes：端点路径剥标准尾段得 upstream 前缀（全空 = undefined 不带）
-    const routes = customRoutes();
-    if (routes === null) {
-      share.error = { code: "INVALID_INPUT", message: routeInputError() ?? "invalid route path" };
-      return;
-    }
+    // routes：行模型 from→to（全空 = undefined 不带，legacy 透传）
+    const routes = routeRowsInput();
     const added = await call((c) =>
       c.provider.services.add({
         name: share.name.trim(),

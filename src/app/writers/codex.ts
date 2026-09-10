@@ -14,7 +14,7 @@ const SECTION_HEADER = "[model_providers.ai-fly]";
 
 function buildSection(target: ResolvedTarget): string {
   const responsesBase = target.formBase?.["openai-responses"];
-  const baseUrl = responsesBase === undefined ? target.baseUrl : `${responsesBase}/v1`;
+  const baseUrl = responsesBase ?? target.baseUrl;
   const wireApi = responsesBase === undefined ? "chat" : "responses";
   return [
     SECTION_HEADER,

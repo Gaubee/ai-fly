@@ -19,6 +19,7 @@
   import Skeleton from "$lib/ui/skeleton";
   import Separator from "$lib/ui/separator";
   import Accordion, { AccordionItem } from "$lib/ui/accordion";
+  import Toggle from "$lib/ui/toggle";
   import { slide } from "svelte/transition";
   import StepHeader from "../components/StepHeader.svelte";
   import ErrorAlert from "../components/ErrorAlert.svelte";
@@ -42,10 +43,14 @@
     namingNext,
     generateShare,
     TTL_OPTIONS,
-    routePrefixFromEndpointPath,
-    ROUTE_ENDPOINT_SUFFIX,
+    updateRouteFrom,
+    toggleRouteBound,
+    addRouteRow,
+    removeRouteRow,
+    normalizeRoutePrefix,
+    toPrefixFromInput,
   } from "../stores/share-wizard.svelte.ts";
-  import { presetLogoUrl, type Preset, type RouteForm } from "$shared/rpc-contract.ts";
+  import { presetLogoUrl, type Preset } from "$shared/rpc-contract.ts";
 
   onMount(() => {
     // 首次进入拉预设；重新进入（reset 后）复用已拉取的清单
@@ -60,19 +65,25 @@
       return localDiff !== 0 ? localDiff : a.label.localeCompare(b.label);
     }),
   );
-  /** 路由映射预览（M3-r5）：本地标准端点 → upstream 完整 URL（输入合法才显示；
-      "$LOCAL → $UPSTREAM" 的 $UPSTREAM 部分，本地部分在模板行首）。 */
-  function routeTarget(form: RouteForm, value: string): string | null {
-    const v = value.trim();
-    if (v === "") return null;
-    const prefix = routePrefixFromEndpointPath(form, v);
-    if (prefix === null) return null;
+  /** 路由行映射预览（M3-r6）：from/* → upstream + to/*（from 有效才显示；
+      to 根显示 upstream 本身 + /*）。 */
+  function routeRowPreview(row: { from: string; to: string }): string | null {
+    const from = normalizeRoutePrefix(row.from);
+    if (from === "" || from === "/") return null;
+    const to = toPrefixFromInput(row.to);
     const base = share.customUpstream.trim().replace(/\/+$/, "");
-    return `${base}${prefix}${ROUTE_ENDPOINT_SUFFIX[form]}`;
+    return `${base}${to}/*`;
   }
-  const routePreviewChat = $derived(routeTarget("openai-chat", share.customRouteChat));
-  const routePreviewResponses = $derived(routeTarget("openai-responses", share.customRouteResponses));
-  const routePreviewAnthropic = $derived(routeTarget("anthropic", share.customRouteAnthropic));
+
+  /** Input change 事件适配（行内受控值）。 */
+  function onRowFrom(rowId: number, event: Event & { currentTarget: EventTarget & HTMLInputElement }): void {
+    const row = share.routeRows.find((r) => r.id === rowId);
+    if (row !== undefined) updateRouteFrom(row, event.currentTarget.value);
+  }
+  function onRowTo(rowId: number, event: Event & { currentTarget: EventTarget & HTMLInputElement }): void {
+    const row = share.routeRows.find((r) => r.id === rowId);
+    if (row !== undefined) row.to = event.currentTarget.value;
+  }
 
   /** 长尾展开（默认收起——20/80 法则：精选直达，长尾按需）。 */
   let showLongTail = $state(false);
@@ -270,74 +281,67 @@
           bind:value={share.customUpstream}
         />
 
-        <!-- API routes（M3-r5/r6 主面板直出，Owner 裁决：预设=可编辑的 Custom，
-             路由是服务定义的核心不是高级选项）：端点完整路径（预填=官方 path），
-             声明了的标准经本地前缀转发到该路径；空 = 不提供该标准。
+        <!-- path routes（M3-r6 定形，Owner 裁决：客观提供路径路由功能，不做任何
+             配置限制）：行 = from → to 通用转发规则，默认绑定（1:1，只编辑一个
+             input），解绑自由编辑两侧；预设行预填官方镜像（如 /v1 → /v1）。
              路由表即白名单——未声明的路径本地 404，不透传。 -->
         <div class="flex flex-col gap-3">
           <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-            api routes (optional)
+            path routes
           </span>
-          <div class="flex flex-col gap-1.5">
-            <Input
-              label="openai chat completions path"
-              placeholder="/v1/chat/completions"
-              autocapitalize="none"
-              autocorrect="off"
-              spellcheck={false}
-              bind:value={share.customRouteChat}
-            />
-            {#if routePreviewChat !== null}
-              <p class="font-mono text-[11px] leading-relaxed text-muted-foreground">
-                /openai/v1/chat/completions → {routePreviewChat}
-              </p>
-            {:else if share.customRouteChat.trim() !== ""}
-              <p class="text-[11px] leading-relaxed text-destructive">
-                must end with /v1/chat/completions
-              </p>
-            {/if}
-          </div>
-          <div class="flex flex-col gap-1.5">
-            <Input
-              label="openai responses path"
-              placeholder="/v1/responses"
-              autocapitalize="none"
-              autocorrect="off"
-              spellcheck={false}
-              bind:value={share.customRouteResponses}
-            />
-            {#if routePreviewResponses !== null}
-              <p class="font-mono text-[11px] leading-relaxed text-muted-foreground">
-                /responses/v1/responses → {routePreviewResponses}
-              </p>
-            {:else if share.customRouteResponses.trim() !== ""}
-              <p class="text-[11px] leading-relaxed text-destructive">
-                must end with /v1/responses
-              </p>
-            {/if}
-          </div>
-          <div class="flex flex-col gap-1.5">
-            <Input
-              label="anthropic messages path"
-              placeholder="/anthropic/v1/messages"
-              autocapitalize="none"
-              autocorrect="off"
-              spellcheck={false}
-              bind:value={share.customRouteAnthropic}
-            />
-            {#if routePreviewAnthropic !== null}
-              <p class="font-mono text-[11px] leading-relaxed text-muted-foreground">
-                /anthropic/v1/messages → {routePreviewAnthropic}
-              </p>
-            {:else if share.customRouteAnthropic.trim() !== ""}
-              <p class="text-[11px] leading-relaxed text-destructive">
-                must end with /v1/messages
-              </p>
-            {/if}
-          </div>
+          {#each share.routeRows as row (row.id)}
+            <div class="flex flex-col gap-1.5 border border-border/70 p-2.5">
+              <div class="flex flex-wrap items-center gap-2">
+                <div class="min-w-36 flex-1">
+                  <Input
+                    placeholder="/v1"
+                    value={row.from}
+                    onchange={(event) => onRowFrom(row.id, event)}
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                  />
+                </div>
+                <label class="flex shrink-0 cursor-pointer select-none items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Toggle checked={row.bound} onchange={(event) => toggleRouteBound(row, event.currentTarget.checked)} />
+                  bind
+                </label>
+                <div class="min-w-36 flex-1">
+                  <Input
+                    placeholder="/ (root)"
+                    value={row.to}
+                    disabled={row.bound}
+                    onchange={(event) => onRowTo(row.id, event)}
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                  />
+                </div>
+                {#if share.routeRows.length > 1}
+                  <PressButton
+                    variant="ghost"
+                    ariaLabel="remove route"
+                    class="shrink-0 px-2"
+                    onclick={() => removeRouteRow(row.id)}
+                  >x</PressButton>
+                {/if}
+              </div>
+              {#if routeRowPreview(row) !== null}
+                <p class="break-all pl-1 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                  {normalizeRoutePrefix(row.from)}/* → {routeRowPreview(row)}
+                </p>
+              {/if}
+            </div>
+          {/each}
+          <PressButton
+            variant="ghost"
+            class={share.routeRows.length >= 4 ? "pointer-events-none opacity-50" : undefined}
+            onclick={() => addRouteRow()}
+          >+ add route</PressButton>
           <p class="text-[11px] leading-relaxed text-muted-foreground">
-            paths default to the official ones - empty = this standard is not offered
-            (declared routes only; anything else is rejected with 404).
+            bind keeps both paths identical (default 1:1); unbind to forward a local
+            prefix to a different upstream path. empty "to" = upstream root.
+            declared routes only - anything else is rejected with 404.
           </p>
         </div>
         <Separator />
@@ -444,27 +448,19 @@
               <dd class="font-mono">{share.port}</dd>
             </div>
           </dl>
-          <!-- 路由映射（M3-r5：分享时可见「本地标准端点 → upstream 路径」） -->
-          {#if routePreviewChat !== null || routePreviewResponses !== null || routePreviewAnthropic !== null}
+          <!-- 路由映射（M3-r6：分享时可见「from → upstream+to」行清单） -->
+          {#if share.routeRows.some((row) => routeRowPreview(row) !== null)}
             <div class="flex flex-col gap-1 border border-border/70 p-3">
               <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-                api routes
+                path routes
               </span>
-              {#if routePreviewChat !== null}
-                <p class="break-all font-mono text-[11px] text-muted-foreground">
-                  /openai/v1/chat/completions → {routePreviewChat}
-                </p>
-              {/if}
-              {#if routePreviewResponses !== null}
-                <p class="break-all font-mono text-[11px] text-muted-foreground">
-                  /responses/v1/responses → {routePreviewResponses}
-                </p>
-              {/if}
-              {#if routePreviewAnthropic !== null}
-                <p class="break-all font-mono text-[11px] text-muted-foreground">
-                  /anthropic/v1/messages → {routePreviewAnthropic}
-                </p>
-              {/if}
+              {#each share.routeRows as row (row.id)}
+                {#if routeRowPreview(row) !== null}
+                  <p class="break-all font-mono text-[11px] text-muted-foreground">
+                    {normalizeRoutePrefix(row.from)}/* → {routeRowPreview(row)}
+                  </p>
+                {/if}
+              {/each}
               <p class="text-[11px] leading-relaxed text-muted-foreground">
                 declared routes only - anything else is rejected with 404.
               </p>

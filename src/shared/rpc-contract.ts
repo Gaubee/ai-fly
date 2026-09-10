@@ -57,18 +57,31 @@ export const SERVICE_REWRITE_SCHEMA = z.strictObject({
 
 export const ROUTE_FORM_SCHEMA = z.enum(["openai-chat", "openai-responses", "anthropic"]);
 
+/**
+ * 按标准路由（M3-r6 定形）：一条通用 from→to 转发规则——本地端口前缀
+ * （请求从这来，版本段粒度如 /v1、/anthropic）替换为 upstream 前缀；
+ * forms 标注该规则承载的 API 标准（AI 层预命名，agent 可用性与 writer
+ * 消费；引擎转发与 forms 无关）。默认绑定态 from==to（1:1 官方镜像）。
+ */
 export const SERVICE_ROUTE_SCHEMA = z.strictObject({
-  form: ROUTE_FORM_SCHEMA,
-  /** 替换本地标准前缀的 upstream 路径前缀（"" = upstream 根；规范化在 store 写入期）。 */
+  forms: z.array(ROUTE_FORM_SCHEMA).min(1).max(3),
+  /** 本地端口前缀。缺省 = 首个 form 的规范前缀（store 写入期填充）。 */
+  localPrefix: z.string().min(1).max(2048).optional(),
+  /** 替换本地前缀的 upstream 路径前缀（"" = upstream 根）。 */
   upstreamPrefix: z.string().max(2048),
 });
 
-/** 各 API 标准在本地端口上的固定前缀（agent 配置与提供方路由匹配共用）。 */
+/** 各 API 标准在本地端口上的规范前缀（缺省 localPrefix 与 agent 配置基准）。 */
 export const ROUTE_LOCAL_PREFIX: Readonly<Record<RouteForm, string>> = {
-  "openai-chat": "/openai",
-  "openai-responses": "/responses",
+  "openai-chat": "/v1",
+  "openai-responses": "/v1",
   anthropic: "/anthropic",
 };
+
+/** 路由的生效本地前缀（缺省派生规范前缀）。 */
+export function routeLocalPrefix(route: { forms: RouteForm[]; localPrefix?: string | undefined }): string {
+  return route.localPrefix ?? ROUTE_LOCAL_PREFIX[route.forms[0] ?? "openai-chat"];
+}
 
 export const SERVICE_SCHEMA = z.strictObject({
   serviceId: z.string().min(1).max(128),
@@ -132,8 +145,14 @@ export const SERVICE_ENTRY_SCHEMA = z.object({
         .optional(),
       /** 按标准路由披露（消费侧呈现各标准本地 base 与可用性判定）。 */
       routes: z
-        .array(z.strictObject({ form: ROUTE_FORM_SCHEMA, upstreamPrefix: z.string() }))
-        .max(3)
+        .array(
+          z.strictObject({
+            forms: z.array(ROUTE_FORM_SCHEMA).min(1).max(3),
+            localPrefix: z.string().optional(),
+            upstreamPrefix: z.string(),
+          }),
+        )
+        .max(4)
         .optional(),
     })
     .optional(),

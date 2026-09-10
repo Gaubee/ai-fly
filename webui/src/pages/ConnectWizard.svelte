@@ -124,26 +124,40 @@
       selectedService?.defaultPort ??
       null,
   );
-  /** 选中服务声明的按标准路由（空 = legacy 透传）。 */
+  /** 选中服务声明的路径路由（空 = legacy 透传）。 */
   const selectedRoutes = $derived(
     connectW.agentServiceId === "" ? [] : connectW.serviceRoutes[connectW.agentServiceId] ?? [],
   );
-  /** 端点行：标签 + 本地标准 base + upstream 映射注记（M3-r5「转发到哪」）
-      +（若有）该 form 的测试结果。 */
+  /** 该标准路由的本地前缀（M3-r6：规则自带 from；缺省派生规范前缀）。
+      anthropic 家族剥尾部版本段——Claude Code 自带 /v1/messages。 */
+  function localPrefixForForm(form: RouteForm): string | null {
+    const route = selectedRoutes.find((r) => r.forms.includes(form));
+    if (route === undefined) return null;
+    const local = route.localPrefix ?? ROUTE_LOCAL_PREFIX[form];
+    return form === "anthropic" ? local.replace(/\/v\d+$/, "") : local;
+  }
+  /** 端点行：按标准聚合路由（标签 + 本地 base + upstream 映射注记 + 测试）。 */
   const selectedUpstream = $derived(connectW.serviceUpstream[connectW.agentServiceId] ?? null);
   const routeRows = $derived(
     selectedPort === null
       ? []
-      : selectedRoutes.map((route) => ({
-          form: route.form,
-          label: FORM_LABELS[route.form],
-          base: `http://127.0.0.1:${selectedPort}${ROUTE_LOCAL_PREFIX[route.form]}`,
-          forwardsTo:
-            selectedUpstream === null
-              ? null
-              : `${selectedUpstream.replace(/\/+$/, "")}${route.upstreamPrefix}/...`,
-          result: connectW.testResults[route.form] ?? null,
-        })),
+      : (["openai-chat", "openai-responses", "anthropic"] as const)
+          .map((form) => {
+            const local = localPrefixForForm(form);
+            if (local === null) return null;
+            const route = selectedRoutes.find((r) => r.forms.includes(form))!;
+            return {
+              form,
+              label: FORM_LABELS[form],
+              base: `http://127.0.0.1:${selectedPort}${local}`,
+              forwardsTo:
+                selectedUpstream === null
+                  ? null
+                  : `${selectedUpstream.replace(/\/+$/, "")}${route.upstreamPrefix}/...`,
+              result: connectW.testResults[form] ?? null,
+            };
+          })
+          .filter((row): row is NonNullable<typeof row> => row !== null),
   );
   /** legacy 直通 base（服务无 routes）。 */
   const bareBase = $derived(selectedPort === null ? null : `http://127.0.0.1:${selectedPort}`);
@@ -153,11 +167,11 @@
     connectW.agent === "skip" ? null : WRITER_AGENT_FORM[connectW.agent],
   );
   const agentFormServed = $derived(
-    agentForm !== null && selectedRoutes.some((route) => route.form === agentForm),
+    agentForm !== null && selectedRoutes.some((route) => route.forms.includes(agentForm)),
   );
   const agentFormBase = $derived(
-    agentForm !== null && selectedPort !== null
-      ? `http://127.0.0.1:${selectedPort}${ROUTE_LOCAL_PREFIX[agentForm]}`
+    agentForm !== null && selectedPort !== null && localPrefixForForm(agentForm) !== null
+      ? `http://127.0.0.1:${selectedPort}${localPrefixForForm(agentForm)}`
       : null,
   );
 

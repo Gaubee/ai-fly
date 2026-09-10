@@ -223,19 +223,19 @@ describe("路由表（M3-r4）", () => {
       match: [{ type: "suffix", value: "api.deepseek.com" }],
       defaultPort: 4300,
       routes: [
-        { form: "openai-chat", upstreamPrefix: "" },
-        { form: "anthropic", upstreamPrefix: "/anthropic" },
+        { forms: ["openai-chat", "openai-responses"], localPrefix: "/v1", upstreamPrefix: "/v1" },
+        { forms: ["anthropic"], localPrefix: "/anthropic", upstreamPrefix: "/anthropic" },
       ],
     });
     const reopened = ProviderStore.open(dir);
-    const svc = reopened.getServiceByName?.("deepseek") ?? reopened.listServices().find((s) => s.name === "deepseek");
+    const svc = reopened.listServices().find((s) => s.name === "deepseek");
     expect(svc?.routes).toEqual([
-      { form: "openai-chat", upstreamPrefix: "" },
-      { form: "anthropic", upstreamPrefix: "/anthropic" },
+      { forms: ["openai-chat", "openai-responses"], localPrefix: "/v1", upstreamPrefix: "/v1" },
+      { forms: ["anthropic"], localPrefix: "/anthropic", upstreamPrefix: "/anthropic" },
     ]);
   });
 
-  it("upstreamPrefix 规范化：补前导斜杠、剥尾斜杠、全斜杠归一为根", () => {
+  it("from/to 规范化：补前导斜杠、剥尾斜杠、localPrefix 缺省按 forms 派生", () => {
     const store = ProviderStore.open(dir);
     const svc = store.addService({
       name: "agg",
@@ -243,31 +243,19 @@ describe("路由表（M3-r4）", () => {
       match: [{ type: "suffix", value: "aiapi.com" }],
       defaultPort: 4300,
       routes: [
-        { form: "openai-chat", upstreamPrefix: "v1/" },
-        { form: "anthropic", upstreamPrefix: "/anthropic/" },
-        { form: "openai-responses", upstreamPrefix: "/" },
+        { forms: [], localPrefix: "v1/", upstreamPrefix: "deep/" },
+        { forms: ["anthropic"], upstreamPrefix: "/anthropic/" },
+        { forms: ["openai-chat"], upstreamPrefix: "/" },
       ],
     });
     expect(svc.routes).toEqual([
-      { form: "openai-chat", upstreamPrefix: "/v1" },
-      { form: "anthropic", upstreamPrefix: "/anthropic" },
-      { form: "openai-responses", upstreamPrefix: "" },
+      // 通用行（forms 空）：from/to 双侧归一；localPrefix 显式给出时原样规范化
+      { forms: [], localPrefix: "/v1", upstreamPrefix: "/deep" },
+      // localPrefix 缺省：按首个 form 的规范前缀（anthropic -> /anthropic）
+      { forms: ["anthropic"], localPrefix: "/anthropic", upstreamPrefix: "/anthropic" },
+      // localPrefix 缺省：openai-chat -> /v1；to 全斜杠归一为根 ""
+      { forms: ["openai-chat"], localPrefix: "/v1", upstreamPrefix: "" },
     ]);
-  });
-
-  it("重复 form 拒绝（invalid）", () => {
-    const store = ProviderStore.open(dir);
-    expect(() =>
-      store.addService({
-        name: "dup",
-        upstream: "https://x.test",
-        match: [{ type: "suffix", value: "x.test" }],
-        routes: [
-          { form: "anthropic", upstreamPrefix: "" },
-          { form: "anthropic", upstreamPrefix: "/a" },
-        ],
-      }),
-    ).toThrowError(StoreError);
   });
 
   it("空路由表等价于未声明（存 undefined）", () => {

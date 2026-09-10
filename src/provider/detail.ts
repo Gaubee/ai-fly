@@ -9,6 +9,7 @@
 //   （schema 已冻结，见任务报告），此处按 schema 形状输出。
 
 import type { ServiceDetail, ServiceEntry } from "../wire/frames.ts";
+import { routeLocalPrefix } from "../shared/rpc-contract.ts";
 import type { ServiceConfig } from "./store.ts";
 
 /** $env 间接引用的脱敏掩码（payload 内使用；终端展示另用 ASCII 形式）。 */
@@ -62,7 +63,13 @@ export function buildServiceDetail(service: ServiceConfig): ServiceDetail {
     match: service.match.map((m) => ({ type: m.type, value: m.value })),
     rewrite,
     ...(service.routes !== undefined && service.routes.length > 0
-      ? { routes: service.routes.map((r) => ({ form: r.form, upstreamPrefix: r.upstreamPrefix })) }
+      ? {
+          routes: service.routes.map((r) => ({
+            forms: r.forms,
+            localPrefix: routeLocalPrefix(r),
+            upstreamPrefix: r.upstreamPrefix,
+          })),
+        }
       : {}),
   };
 }
@@ -86,7 +93,8 @@ export function detailDisplayLines(detail: ServiceDetail): string[] {
   const lines: string[] = [`upstream: ${detail.upstream}`];
   for (const m of detail.match) lines.push(`match: ${m.type} ${m.value}`);
   for (const r of detail.routes ?? []) {
-    lines.push(`route: ${r.form} -> ${r.upstreamPrefix === "" ? "(root)" : r.upstreamPrefix}`);
+    const to = r.upstreamPrefix === "" ? "(root)" : r.upstreamPrefix;
+    lines.push(`route: ${r.localPrefix} -> ${to}${r.forms.length > 0 ? ` (${r.forms.join("+")})` : ""}`);
   }
   if (detail.rewrite !== undefined) {
     const r = detail.rewrite;

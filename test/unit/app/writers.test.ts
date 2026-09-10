@@ -292,17 +292,25 @@ describe("writer registry", () => {
   });
 });
 
-describe("M3-r4 按标准路由的 base 写入（formBase）", () => {
-  const routed = resolveTargetPort(4304, ["openai-chat", "anthropic"]);
-  const allForms = resolveTargetPort(4300, ["openai-chat", "openai-responses", "anthropic"]);
+describe("M3-r6 路径路由的 base 写入（formBase）", () => {
+  const routed = resolveTargetPort(4304, [
+    { forms: ["openai-chat"], localPrefix: "/v1" },
+    { forms: ["anthropic"], localPrefix: "/anthropic" },
+  ]);
+  const allForms = resolveTargetPort(4300, [{ forms: ["openai-chat", "openai-responses"], localPrefix: "/v1" }]);
 
-  it("resolveTargetPort：formBase = baseUrl + 标准本地前缀；无路由缺省", () => {
+  it("resolveTargetPort：formBase = baseUrl + localPrefix（openai 原样 / anthropic 剥尾版本段）；无路由缺省", () => {
     expect(routed.baseUrl).toBe("http://127.0.0.1:4304");
     expect(routed.formBase).toEqual({
-      "openai-chat": "http://127.0.0.1:4304/openai",
+      "openai-chat": "http://127.0.0.1:4304/v1",
       anthropic: "http://127.0.0.1:4304/anthropic",
     });
     expect(resolveTargetPort(4300).formBase).toBeUndefined();
+  });
+
+  it("anthropic localPrefix 为版本段（纯 anthropic 服务 /v1）时剥掉——Claude Code 自带 /v1/messages", () => {
+    const pure = resolveTargetPort(4301, [{ forms: ["anthropic"], localPrefix: "/v1" }]);
+    expect(pure.formBase?.anthropic).toBe("http://127.0.0.1:4301");
   });
 
   it("claude-code：anthropic 路由 → /anthropic 前缀；无路由 → 裸 base（旧行为）", async () => {
@@ -312,21 +320,21 @@ describe("M3-r4 按标准路由的 base 写入（formBase）", () => {
     expect(legacy.diff).toContain(`"ANTHROPIC_BASE_URL": "${target.baseUrl}"`);
   });
 
-  it("codex：responses 路由 → responses wire_api + /responses/v1；否则 chat + 裸 base", async () => {
+  it("codex：responses 路由 → responses wire_api + /v1 base（localPrefix 已含版本段）；否则 chat + 裸 base", async () => {
     const routedPreview = await previewWriter("codex", allForms, { home });
     expect(routedPreview.diff).toContain('wire_api = "responses"');
-    expect(routedPreview.diff).toContain('base_url = "http://127.0.0.1:4300/responses/v1"');
+    expect(routedPreview.diff).toContain('base_url = "http://127.0.0.1:4300/v1"');
     const legacy = await previewWriter("codex", target, { home });
     expect(legacy.diff).toContain('wire_api = "chat"');
     expect(legacy.diff).toContain(`base_url = "${target.baseUrl}"`);
   });
 
-  it("cursor/cline/continue：openai-chat 路由 → /openai/v1 base", async () => {
+  it("cursor/cline/continue：openai-chat 路由 → localPrefix base（无额外 /v1）", async () => {
     const cursorPreview = await previewWriter("cursor", routed, { home });
-    expect(cursorPreview.diff).toContain('"openai.baseUrl.experimental": "http://127.0.0.1:4304/openai/v1"');
+    expect(cursorPreview.diff).toContain('"openai.baseUrl.experimental": "http://127.0.0.1:4304/v1"');
     const clinePreview = await previewWriter("cline", routed, { home });
-    expect(clinePreview.diff).toContain('"cline.openAiBaseUrl": "http://127.0.0.1:4304/openai/v1"');
+    expect(clinePreview.diff).toContain('"cline.openAiBaseUrl": "http://127.0.0.1:4304/v1"');
     const continuePreview = await previewWriter("continue", routed, { home });
-    expect(continuePreview.diff).toContain('"apiBase": "http://127.0.0.1:4304/openai/v1"');
+    expect(continuePreview.diff).toContain('"apiBase": "http://127.0.0.1:4304/v1"');
   });
 });

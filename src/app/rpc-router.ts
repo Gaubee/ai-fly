@@ -6,7 +6,7 @@
 
 import { implement, ORPCError } from "@orpc/server";
 import { homedir } from "node:os";
-import { RpcErrorDefinitions, rpcContract } from "../shared/rpc-contract.ts";
+import { RpcErrorDefinitions, rpcContract, routeLocalPrefix } from "../shared/rpc-contract.ts";
 import type { Preset } from "../shared/rpc-contract.ts";
 import { DomainError, toDomainError } from "./errors.ts";
 import type { EngineHost } from "./engine-host.ts";
@@ -106,7 +106,7 @@ export function createRpcRouter(deps: RpcRouterDeps) {
       if (service !== undefined) {
         // 端口：网关实际监听优先（auto-assign 后存储投影不可信），回退 keyring 投影
         const port = livePorts().get(service.serviceId) ?? ring.ports[service.serviceId] ?? service.defaultPort;
-        return resolveTargetPort(port, service.detail?.routes?.map((r) => r.form));
+        return resolveTargetPort(port, service.detail?.routes);
       }
     }
     throw new DomainError("NOT_FOUND", `error: unknown service '${serviceId}'`);
@@ -329,13 +329,16 @@ export function createRpcRouter(deps: RpcRouterDeps) {
           // 定位服务（keyring detail 持 upstream 与 routes）+ 端口（运行时实际监听
           // 优先；网关停止时用存储投影——fetch 的 ECONNREFUSED 即诚实信号）。
           const { rings } = listKeyrings(host.consumersRoot);
-          let found: { port: number; upstream?: string } | undefined;
+          let found: { port: number; upstream?: string; localPrefix?: string } | undefined;
           for (const ring of rings) {
             const service = ring.services.find((s) => s.serviceId === input.serviceId);
             if (service === undefined) continue;
+            // 该标准路由规则的本地前缀（无路由服务 = legacy 透传，用规范前缀探测）
+            const route = service.detail?.routes?.find((r) => r.forms.includes(input.form));
             found = {
               port: livePorts().get(service.serviceId) ?? ring.ports[service.serviceId] ?? service.defaultPort,
               ...(service.detail?.upstream !== undefined ? { upstream: service.detail.upstream } : {}),
+              ...(route !== undefined ? { localPrefix: routeLocalPrefix(route) } : {}),
             };
             break;
           }
@@ -353,7 +356,12 @@ export function createRpcRouter(deps: RpcRouterDeps) {
               modelSource = "models.dev";
             }
           }
-          const result = await testLocalService({ port: found.port, form: input.form, ...(model !== undefined ? { model } : {}) });
+          const result = await testLocalService({
+            port: found.port,
+            form: input.form,
+            ...(found.localPrefix !== undefined ? { localPrefix: found.localPrefix } : {}),
+            ...(model !== undefined ? { model } : {}),
+          });
           return {
             ...result,
             ...(modelSource !== "none" ? { modelSource } : {}),

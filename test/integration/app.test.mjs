@@ -103,7 +103,7 @@ describe("app integration: token gate + contract over ws", () => {
     const deepseek = presets.curated.find((p) => p.id === "deepseek");
     assert.ok(deepseek, "deepseek preset present");
     assert.ok(
-      deepseek.routes?.some((r) => r.form === "anthropic" && r.upstreamPrefix === "/anthropic"),
+      deepseek.routes?.some((r) => r.forms.includes("anthropic") && r.localPrefix === "/anthropic"),
       "deepseek preset carries anthropic route",
     );
 
@@ -117,7 +117,7 @@ describe("app integration: token gate + contract over ws", () => {
     });
     assert.ok(added.service.name === "deepseek-bridge");
     assert.ok(
-      added.service.routes?.some((r) => r.form === "anthropic" && r.upstreamPrefix === "/anthropic"),
+      added.service.routes?.some((r) => r.forms.includes("anthropic") && r.upstreamPrefix === "/anthropic"),
       "routes 随服务落库",
     );
 

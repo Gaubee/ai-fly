@@ -12,6 +12,8 @@ export interface LocalTestInput {
   /** 本机网关端口（运行时实际监听值）。 */
   port: number;
   form: RouteForm;
+  /** 该标准路由规则的本地前缀（缺省 = 规范前缀；版本段粒度如 /v1）。 */
+  localPrefix?: string | undefined;
   /** 已解析的模型名（显式或 models.dev；缺省省略 model 字段——上游 4xx 也能证明链路通）。 */
   model?: string | undefined;
   fetchImpl?: typeof fetch | undefined;
@@ -32,18 +34,20 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 const BODY_EXCERPT_MAX = 300;
 const ERROR_SUMMARY_MAX = 200;
 
-/** 各标准的探测端点与最小请求形状（路径 = 本地标准前缀 + 官方版本段）。 */
+/** 各标准的探测端点与最小请求形状（M3-r6：localPrefix 已含版本段——openai
+ *  家族追加版本后缀；anthropic 剥 localPrefix 尾部版本段后由 client 惯例
+ *  补 /v1/messages）。 */
 function formRequest(
   port: number,
   form: RouteForm,
+  localPrefix: string,
   model: string | undefined,
 ): { url: string; body: Record<string, unknown>; headers: Record<string, string> } {
-  const base = `http://127.0.0.1:${port}${ROUTE_LOCAL_PREFIX[form]}`;
   const headers: Record<string, string> = { "content-type": "application/json" };
   switch (form) {
     case "openai-chat":
       return {
-        url: `${base}/v1/chat/completions`,
+        url: `http://127.0.0.1:${port}${localPrefix}/chat/completions`,
         headers,
         body: {
           ...(model !== undefined ? { model } : {}),
@@ -53,13 +57,13 @@ function formRequest(
       };
     case "openai-responses":
       return {
-        url: `${base}/v1/responses`,
+        url: `http://127.0.0.1:${port}${localPrefix}/responses`,
         headers,
         body: { ...(model !== undefined ? { model } : {}), input: "ping" },
       };
     case "anthropic":
       return {
-        url: `${base}/v1/messages`,
+        url: `http://127.0.0.1:${port}${localPrefix.replace(/\/v\d+$/, "")}/v1/messages`,
         headers: { ...headers, "anthropic-version": "2023-06-01" },
         body: {
           ...(model !== undefined ? { model } : {}),
@@ -75,7 +79,12 @@ export async function testLocalService(input: LocalTestInput): Promise<LocalTest
   const now = input.now ?? Date.now;
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const started = now();
-  const { url, body, headers } = formRequest(input.port, input.form, input.model);
+  const { url, body, headers } = formRequest(
+    input.port,
+    input.form,
+    input.localPrefix ?? ROUTE_LOCAL_PREFIX[input.form],
+    input.model,
+  );
   const request = {
     method: "POST" as const,
     url,
