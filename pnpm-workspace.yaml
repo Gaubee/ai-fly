@@ -6,5 +6,23 @@ allowBuilds:
   esbuild: true
   # sharp 0.33 经 @img/* optional 依赖携带预编译二进制，安装脚本无需执行
   sharp: false
+minimumReleaseAgeExclude:
+  - '@opentray/darwin-arm64@0.23.0'
+  - '@opentray/darwin-x64@0.23.0'
+  - '@opentray/ext-webview-darwin-arm64@0.23.0'
+  - '@opentray/ext-webview-darwin-x64@0.23.0'
+  - '@opentray/ext-webview-windows-arm64@0.23.0'
+  - '@opentray/ext-webview-windows-x64@0.23.0'
+  - '@opentray/ext-webview@0.23.0'
+  - '@opentray/icon@0.23.0'
+  - '@opentray/linux-arm64@0.23.0'
+  - '@opentray/linux-x64@0.23.0'
+  - '@opentray/packaging@0.23.0'
+  - '@opentray/spec@0.23.0'
+  - '@opentray/tsdown-plugin@0.23.0'
+  - '@opentray/vite-plugin@0.23.0'
+  - '@opentray/windows-arm64@0.23.0'
+  - '@opentray/windows-x64@0.23.0'
+  - opentray@0.23.0
 onlyBuiltDependencies:
   - esbuild
