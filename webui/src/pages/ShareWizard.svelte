@@ -269,6 +269,77 @@
           spellcheck={false}
           bind:value={share.customUpstream}
         />
+
+        <!-- API routes（M3-r5/r6 主面板直出，Owner 裁决：预设=可编辑的 Custom，
+             路由是服务定义的核心不是高级选项）：端点完整路径（预填=官方 path），
+             声明了的标准经本地前缀转发到该路径；空 = 不提供该标准。
+             路由表即白名单——未声明的路径本地 404，不透传。 -->
+        <div class="flex flex-col gap-3">
+          <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
+            api routes (optional)
+          </span>
+          <div class="flex flex-col gap-1.5">
+            <Input
+              label="openai chat completions path"
+              placeholder="/v1/chat/completions"
+              autocapitalize="none"
+              autocorrect="off"
+              spellcheck={false}
+              bind:value={share.customRouteChat}
+            />
+            {#if routePreviewChat !== null}
+              <p class="font-mono text-[11px] leading-relaxed text-muted-foreground">
+                /openai/v1/chat/completions → {routePreviewChat}
+              </p>
+            {:else if share.customRouteChat.trim() !== ""}
+              <p class="text-[11px] leading-relaxed text-destructive">
+                must end with /v1/chat/completions
+              </p>
+            {/if}
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Input
+              label="openai responses path"
+              placeholder="/v1/responses"
+              autocapitalize="none"
+              autocorrect="off"
+              spellcheck={false}
+              bind:value={share.customRouteResponses}
+            />
+            {#if routePreviewResponses !== null}
+              <p class="font-mono text-[11px] leading-relaxed text-muted-foreground">
+                /responses/v1/responses → {routePreviewResponses}
+              </p>
+            {:else if share.customRouteResponses.trim() !== ""}
+              <p class="text-[11px] leading-relaxed text-destructive">
+                must end with /v1/responses
+              </p>
+            {/if}
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Input
+              label="anthropic messages path"
+              placeholder="/anthropic/v1/messages"
+              autocapitalize="none"
+              autocorrect="off"
+              spellcheck={false}
+              bind:value={share.customRouteAnthropic}
+            />
+            {#if routePreviewAnthropic !== null}
+              <p class="font-mono text-[11px] leading-relaxed text-muted-foreground">
+                /anthropic/v1/messages → {routePreviewAnthropic}
+              </p>
+            {:else if share.customRouteAnthropic.trim() !== ""}
+              <p class="text-[11px] leading-relaxed text-destructive">
+                must end with /v1/messages
+              </p>
+            {/if}
+          </div>
+          <p class="text-[11px] leading-relaxed text-muted-foreground">
+            paths default to the official ones - empty = this standard is not offered
+            (declared routes only; anything else is rejected with 404).
+          </p>
+        </div>
         <Separator />
 
         <Input
@@ -292,13 +363,13 @@
         {/if}
 
         <!-- advanced options（M3-acceptance ③：ghost accordion，默认折叠——
-             default consumer port + 自定义 match domains；20/80 核心
-             字段直达主区） -->
+             default consumer port + match domains；路由已按 Owner 裁决
+             提升主面板） -->
         <Accordion ghost>
           <AccordionItem>
             {#snippet summary()}advanced options{/snippet}
             <div class="flex flex-col gap-3">
-              <!-- 分组限额已归口 GroupsDialog（M3-r3 ①）；此处端口/match/路由 -->
+              <!-- 分组限额已归口 GroupsDialog（M3-r3 ①）；此处端口/match -->
               <div class="flex flex-col gap-1.5">
                 <Input label="default consumer port" bind:value={share.port} />
                 <p class="text-[11px] leading-relaxed text-muted-foreground">
@@ -318,75 +389,6 @@
                 />
                 <p class="text-[11px] leading-relaxed text-muted-foreground">
                   requests whose host matches are captured - comma-separated for several.
-                </p>
-              </div>
-              <!-- API routes（M3-r5）：端点完整路径（默认与官方 path 一致），
-                   声明了的标准经本地前缀转发到该路径；空 = 不提供该标准。
-                   路由表即白名单——未声明的路径本地 404，不透传。 -->
-              <div class="flex flex-col gap-3">
-                <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-                  api routes (optional)
-                </span>
-                <div class="flex flex-col gap-1.5">
-                  <Input
-                    label="openai chat completions path"
-                    placeholder="/v1/chat/completions"
-                    autocapitalize="none"
-                    autocorrect="off"
-                    spellcheck={false}
-                    bind:value={share.customRouteChat}
-                  />
-                  {#if routePreviewChat !== null}
-                    <p class="font-mono text-[11px] leading-relaxed text-muted-foreground">
-                      /openai/v1/chat/completions → {routePreviewChat}
-                    </p>
-                  {:else if share.customRouteChat.trim() !== ""}
-                    <p class="text-[11px] leading-relaxed text-destructive">
-                      must end with /v1/chat/completions
-                    </p>
-                  {/if}
-                </div>
-                <div class="flex flex-col gap-1.5">
-                  <Input
-                    label="openai responses path"
-                    placeholder="/v1/responses"
-                    autocapitalize="none"
-                    autocorrect="off"
-                    spellcheck={false}
-                    bind:value={share.customRouteResponses}
-                  />
-                  {#if routePreviewResponses !== null}
-                    <p class="font-mono text-[11px] leading-relaxed text-muted-foreground">
-                      /responses/v1/responses → {routePreviewResponses}
-                    </p>
-                  {:else if share.customRouteResponses.trim() !== ""}
-                    <p class="text-[11px] leading-relaxed text-destructive">
-                      must end with /v1/responses
-                    </p>
-                  {/if}
-                </div>
-                <div class="flex flex-col gap-1.5">
-                  <Input
-                    label="anthropic messages path"
-                    placeholder="/anthropic/v1/messages"
-                    autocapitalize="none"
-                    autocorrect="off"
-                    spellcheck={false}
-                    bind:value={share.customRouteAnthropic}
-                  />
-                  {#if routePreviewAnthropic !== null}
-                    <p class="font-mono text-[11px] leading-relaxed text-muted-foreground">
-                      /anthropic/v1/messages → {routePreviewAnthropic}
-                    </p>
-                  {:else if share.customRouteAnthropic.trim() !== ""}
-                    <p class="text-[11px] leading-relaxed text-destructive">
-                      must end with /v1/messages
-                    </p>
-                  {/if}
-                </div>
-                <p class="text-[11px] leading-relaxed text-muted-foreground">
-                  paths default to the official ones - empty = this standard is not offered
-                  (declared routes only; anything else is rejected with 404).
                 </p>
               </div>
             </div>

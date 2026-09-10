@@ -29,3 +29,7 @@
       check/typecheck ✓；实机：② 预填三条官方路径与映射行；/user/balance 与裸
       /v1/chat/completions → 404 path_not_offered（零上游）；/anthropic/v1/messages
       → 401 governor（真实 DeepSeek）
+- [x] 14.（Owner 再裁决）API ROUTES 提升主面板第一屏直出（upstream 之后），
+      不再折叠在 advanced options；port/match 维持收纳。实证：手风琴关闭态
+      三路由输入均可见，DOM 序 upstream → api routes → service name →
+      advanced options
