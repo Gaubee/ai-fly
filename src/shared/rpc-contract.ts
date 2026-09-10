@@ -289,12 +289,52 @@ export const WRITER_APPLY_SCHEMA = z.strictObject({
 // 系统设置（~/.aifly/settings.json；持久化实现见 src/app/settings.ts）
 // ---------------------------------------------------------------------------
 
+/** 绑定地址（host:port；host = 主机名/IPv4/[IPv6]，port 1..65535）。 */
+const BIND_ADDRESS_SCHEMA = z
+  .string()
+  .regex(/^[a-zA-Z0-9.\-]+:\d{1,5}$/, "bind must be host:port")
+  .refine((value) => {
+    const port = Number.parseInt(value.split(":")[1] ?? "", 10);
+    return Number.isInteger(port) && port >= 1 && port <= 65535;
+  }, "port must be in 1..65535");
+
+/** 自托管 opendweb server（dweb-server 子进程）配置。 */
+export const OPENWEB_SERVER_CONFIG_SCHEMA = z
+  .strictObject({
+    enabled: z.boolean(),
+    /** gateway（rendezvous/healthz/services.json）监听；默认 127.0.0.1:8787。 */
+    gatewayBind: BIND_ADDRESS_SCHEMA,
+    /** relay（iroh relay HTTP）监听；默认 127.0.0.1:3340。 */
+    relayBind: BIND_ADDRESS_SCHEMA,
+    relayEnabled: z.boolean(),
+  })
+  .refine((config) => config.gatewayBind !== config.relayBind || !config.relayEnabled, {
+    message: "gateway and relay binds must differ",
+  });
+
+export type OpendwebServerConfig = z.infer<typeof OPENWEB_SERVER_CONFIG_SCHEMA>;
+
+/** 按标准测试的结果（消费侧 wire 链路 / 提供方 route 直打共用形状）。 */
+export const SERVICE_TEST_RESULT_SCHEMA = z.strictObject({
+  ok: z.boolean(),
+  latencyMs: z.number().int().min(0),
+  request: z.strictObject({ method: z.literal("POST"), url: z.string(), model: z.string().optional() }),
+  modelSource: z.enum(["explicit", "models.dev", "none"]).optional(),
+  /** upstream 响应状态码（拿到响应即有；传输失败缺席）。 */
+  httpStatus: z.number().int().min(100).max(599).optional(),
+  error: z.string().optional(),
+  /** 响应正文摘录（成功=模型回复/错误体；截断）。 */
+  bodyExcerpt: z.string().optional(),
+});
+
 export const SETTINGS_SCHEMA = z.strictObject({
   theme: z.enum(["dark", "light", "system"]),
   /** false 时预设列表不含 models.dev 长尾（断网/隐私偏好）。 */
   modelsDevEnabled: z.boolean(),
   /** relay 入口列表（provider/consumer 共用；null = 未配置，走 SDK 默认）。 */
   relayUrls: z.array(z.string().min(1).max(2048)).max(8).nullable(),
+  /** 自托管 opendweb server（null = 未配置即不启动；default 兼容旧文件迁移）。 */
+  opendwebServer: OPENWEB_SERVER_CONFIG_SCHEMA.nullable().default(null),
 });
 
 // ---------------------------------------------------------------------------
@@ -379,6 +419,22 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
             modelSource: z.enum(["explicit", "models.dev", "upstream-probe"]).optional(),
           }),
         ),
+      /**
+       * 提供方侧按标准路由测试（Owner 裁决 2026-09-11：与 connect ③ 同形态）：
+       * 最小 AI-API 请求 → 本地路由命中（prefix/pattern + 白名单）→ rewrite
+       * 注入（$secret/$env）→ 直打 upstream。request.url = 改写后的上游 URL。
+       */
+      testRoute: oc
+        .input(
+          z.strictObject({
+            name: z.string().min(1).max(256),
+            form: ROUTE_FORM_SCHEMA,
+            model: z.string().min(1).max(256).optional(),
+            content: z.string().max(8192).optional(),
+            localPrefix: z.string().min(1).max(2048).optional(),
+          }),
+        )
+        .output(SERVICE_TEST_RESULT_SCHEMA),
     },
     secrets: {
       /** 密钥库清单（仅名称与时间戳；值由设计不跨 RPC）。 */
@@ -545,19 +601,7 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
             localPrefix: z.string().min(1).max(2048).optional(),
           }),
         )
-        .output(
-          z.strictObject({
-            ok: z.boolean(),
-            latencyMs: z.number().int().min(0),
-            request: z.strictObject({ method: z.literal("POST"), url: z.string(), model: z.string().optional() }),
-            modelSource: z.enum(["explicit", "models.dev", "none"]).optional(),
-            /** upstream 响应状态码（拿到响应即有；传输失败缺席）。 */
-            httpStatus: z.number().int().min(100).max(599).optional(),
-            error: z.string().optional(),
-            /** 响应正文摘录（成功=模型回复/错误体；截断）。 */
-            bodyExcerpt: z.string().optional(),
-          }),
-        ),
+        .output(SERVICE_TEST_RESULT_SCHEMA),
     },
     ports: {
       /** 全部已导入服务的本地端口清单（pinned/default 标注）。 */
@@ -692,18 +736,34 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
   },
   system: {
     settings: {
-      /** 读取应用设置（主题/models.dev 开关/relay）。 */
+      /** 读取应用设置（主题/models.dev 开关/relay/opendweb server）。 */
       get: oc.input(z.object({})).output(SETTINGS_SCHEMA),
-      /** 补丁式更新（仅提交的字段变更）。 */
+      /** 补丁式更新（仅提交的字段变更；opendwebServer 变更即触发子进程对账）。 */
       set: oc
         .input(
           z.strictObject({
             theme: z.enum(["dark", "light", "system"]).optional(),
             modelsDevEnabled: z.boolean().optional(),
             relayUrls: z.array(z.string().min(1).max(2048)).max(8).nullable().optional(),
+            opendwebServer: OPENWEB_SERVER_CONFIG_SCHEMA.nullable().optional(),
           }),
         )
         .output(SETTINGS_SCHEMA),
+    },
+    /** 自托管 opendweb server（dweb-server 子进程）运行态。 */
+    opendweb: {
+      status: oc
+        .input(z.object({}))
+        .output(
+          z.strictObject({
+            running: z.boolean(),
+            pid: z.number().int().optional(),
+            gatewayUrl: z.string().optional(),
+            relayHttpUrl: z.string().optional(),
+            lastError: z.string().optional(),
+            config: OPENWEB_SERVER_CONFIG_SCHEMA.nullable(),
+          }),
+        ),
     },
     /** 通知通道常量（前端 ws 订阅地址；与 web-server 实现保持同源）。 */
     notifyChannels: oc

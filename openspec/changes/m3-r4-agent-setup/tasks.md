@@ -90,3 +90,31 @@
       189ms deepseek-v4-flash 真实回复（thinking + text + usage）正文呈现；
       openai 协议回跳 /v1 → /v1/chat/completions → HTTP 200 deepseek-flash
       真实回复；测试 key 5 枚已 revoke、消费环 forget、headless 已回收
+
+## M3-r9 追加（Owner 裁决：opendweb server 管理 + Advanced test 同形 + relay 纠偏）
+
+- [x] 26. relay URL scheme 纠偏：http(s):// 才是正确形态（dweb-server Rust
+      对非 http(s) 条目禁用 + WARNING；n0 默认即 https；fabric crate 同规）；
+      webui relayForm 校验/placeholder/文案从 wss:// 误植全部改正
+- [x] 27. opendweb server 管理：settings.opendwebServer（enabled/gatewayBind/
+      relayBind/relayEnabled，default(null) 兼容旧文件迁移）+ 子进程管理器
+      （OpendwebServerManager：对账启停/配置变化重启/崩溃观测，startImpl 注入
+      8 单测）+ system.opendweb.status RPC + settings.set 联动对账 + 随 app
+      自启/退出回收；Advanced 新 tab（状态面板/绑定表单/启停）+ RelayPickerDialog
+      （SDK 默认 / 自己的服务器（须在跑）/ 自定义清单 三选；打开上升沿一次
+      初始化 untrack 防 status 异步到达重置用户选择）
+- [x] 28. Advanced services 行内 test 对齐 connect ③（同形 ServiceTestCard
+      共享组件：协议+端点选择（协议→端点联动）+ 单轮输入框 + 结果面板）：
+      provider.services.testRoute（formProbe 构造 → buildUpstreamRequest 路由
+      命中/白名单 → rewrite $secret/$env 注入 → 直打 upstream；request.url =
+      改写后上游 URL；4 单测）；local-test formProbe 导出复用；connect store
+      状态瘦身（协议/端点/提示词移交组件）
+- [x] 29. 三端 e2e（本地 opendweb server + 双 ai-fly 实例）：独立 provider
+      （/tmp 数据 dir）+ CLI consumer；两组 e2e-a（openai 形态）/e2e-b
+      （anthropic 形态）各自走通——经自有 relay（--relay http://127.0.0.1:3340）
+      收到 OpenAI/Anthropic 真实 401 预期错误正文（网络全链路证明）；撤 A 组
+      key → A 断供 B 不受影响（隔离）。发现：ai-fly run 不读链接内嵌 relay
+      （flag>env>file>n0 默认）——本地 relay 场景需显式 --relay（app 内消费
+      网关走 settings.relayUrls 不受影响；run 回退 ring 内嵌 relay 列为跟进项）
+- [x] 30. 回归：vitest 499/499 + 集成 25/25 + svelte-check 基线 30 + typecheck ✓；
+      e2e 资产全清（tmp 数据/服务/分组/key/Owner settings relayUrls 复位）

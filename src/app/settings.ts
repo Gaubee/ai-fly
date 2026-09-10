@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
   modelsDevEnabled: true,
   relayUrls: null,
+  opendwebServer: null,
 };
 
 export function settingsPath(base = homedir()): string {

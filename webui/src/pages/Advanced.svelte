@@ -1,9 +1,11 @@
 <!-- 高级设置（B 3.5 + M3 6.x，#/advanced）：Tabs = 服务 / 分组 / 密钥 /
-     密钥库 / 中继与限额 / 设置。net-fly 通用概念（match 全集、rewrite 规则、
-     relay 配置）只出现在这里；默认一行一服务，展开 detail（$env:/$secret:
+     密钥库 / 中继与限额 / opendweb server / 设置。net-fly 通用概念（match 全集、
+     rewrite 规则、relay 配置）只出现在这里；默认一行一服务，展开 detail（$env:/$secret:
      注入值掩码），行内 test 连通测试（M3 6.3）。keys = 消费者侧 share 密钥
      （issue 一次性原文 dialog + revoke 两步确认）；secrets = provider 侧
-     上游密钥库（列表/增删改内联卡，值不回显，M3 6.1/6.2）。状态机在
+     上游密钥库（列表/增删改内联卡，值不回显，M3 6.1/6.2）。opendweb server =
+     自托管 dweb-server 子进程（settings 驱动启停/重启，Owner 裁决 2026-09-11）+
+     relay 服务器选择 Dialog（SDK 默认/自己的服务器/自定义）。状态机在
      stores/advanced。 -->
 <script lang="ts">
   import { onMount } from "svelte";
@@ -25,6 +27,10 @@
   import ErrorAlert from "../components/ErrorAlert.svelte";
   import CopyField from "../components/CopyField.svelte";
   import SecretPicker from "../components/SecretPicker.svelte";
+  import ServiceTestCard from "../components/ServiceTestCard.svelte";
+  import type { ServiceRouteView as ServiceTestCardRoutes, RouteTestOutput } from "../stores/connect-wizard.svelte.ts";
+  import type { RouteForm } from "$shared/rpc-contract.ts";
+  import RelayPickerDialog from "../components/RelayPickerDialog.svelte";
   import TestConnection from "../components/TestConnection.svelte";
   import { app, refresh } from "../stores/app.svelte.ts";
   import { call } from "../stores/rpc.svelte.ts";
@@ -56,6 +62,11 @@
     saveRelay,
     settingsEdit,
     setModelsDev,
+    opendwebEdit,
+    initOpendwebForm,
+    refreshOpendwebStatus,
+    saveOpendweb,
+    bindAddressProblem,
   } from "../stores/advanced.svelte.ts";
 
   let tab = $state("services");
@@ -116,6 +127,30 @@
     if (tab === "secrets") void loadSecretRows();
   });
 
+  // ── opendweb server 区（Owner 裁决 2026-09-11）───────────────────
+  /** relay 选择 Dialog 开合。 */
+  let relayDialogOpen = $state(false);
+  /** 进 opendweb tab：表单回填（settings 已到时一次）+ 运行态快照。 */
+  let opendwebInited = false;
+  $effect(() => {
+    if (tab !== "opendweb") return;
+    if (!opendwebInited && app.settings !== null) {
+      opendwebInited = true;
+      initOpendwebForm();
+    }
+    void refreshOpendwebStatus();
+  });
+
+  /** 当前 relay 模式摘要（relay 卡片行）。 */
+  const relayModeSummary = $derived.by(() => {
+    const urls = app.settings?.relayUrls ?? null;
+    if (urls === null) return "SDK defaults (n0 public relays)";
+    if (urls.length === 1 && opendwebEdit.status?.running === true && urls[0] === `http://${opendwebEdit.status.config?.relayBind ?? ""}`) {
+      return `my opendweb server (${urls[0]})`;
+    }
+    return `${urls.length} custom entr${urls.length === 1 ? "y" : "ies"}`;
+  });
+
   async function loadSecretRows(): Promise<void> {
     if (secretsLoading) return;
     secretsLoading = true;
@@ -174,16 +209,41 @@
     void loadSecretRows();
   }
 
-  // ── 服务行内联 test（M3 6.3）────────────────────────────────────
+  // ── 服务行内联 test（Owner 裁决 2026-09-11：与 connect ③ 同形）────────────
   /** 内联 test 展开中的服务 id（null = 全收起；互斥从简）。 */
   let serviceTestOpen = $state<string | null>(null);
+  /** testRoute 在途的服务 id（单飞防重入）。 */
+  let serviceTestBusy = $state("");
+  /** serviceId → testRoute 结果（RPC 层失败合成为 ok=false 就地展示）。 */
+  let serviceTestResults = $state<Record<string, RouteTestOutput | undefined>>({});
 
-  /** 已存服务的注入密钥名（authorization 头 $secret: 前缀解析）。 */
-  function serviceSecretName(service: ServiceConfigView): string | undefined {
-    const authorization = service.rewrite?.headerSet?.["authorization"];
-    return authorization !== undefined && authorization.startsWith("$secret:")
-      ? authorization.slice("$secret:".length)
-      : undefined;
+  async function runServiceTest(
+    name: string,
+    payload: { form: RouteForm; content: string; localPrefix?: string | undefined },
+  ): Promise<void> {
+    const serviceId = app.services.find((service) => service.name === name)?.serviceId ?? name;
+    if (serviceTestBusy !== "") return;
+    serviceTestBusy = serviceId;
+    serviceTestResults[serviceId] = undefined;
+    try {
+      serviceTestResults[serviceId] = await call((c) =>
+        c.provider.services.testRoute({
+          name,
+          form: payload.form,
+          content: payload.content,
+          ...(payload.localPrefix !== undefined ? { localPrefix: payload.localPrefix } : {}),
+        }),
+      );
+    } catch (error) {
+      serviceTestResults[serviceId] = {
+        ok: false,
+        latencyMs: 0,
+        request: { method: "POST", url: "" },
+        error: toRpcError(error).message,
+      };
+    } finally {
+      serviceTestBusy = "";
+    }
   }
 
   /** 行头 key injected 徽章：$env: / $secret: 任一注入即亮。 */
@@ -269,6 +329,7 @@
       <TabsTrigger value="keys">keys</TabsTrigger>
       <TabsTrigger value="secrets">secrets</TabsTrigger>
       <TabsTrigger value="relay">relay & limits</TabsTrigger>
+      <TabsTrigger value="opendweb">opendweb server</TabsTrigger>
       <TabsTrigger value="settings">settings</TabsTrigger>
     </TabsList>
 
@@ -386,9 +447,19 @@
                   </dl>
                 {/if}
                 {#if serviceTestOpen === service.serviceId}
-                  <!-- 行内连通测试（M3 6.3）：自定义服务无 presetId → 无模型下拉 -->
+                  <!-- 行内按标准路由测试（Owner 裁决 2026-09-11：与 connect ③ 同形；
+                       provider 直打 upstream——路由命中 + rewrite 注入，request.url
+                       = 改写后的上游 URL） -->
                   <div class="border-t border-border px-3 py-2.5" transition:slide={{ duration: 150 }}>
-                    <TestConnection upstream={service.upstream} secretName={serviceSecretName(service)} />
+                    {#key service.serviceId}
+                      <ServiceTestCard
+                        routes={(service.routes ?? []) as ServiceTestCardRoutes[]}
+                        upstream={service.upstream}
+                        busy={serviceTestBusy === service.serviceId}
+                        result={serviceTestResults[service.serviceId] ?? null}
+                        onsend={(payload) => void runServiceTest(service.name, payload)}
+                      />
+                    {/key}
                   </div>
                 {/if}
               </div>
@@ -853,6 +924,109 @@
       </div>
     </TabsContent>
 
+    <!-- ── opendweb server（Owner 裁决 2026-09-11）──────────── -->
+    <TabsContent value="opendweb">
+      <div class="flex flex-col gap-3">
+        <Card title="opendweb server" scroll={false}>
+          <div class="flex flex-col gap-3 p-3">
+            <p class="text-xs leading-relaxed text-muted-foreground">
+              self-host the opendweb infrastructure: a dweb-server child process
+              (gateway + relay) bundled with the app. run it and point the fabric
+              relay at it to stop depending on public relays.
+            </p>
+
+            <!-- 运行态 -->
+            {#if opendwebEdit.status !== null}
+              <div class="flex flex-col gap-1 border border-border/70 p-2.5">
+                <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">status</span>
+                {#if opendwebEdit.status.running}
+                  <p class="font-mono text-[11px] text-[color:var(--success)]">
+                    running · pid {opendwebEdit.status.pid}
+                  </p>
+                  {#if opendwebEdit.status.gatewayUrl !== undefined}
+                    <p class="break-all font-mono text-[11px] text-muted-foreground">
+                      gateway {opendwebEdit.status.gatewayUrl}
+                    </p>
+                  {/if}
+                  {#if opendwebEdit.status.relayHttpUrl !== undefined}
+                    <p class="break-all font-mono text-[11px] text-muted-foreground">
+                      relay {opendwebEdit.status.relayHttpUrl}
+                    </p>
+                  {/if}
+                {:else}
+                  <p class="font-mono text-[11px] text-muted-foreground">stopped</p>
+                {/if}
+                {#if opendwebEdit.status.lastError !== undefined}
+                  <p class="break-all text-[11px] leading-relaxed text-[color:var(--warning)]">
+                    {opendwebEdit.status.lastError}
+                  </p>
+                {/if}
+              </div>
+            {/if}
+
+            <div class="grid gap-3 sm:grid-cols-2">
+              <Input
+                label="gateway bind"
+                placeholder="127.0.0.1:8787"
+                autocapitalize="none"
+                autocorrect="off"
+                spellcheck={false}
+                bind:value={opendwebEdit.gatewayBind}
+              />
+              <Input
+                label="relay bind"
+                placeholder="127.0.0.1:3340"
+                autocapitalize="none"
+                autocorrect="off"
+                spellcheck={false}
+                bind:value={opendwebEdit.relayBind}
+              />
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <Toggle
+                label="relay enabled"
+                checked={opendwebEdit.relayEnabled}
+                onchange={(event) => (opendwebEdit.relayEnabled = event.currentTarget.checked)}
+              />
+              <Toggle
+                label="run with app"
+                checked={opendwebEdit.enabled}
+                onchange={(event) => (opendwebEdit.enabled = event.currentTarget.checked)}
+              />
+            </div>
+          </div>
+          {#snippet foot()}
+            <CardFooter label="opendweb server actions">
+              <PressButton
+                variant="ghost"
+                loading={opendwebEdit.statusBusy}
+                onclick={() => void refreshOpendwebStatus()}
+              >refresh status</PressButton>
+              <PressButton variant="fill" loading={opendwebEdit.busy} onclick={() => void saveOpendweb()}>
+                save &amp; apply
+              </PressButton>
+            </CardFooter>
+          {/snippet}
+        </Card>
+        <ErrorAlert error={opendwebEdit.error} />
+
+        <Card title="relay server" scroll={false}>
+          <div class="flex flex-wrap items-center justify-between gap-2 p-3">
+            <div class="flex flex-col gap-0.5">
+              <p class="text-xs text-muted-foreground">
+                where the fabric meets when direct connections fail - every share
+                link embeds it.
+              </p>
+              <p class="font-mono text-[11px] text-muted-foreground">{relayModeSummary}</p>
+            </div>
+            <PressButton variant="outline" onclick={() => (relayDialogOpen = true)}>
+              choose relay server
+            </PressButton>
+          </div>
+        </Card>
+      </div>
+    </TabsContent>
+
     <!-- ── 设置 ─────────────────────────────────────────────── -->
     <TabsContent value="settings">
       <div class="flex flex-col gap-3">
@@ -915,3 +1089,5 @@
     {/snippet}
   {/if}
 </Dialog>
+
+<RelayPickerDialog bind:open={relayDialogOpen} onsave={() => void refreshOpendwebStatus()} />

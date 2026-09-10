@@ -18,9 +18,11 @@ import { probeUpstreamModels, testUpstream, pickDefaultModel } from "../provider
 import { importLink, joinDevice, addKey } from "../consumer/join.ts";
 import { listKeyrings, removeKeyring, setPort } from "../consumer/store.ts";
 import { testLocalService } from "../consumer/local-test.ts";
+import { testServiceRoute } from "../provider/route-test.ts";
 import { applyWriter, previewWriter } from "./writers/index.ts";
 import { resolveTargetPort } from "./writers/common.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
+import type { OpendwebServerManager } from "./opendweb-server.ts";
 import {
   deriveModels,
   fetchModelsDevPresets,
@@ -36,6 +38,8 @@ export interface RpcRouterDeps {
   host: EngineHost;
   /** 应用 home 基准（settings/models-dev 缓存/写手定位；默认 os.homedir()）。 */
   home?: string;
+  /** 自托管 opendweb server 管理（settings.opendwebServer 变更对账）。 */
+  opendweb?: OpendwebServerManager;
 }
 
 /** 密钥记录 → 契约视图（去哈希：哈希与原文都不进 RPC 面）。 */
@@ -185,6 +189,34 @@ export function createRpcRouter(deps: RpcRouterDeps) {
         remove: rpc.provider.services.remove.handler(({ input }) => {
           host.providerStore().removeService(input.name);
           return { removed: true as const };
+        }),
+        // 提供方侧按标准路由测试（Owner 裁决 2026-09-11：与 connect ③ 同形态）：
+        // 路由命中 + rewrite 注入 + 直打 upstream；模型缺省与消费侧同规（models.dev
+        // 缓存按 upstream 命中取最便宜 chat）。
+        testRoute: rpc.provider.services.testRoute.handler(async ({ input }) => {
+          const service = host.providerStore().getServiceByName(input.name);
+          if (service === undefined) {
+            throw new DomainError("NOT_FOUND", `error: service '${input.name}' not found`);
+          }
+          let model = input.model;
+          let modelSource: "explicit" | "models.dev" | "none" = model !== undefined ? "explicit" : "none";
+          if (model === undefined) {
+            const picked = pickDefaultModel(readModelsDevRaw(modelsDevCachePath(home())), service.upstream);
+            if (picked !== undefined) {
+              model = picked;
+              modelSource = "models.dev";
+            }
+          }
+          const secretsStore = SecretsStore.open(host.providerDataDir);
+          const result = await testServiceRoute({
+            service,
+            form: input.form,
+            ...(input.localPrefix !== undefined ? { localPrefix: input.localPrefix } : {}),
+            ...(model !== undefined ? { model } : {}),
+            ...(input.content !== undefined ? { content: input.content } : {}),
+            secrets: (name: string) => secretsStore.resolve(name)?.headerValue,
+          });
+          return { ...result, ...(modelSource !== "none" ? { modelSource } : {}) };
         }),
       },
       groups: {
@@ -575,7 +607,24 @@ export function createRpcRouter(deps: RpcRouterDeps) {
     system: {
       settings: {
         get: rpc.system.settings.get.handler(() => loadSettings(home())),
-        set: rpc.system.settings.set.handler(({ input }) => saveSettings(input, home())),
+        // opendwebServer 字段变更即对账子进程（启停/重启）；启动失败不回滚
+        // 设置——lastError 经 opendweb.status 披露，UI 就地呈现
+        set: rpc.system.settings.set.handler(async ({ input }) => {
+          const next = saveSettings(input, home());
+          if (input.opendwebServer !== undefined) {
+            const manager = deps.opendweb;
+            if (manager !== undefined) await manager.apply(next.opendwebServer);
+          }
+          return next;
+        }),
+      },
+      opendweb: {
+        status: rpc.system.opendweb.status.handler(() => {
+          const manager = deps.opendweb;
+          return manager === undefined
+            ? { running: false, config: null }
+            : manager.status();
+        }),
       },
       notifyChannels: rpc.system.notifyChannels.handler(() => ({
         rpcPath: "/ws/rpc" as const,

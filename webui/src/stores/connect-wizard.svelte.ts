@@ -77,15 +77,9 @@ export const connectW = $state({
   portDraft: {} as Record<string, string>,
   portBusy: "",
   portError: null as RpcError | null,
-  // ③ test（M3-r8）
+  // ③ test（M3-r8；协议/端点/提示词状态在共享 ServiceTestCard 组件内持有）
   /** 测试目标服务。 */
   testServiceId: "",
-  /** 测试请求协议。 */
-  testProtocol: "openai-chat" as RouteForm,
-  /** 测试端点路径（prefix 路由的 localPrefix；"" = 根/legacy 透传）。 */
-  testEndpoint: "",
-  /** 单轮提示词（默认 "hi"；不允许多轮）。 */
-  testPrompt: "hi",
   testBusy: false,
   testResult: null as RouteTestOutput | null,
   // ③（M3-r4）按标准路由披露
@@ -112,9 +106,6 @@ export function resetConnect(): void {
   connectW.portBusy = "";
   connectW.portError = null;
   connectW.testServiceId = "";
-  connectW.testProtocol = "openai-chat";
-  connectW.testEndpoint = "";
-  connectW.testPrompt = "hi";
   connectW.testBusy = false;
   connectW.testResult = null;
   connectW.serviceRoutes = {};
@@ -228,9 +219,8 @@ export async function applyImport(): Promise<void> {
       connectW.gatewayStarted = false; // 导入成功但网关未起：②表仍可用（存储投影）
     }
     await refreshImportedPorts(applied.endpointId);
-    // ③ 默认：第一个服务 + 首个 prefix 路由端点
+    // ③ 默认选第一个服务（协议/端点状态由 ServiceTestCard 随服务重建）
     connectW.testServiceId = applied.services[0]?.serviceId ?? "";
-    connectW.testEndpoint = firstEndpointOf(connectW.testServiceId);
     toastSuccess("Imported", `Provider '${applied.alias}' is ready.`);
     refresh("consumer", "ports");
   } catch (error) {
@@ -241,21 +231,11 @@ export async function applyImport(): Promise<void> {
   }
 }
 
-/** 首个 prefix 路由端点；form 给定时优先承载该标准的规则（无路由 = ""，根透传）。 */
-function firstEndpointOf(serviceId: string, form?: RouteForm): string {
-  const prefixRoutes = (connectW.serviceRoutes[serviceId] ?? []).filter(
-    (r) => r.mode !== "pattern" && (r.localPrefix ?? "") !== "",
-  );
-  const serving = form === undefined ? prefixRoutes : prefixRoutes.filter((r) => r.forms.includes(form));
-  return (serving[0] ?? prefixRoutes[0])?.localPrefix ?? "";
-}
-
 /** ② → ③（进入时重刷端口——网关刚启动的 auto-assign 此时已生效）。 */
 export function portsNext(): void {
   if (connectW.applied === null) return;
   connectW.step = 3;
   void refreshWizardPorts();
-  connectW.testEndpoint = firstEndpointOf(connectW.testServiceId, connectW.testProtocol);
 }
 
 /** ② 改端口（pinned 持久化 + 网关重启生效）。 */
@@ -288,47 +268,32 @@ export function finishConnect(): void {
   refresh("consumer", "ports");
 }
 
-/** ③ 换测试目标服务（端点重置到当前协议的首个承载路由，结果清空）。 */
+/** ③ 换测试目标服务（结果清空；协议/端点状态由 ServiceTestCard 随服务重建）。 */
 export function setTestService(serviceId: string): void {
   connectW.testServiceId = serviceId;
-  connectW.testEndpoint = firstEndpointOf(serviceId, connectW.testProtocol);
   connectW.testResult = null;
 }
 
 /**
- * ③ 换协议：当前端点不承载该标准时跳到首个承载端点（承载则保留——
- * 端点仍是自由选择，这里只修跨形态的明显错配，如 anthropic + /v1）。
- */
-export function setTestProtocol(form: RouteForm): void {
-  connectW.testProtocol = form;
-  const routes = (connectW.serviceRoutes[connectW.testServiceId] ?? []).filter(
-    (r) => r.mode !== "pattern" && (r.localPrefix ?? "") !== "",
-  );
-  const currentServes =
-    routes.find((r) => r.localPrefix === connectW.testEndpoint)?.forms.includes(form) ?? false;
-  if (!currentServes) {
-    connectW.testEndpoint = firstEndpointOf(connectW.testServiceId, form);
-  }
-  connectW.testResult = null;
-}
-
-/**
- * ③ 发送测试请求（M3-r8：协议 + 端点 + 单轮提示词 → 真实 AI-API 请求，
+ * ③ 发送测试请求（M3-r8：ServiceTestCard 上抛载荷 → 真实 AI-API 请求，
  * 走完整 wire 链路）。RPC 层失败合成为 ok=false 结果就地展示；
  * 不发 toast——结果面板已是展示面。
  */
-export async function sendTest(): Promise<void> {
+export async function sendTest(payload: {
+  form: RouteForm;
+  content: string;
+  localPrefix?: string | undefined;
+}): Promise<void> {
   if (connectW.testBusy || connectW.testServiceId === "") return;
   connectW.testBusy = true;
   connectW.testResult = null;
   try {
-    const content = connectW.testPrompt.trim() !== "" ? connectW.testPrompt : "hi";
     connectW.testResult = await call((c) =>
       c.consumer.services.test({
         serviceId: connectW.testServiceId,
-        form: connectW.testProtocol,
-        content,
-        ...(connectW.testEndpoint !== "" ? { localPrefix: connectW.testEndpoint } : {}),
+        form: payload.form,
+        content: payload.content,
+        ...(payload.localPrefix !== undefined ? { localPrefix: payload.localPrefix } : {}),
       }),
     );
   } catch (error) {

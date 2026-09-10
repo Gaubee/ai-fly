@@ -39,18 +39,22 @@ const ERROR_SUMMARY_MAX = 200;
 /** 各标准的探测端点与最小请求形状（M3-r6：localPrefix 已含版本段——openai
  *  家族追加版本后缀；anthropic 剥 localPrefix 尾部版本段后由 client 惯例
  *  补 /v1/messages）。 */
-function formRequest(
-  port: number,
+/**
+ * 各标准的探测端点与最小请求形状（M3-r6：localPrefix 已含版本段——openai
+ * 家族追加版本后缀；anthropic 剥 localPrefix 尾部版本段后由 client 惯例
+ * 补 /v1/messages）。path 形式导出（provider 侧 route-test 复用同一构造）。
+ */
+export function formProbe(
   form: RouteForm,
   localPrefix: string,
   model: string | undefined,
   content: string,
-): { url: string; body: Record<string, unknown>; headers: Record<string, string> } {
+): { path: string; body: Record<string, unknown>; headers: Record<string, string> } {
   const headers: Record<string, string> = { "content-type": "application/json" };
   switch (form) {
     case "openai-chat":
       return {
-        url: `http://127.0.0.1:${port}${localPrefix}/chat/completions`,
+        path: `${localPrefix}/chat/completions`,
         headers,
         body: {
           ...(model !== undefined ? { model } : {}),
@@ -59,13 +63,13 @@ function formRequest(
       };
     case "openai-responses":
       return {
-        url: `http://127.0.0.1:${port}${localPrefix}/responses`,
+        path: `${localPrefix}/responses`,
         headers,
         body: { ...(model !== undefined ? { model } : {}), input: content },
       };
     case "anthropic":
       return {
-        url: `http://127.0.0.1:${port}${localPrefix.replace(/\/v\d+$/, "")}/v1/messages`,
+        path: `${localPrefix.replace(/\/v\d+$/, "")}/v1/messages`,
         headers: { ...headers, "anthropic-version": "2023-06-01" },
         body: {
           ...(model !== undefined ? { model } : {}),
@@ -74,6 +78,17 @@ function formRequest(
         },
       };
   }
+}
+
+function formRequest(
+  port: number,
+  form: RouteForm,
+  localPrefix: string,
+  model: string | undefined,
+  content: string,
+): { url: string; body: Record<string, unknown>; headers: Record<string, string> } {
+  const probe = formProbe(form, localPrefix, model, content);
+  return { url: `http://127.0.0.1:${port}${probe.path}`, body: probe.body, headers: probe.headers };
 }
 
 export async function testLocalService(input: LocalTestInput): Promise<LocalTestResult> {

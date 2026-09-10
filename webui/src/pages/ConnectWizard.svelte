@@ -18,6 +18,7 @@
   import StepHeader from "../components/StepHeader.svelte";
   import ErrorAlert from "../components/ErrorAlert.svelte";
   import CopyField from "../components/CopyField.svelte";
+  import ServiceTestCard from "../components/ServiceTestCard.svelte";
   import { connection } from "../stores/rpc.svelte.ts";
   import {
     connectW,
@@ -32,10 +33,7 @@
     finishConnect,
     sendTest,
     setTestService,
-    setTestProtocol,
-    PROTOCOL_OPTIONS,
     dialGuidance,
-    type RouteTestOutput,
   } from "../stores/connect-wizard.svelte.ts";
 
   onMount(() =>
@@ -57,7 +55,7 @@
     connectW.applyError !== null ? dialGuidance(connectW.applyError) : null,
   );
 
-  /** ③ 换服务：端点重置 + 结果清空 + 端口对账。 */
+  /** ③ 换服务：结果清空 + 端口对账。 */
   function onServiceChange(value: string): void {
     setTestService(value);
     void refreshWizardPorts(); // auto-assign 端口快照可能滞后，切换即对账
@@ -69,34 +67,9 @@
   $effect(() => {
     serviceSel = connectW.testServiceId;
   });
-  let protocolSel = $state<string>(connectW.testProtocol);
-  $effect(() => {
-    protocolSel = connectW.testProtocol;
-  });
-  let endpointSel = $state(connectW.testEndpoint);
-  $effect(() => {
-    endpointSel = connectW.testEndpoint;
-  });
 
   function handleServiceChange(event: Event & { currentTarget: EventTarget & HTMLSelectElement }): void {
     onServiceChange(event.currentTarget.value);
-  }
-  function handleProtocolChange(event: Event & { currentTarget: EventTarget & HTMLSelectElement }): void {
-    const found = PROTOCOL_OPTIONS.find((option) => option.value === event.currentTarget.value);
-    if (found !== undefined) setTestProtocol(found.value);
-  }
-  function handleEndpointChange(event: Event & { currentTarget: EventTarget & HTMLSelectElement }): void {
-    connectW.testEndpoint = event.currentTarget.value;
-    connectW.testResult = null; // 换端点即换目标：旧结果失效
-  }
-  function handlePromptChange(event: Event & { currentTarget: EventTarget & HTMLInputElement }): void {
-    connectW.testPrompt = event.currentTarget.value;
-  }
-  function handlePromptKeydown(event: KeyboardEvent & { currentTarget: EventTarget & HTMLInputElement }): void {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void sendTest();
-    }
   }
 
   const serviceOptions = $derived(
@@ -110,49 +83,6 @@
         })
       : [],
   );
-
-  // ---------------------------------------------------------------------------
-  // ③ 端点选项（M3-r8：中性表达——本地前缀 + 「→ upstream 目标」注记，
-  // 不出现 API 标准名；仅 prefix 模式规则有稳定端点面，legacy 服务退根透传）
-  // ---------------------------------------------------------------------------
-
-  /** 选中服务的 detail.upstream（端点标签的转发目标注记）。 */
-  const selectedUpstream = $derived(connectW.serviceUpstream[connectW.testServiceId] ?? null);
-  const endpointOptions = $derived.by(() => {
-    const routes = connectW.serviceRoutes[connectW.testServiceId] ?? [];
-    const prefixRoutes = routes.filter((r) => r.mode !== "pattern" && (r.localPrefix ?? "") !== "");
-    const options = prefixRoutes.map((route) => {
-      const local = route.localPrefix!;
-      const target =
-        selectedUpstream === null
-          ? ""
-          : ` → ${selectedUpstream.replace(/\/+$/, "")}${route.upstreamPrefix ?? ""}/*`;
-      return { value: local, label: `${local}${target}` };
-    });
-    if (options.length === 0) {
-      options.push({ value: "", label: "root (passthrough)" });
-    }
-    return options;
-  });
-
-  /** 长 URL 展示：≤64 原样；超长保留首尾、中间省略（结果区块风格对齐 TestConnection）。 */
-  function shortenUrl(url: string, max = 64): string {
-    if (url.length <= max) return url;
-    const head = url.slice(0, Math.ceil((max - 1) / 2));
-    const tail = url.slice(-Math.floor((max - 1) / 2));
-    return `${head}...${tail}`;
-  }
-
-  /** 失败摘要：error 与 bodyExcerpt 择短展示（全宽 11px）。 */
-  function failureExcerpt(result: RouteTestOutput): string | null {
-    const candidates = [result.error, result.bodyExcerpt].filter(
-      (value): value is string => value !== undefined && value !== "",
-    );
-    if (candidates.length === 0) return null;
-    return candidates.reduce((shortest, current) =>
-      current.length < shortest.length ? current : shortest,
-    );
-  }
 </script>
 
 <div class="mx-auto flex max-w-3xl flex-col gap-4 p-4 md:p-6">
@@ -341,81 +271,28 @@
     <ErrorAlert error={connectW.applyError ?? connectW.portError} />
 
   <!-- ③ test（M3-r8 Owner 裁决：agent setup 步不该存在——本步 = 选协议、
-       选端点、单输入框发真实 AI 请求；不写任何 agent 配置） -->
+       选端点、单输入框发真实 AI 请求；不写任何 agent 配置。协议/端点/输入框
+       在共享 ServiceTestCard（Advanced services 行内同形）） -->
   {:else}
     <Card title="test" scroll={false}>
       <div class="flex flex-col gap-3 p-3">
-        <div class="grid gap-3 sm:grid-cols-3">
-          {#if serviceOptions.length > 1}
-            <NativeSelect label="service" bind:value={serviceSel} onchange={handleServiceChange}>
-              {#each serviceOptions as option (option.value)}
-                <option value={option.value}>{option.label}</option>
-              {/each}
-            </NativeSelect>
-          {/if}
-          <NativeSelect label="protocol" bind:value={protocolSel} onchange={handleProtocolChange}>
-            {#each PROTOCOL_OPTIONS as option (option.value)}
+        {#if serviceOptions.length > 1}
+          <NativeSelect label="service" bind:value={serviceSel} onchange={handleServiceChange}>
+            {#each serviceOptions as option (option.value)}
               <option value={option.value}>{option.label}</option>
             {/each}
           </NativeSelect>
-          <NativeSelect label="endpoint" bind:value={endpointSel} onchange={handleEndpointChange}>
-            {#each endpointOptions as option (option.value)}
-              <option value={option.value}>{option.label}</option>
-            {/each}
-          </NativeSelect>
-        </div>
-
-        <!-- 单轮聊天面板：一个输入框（默认 hi）+ 发送 -->
-        <div class="flex flex-col gap-2 border border-border/70 p-3">
-          <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-            send a request
-          </span>
-          <div class="flex flex-wrap items-center gap-2">
-            <div class="min-w-48 flex-1">
-              <Input
-                placeholder="hi"
-                value={connectW.testPrompt}
-                onchange={handlePromptChange}
-                onkeydown={handlePromptKeydown}
-              />
-            </div>
-            <PressButton
-              variant="fill"
-              loading={connectW.testBusy}
-              class={connectW.testServiceId === "" ? "pointer-events-none opacity-50" : undefined}
-              onclick={() => void sendTest()}
-            >send</PressButton>
-          </div>
-          <p class="text-[11px] text-muted-foreground">
-            single-turn only - one request, one response. the model is picked automatically.
-          </p>
-        </div>
-
-        <!-- 结果面板 -->
-        {#if connectW.testResult !== null}
-          <div class="flex flex-col gap-1.5 border border-border/70 p-3" transition:slide={{ duration: 150 }}>
-            <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-              response
-            </span>
-            {#if connectW.testResult.ok}
-              <p class="font-mono text-[11px] text-[color:var(--success)]">
-                ok {connectW.testResult.latencyMs}ms{connectW.testResult.httpStatus !== undefined ? ` (HTTP ${connectW.testResult.httpStatus})` : ""}
-              </p>
-            {:else}
-              <p class="text-[11px] leading-relaxed text-[color:var(--warning)]">
-                failed{connectW.testResult.httpStatus !== undefined ? ` (HTTP ${connectW.testResult.httpStatus})` : ""}{failureExcerpt(connectW.testResult) !== null ? `: ${failureExcerpt(connectW.testResult)}` : ""}
-              </p>
-            {/if}
-            {#if connectW.testResult.request.url !== ""}
-              <p class="break-all font-mono text-[11px] text-muted-foreground">
-                POST {shortenUrl(connectW.testResult.request.url, 96)}
-              </p>
-            {/if}
-            {#if connectW.testResult.bodyExcerpt !== undefined && connectW.testResult.bodyExcerpt !== ""}
-              <pre class="max-h-64 overflow-auto whitespace-pre-wrap break-all border border-border bg-muted/40 p-3 text-xs">{connectW.testResult.bodyExcerpt}</pre>
-            {/if}
-          </div>
         {/if}
+        {#key connectW.testServiceId}
+          <ServiceTestCard
+            routes={connectW.serviceRoutes[connectW.testServiceId] ?? []}
+            upstream={connectW.serviceUpstream[connectW.testServiceId] ?? null}
+            busy={connectW.testBusy}
+            result={connectW.testResult}
+            disabled={connectW.testServiceId === ""}
+            onsend={(payload) => void sendTest(payload)}
+          />
+        {/key}
       </div>
       {#snippet foot()}
         <CardFooter label="connect wizard actions">
