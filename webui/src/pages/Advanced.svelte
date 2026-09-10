@@ -822,12 +822,12 @@
             </p>
             <textarea
               class="min-h-24 border border-border bg-transparent p-2.5 font-mono text-xs focus:border-primary focus:outline-none"
-              placeholder="wss://relay.example.com"
+              placeholder="https://relay.example.com"
               spellcheck="false"
               bind:value={relayForm.text}
               disabled={relayForm.busy}
             ></textarea>
-            <p class="text-[11px] text-muted-foreground">one wss:// URL per line, at most 8.</p>
+            <p class="text-[11px] text-muted-foreground">one http(s):// URL per line, at most 8.</p>
             {#if relayForm.savedTick > 0}
               <p class="text-[11px] text-primary" transition:slide={{ duration: 150 }}>saved.</p>
             {/if}

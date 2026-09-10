@@ -395,8 +395,10 @@ export async function saveRelay(): Promise<void> {
     relayForm.error = { code: "INVALID_INPUT", message: "at most 8 relay URLs" };
     return;
   }
-  if (lines.some((line) => !/^wss?:\/\//.test(line))) {
-    relayForm.error = { code: "INVALID_INPUT", message: "relay URLs must start with ws:// or wss://" };
+  // relay URL scheme = http(s)（与 iroh RelayMap 同规；dweb-server 对非 http(s)
+  // 条目按禁用处理并 WARNING——wss:// 是历史误植，此处一并纠正）
+  if (lines.some((line) => !/^https?:\/\//.test(line))) {
+    relayForm.error = { code: "INVALID_INPUT", message: "relay URLs must start with http:// or https://" };
     return;
   }
   relayForm.busy = true;
