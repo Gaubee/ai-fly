@@ -16,6 +16,9 @@
   import { rpcState } from "./stores/rpc.svelte.ts";
   import { startApp } from "./stores/app.svelte.ts";
   import { toast } from "./stores/toast.svelte.ts";
+  // app 图标：直接引仓库 resources/icon.svg（app:icons 同一源，vite asset
+  // import 走 fs.allow 工作区；build 期拷入 dist/assets，零手工同步）
+  import iconUrl from "../../resources/icon.svg";
   import Dashboard from "./pages/Dashboard.svelte";
   import ShareWizard from "./pages/ShareWizard.svelte";
   import ConnectWizard from "./pages/ConnectWizard.svelte";
@@ -55,7 +58,8 @@
     style="min-height: max(var(--ot-inset-top, 0px), 44px); padding-inline-start: calc(var(--ot-inset-left, 0px) + 0.75rem); padding-inline-end: calc(var(--ot-inset-right, 0px) + 0.75rem)"
     onpointerdown={onHeaderPointerDown}
   >
-    <div class="flex min-w-0 items-baseline gap-2">
+    <div class="flex min-w-0 items-center gap-2">
+      <img src={iconUrl} alt="" class="size-[22px] flex-none" />
       <span class="flex-none font-nav text-sm leading-none tracking-[0.08em]">ai-fly</span>
       <span class="truncate text-[10px] leading-none text-muted-foreground">share services, simply</span>
     </div>
