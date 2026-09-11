@@ -32,7 +32,9 @@
 
 ## C. 质量与发布
 
-- [ ] 11. 单测：daemon-state / relay / settings / secret（tmp 目录）；
+- [~] 11. 单测：daemon-state / relay / settings / secret（tmp 目录）；
+       （Owner 裁决 2026-09-12：随 0.3.0 latest 归档本 change，本项迁后续
+       change 补齐——实机三机走查已作替代验证）
        集成：daemon start --detach → info → stop 回路
        （替代验证已完成：tsx 沙盒 + 三机发布产物实机走查全绿；正式 vitest
        单测仍待补。附带加固：upstream SSE 分块断言改事件序判据，消除
