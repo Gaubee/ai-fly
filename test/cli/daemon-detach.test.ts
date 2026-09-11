@@ -10,6 +10,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
+// SDK 原生模块仅发布 darwin/win32（dweb.darwin-arm64.node / dweb.win32-x64.node）；
+// Linux CI 上 daemon start 加载 fabric 即崩——进程级回路只在有原生面的平台跑，
+// Linux 由其余 519 例覆盖。SDK 发布 linux 目标后放开此处。
+
 const repoRoot = join(fileURLToPath(import.meta.url), "..", "..", "..");
 const bin = join(repoRoot, "src", "bin.ts");
 const homes: string[] = [];
@@ -34,7 +38,9 @@ afterEach(() => {
   for (const h of homes.splice(0)) rmSync(h, { recursive: true, force: true });
 });
 
-describe("daemon --detach 回路（进程级）", () => {
+const describeNative = process.platform === "darwin" || process.platform === "win32" ? describe : describe.skip;
+
+describeNative("daemon --detach 回路（进程级）", () => {
   it(
     "start --detach → info(running) → log(早期输出) → stop → info(not running)",
     { timeout: 120_000 },
