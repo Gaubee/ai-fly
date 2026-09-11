@@ -201,6 +201,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      jixoai-ui:
+        specifier: 0.4.0
+        version: 0.4.0
       shadcn:
         specifier: 4.19.0
         version: 4.19.0(typescript@5.9.3)
@@ -2043,6 +2046,11 @@ packages:
 
   jiti@2.7.0:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
+    hasBin: true
+
+  jixoai-ui@0.4.0:
+    resolution: {integrity: sha512-QeE5WbptRqAse9OJLbm0S9vgorRAlueIP5wR6tSPBpYq4ayJtMBINNYhLszu57pZomysnWecLDuoUBGwKECCTA==}
+    engines: {node: '>=20'}
     hasBin: true
 
   jose@6.2.12:
@@ -4573,6 +4581,8 @@ snapshots:
   isexe@3.1.5: {}
 
   jiti@2.7.0: {}
+
+  jixoai-ui@0.4.0: {}
 
   jose@6.2.12: {}
 
