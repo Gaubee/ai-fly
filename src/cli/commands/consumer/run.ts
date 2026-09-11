@@ -33,6 +33,10 @@ export async function run(argv: readonly string[], ctx: CommandContext = {}): Pr
     throw new CliError("error: no imported providers - run 'ai-fly import <aifly1-link>' or 'ai-fly join <token>' first");
   }
   const factory = await createSdkFabricFactory(options.relay as string[] | undefined, ctx);
+  out(
+    `gateway starting - booting fabric for ${engineRings.length} provider ring(s)` +
+      " (unreachable relays can stall this ~30s; Ctrl+C to abort)...",
+  );
   const engine = await startEngine({
     rings: engineRings,
     consumersRoot: root,

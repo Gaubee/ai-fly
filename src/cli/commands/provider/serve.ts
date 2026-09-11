@@ -23,7 +23,17 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
       throw new UsageError(`error: unexpected argument '${positionals[0]}' (serve takes no positional arguments)`);
     }
     const dataDir = resolveDataDir(str(options.data), home);
-    const relayUrls = resolvedRelayUrls(options, home);
+    const relayUrls = resolvedRelayUrls(options, home) ?? [];
+    // 早期状态：fabric boot（relay 接入）可能耗时数十秒——不可达时不能伪装死
+    process.stdout.write(
+      [
+        "ai-fly daemon starting",
+        `  relay: ${relayUrls.length > 0 ? relayUrls.join(", ") : "n0 public relays (default)"}`,
+        `  data : ${dataDir}`,
+        "booting fabric (unreachable relays can stall this ~30s; Ctrl+C to abort)...",
+        "",
+      ].join("\n"),
+    );
     const daemon = await startProviderDaemon({
       dataDir,
       relayUrls,
