@@ -73,6 +73,9 @@ export function resolveRelayUrls(input: {
   /** 链接内嵌 relay 入口（import 命令传入；空数组视为缺席）。 */
   link?: readonly string[];
   env?: string | undefined;
+  /** ~/.aifly/settings.json 的 relayUrls（cli-parity B3：GUI RelayPickerDialog
+   *  同源——app 与 CLI 的持久 relay 落点统一到这一层）。 */
+  settings?: readonly string[] | null | undefined;
   file?: ConfigFile;
 }): string[] | undefined {
   const fromFlag = input.flag?.filter((u) => u.length > 0);
@@ -84,6 +87,8 @@ export function resolveRelayUrls(input: {
     const urls = envRaw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
     if (urls.length > 0) return urls;
   }
+  const fromSettings = input.settings?.filter((u) => u.length > 0);
+  if (fromSettings && fromSettings.length > 0) return [...fromSettings];
   const fromFile = input.file?.relayUrls;
   if (fromFile && fromFile.length > 0) return [...fromFile];
   return undefined;

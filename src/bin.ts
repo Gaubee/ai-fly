@@ -14,27 +14,46 @@ type RunFn = (argv: string[], ctx?: { homedir?: string }) => Promise<number>;
 
 const USAGE = `ai-fly — peer-to-peer HTTP/WebSocket bridge with AI-ready presets (OpenDWeb fabric)
 
+Daemon:
+  ai-fly                       run the provider daemon (foreground; Ctrl+C stops)
+  ai-fly daemon start [--detach] [--data <dir>] [--relay <url>]...
+  ai-fly daemon stop [--force] | info | restart [--detach] | log [--lines <n>]
+  ai-fly serve                 alias of 'daemon start'
+
 Provider:
-  ai-fly serve    [--data <dir>] [--relay <url>]...        run the provider daemon
-  ai-fly service  add|list|remove ...                      manage services
-  ai-fly group    add|set-services|list ...                  manage groups
-  ai-fly key      issue|list|revoke --group <name>         manage group keys
-  ai-fly share    --group <name> [--ttl <dur>]             mint a share link (token + key)
-  ai-fly revoke   <endpointId>                             eject a device (fabric-level)
-  ai-fly status   [provider|consumer] [--verbose]          snapshot (auto: both if present)
+  ai-fly service add <name> [--upstream <url> | --preset <id>] [--route <local>=<up>[@forms]]...
+                               [--route-pattern <match>=<template>]... [--secret <name>]
+                               [--port <n>] [--match <type>:<value>]... [--data <dir>]
+  ai-fly service list|get|remove <name> [--data <dir>]
+  ai-fly service test <name> [--form …] [--content <text>] [--model <id>] [--local-prefix /v1]
+  ai-fly group add|set-services|set-limits|list|remove ...
+  ai-fly key issue|list|revoke --group <name>
+  ai-fly secret set|list|remove ...                     (values never leave the store - no get)
+  ai-fly share --group <name> [--ttl <dur>]             mint a share link (token + key)
+  ai-fly revoke <endpointId>                            eject a device (fabric-level)
+  ai-fly presets [search] [--json]                      featured + models.dev long tail
 
 Consumer:
-  ai-fly join     <dweb1-token> [--data <dir>]             admit this device (fabric layer)
-  ai-fly key      add <sk-aifly-key> --provider <id>       bare key into an existing ring
-  ai-fly import   <aifly1-link> [--run] [--preview]        bundle link: join + keyring
-  ai-fly run      [--data <dir>] [--strict-ports]          run the local gateway
-  ai-fly ports    [--data <dir>] [<serviceId> --port <n>]  view/override mapped ports
-  ai-fly status   [provider|consumer] [--verbose]          snapshot (auto: both if present)
-  ai-fly forget   <endpointId|8-char-prefix>               drop an imported provider
+  ai-fly join <dweb1-token> [--data <dir>]              admit this device (fabric layer)
+  ai-fly import <aifly1-link> [--run] [--preview]       bundle link: join + keyring
+  ai-fly run [--data <dir>] [--strict-ports]            run the local gateway
+  ai-fly ports [--data <dir>] [<serviceId> --port <n>]  view/override mapped ports
+  ai-fly test [--data <dir>] [--service <name>] [--form …] [--content <text>]
+                               single AI request through the local gateway
+  ai-fly key add <sk-aifly-key> --provider <id>         bare key into an existing ring
+  ai-fly forget <endpointId|8-char-prefix>              drop an imported provider
+
+Config:
+  ai-fly settings list
+  ai-fly settings set theme dark|light|system | models-dev on|off | relay <url>... | relay --default
+  ai-fly relay list|set ...                             alias of 'settings … relay'
+
+Info:
+  ai-fly status [provider|consumer] [--verbose]         snapshot (auto: both if present)
 
 Options:
   --data <dir>    storage location (tilde expanded; role-specific default)
-  --relay <url>   relay entry URL (repeatable; flag > AIFLY_RELAY env > ~/.aifly/config.json)
+  --relay <url>   relay entry URL (repeatable; flag > AIFLY_RELAY env > settings.json > ~/.aifly/config.json)
   --help, -h      show this help`;
 
 async function dispatch(command: string, rest: string[]): Promise<number> {
@@ -53,6 +72,12 @@ async function dispatch(command: string, rest: string[]): Promise<number> {
 
   return match<string, Promise<number>>(command)
     .with("serve", () => lazy(() => import("./cli/commands/provider/serve.ts"))(rest))
+    .with("daemon", () => lazy(() => import("./cli/commands/provider/daemon.ts"))(rest))
+    .with("presets", () => lazy(() => import("./cli/commands/provider/presets.ts"))(rest))
+    .with("secret", () => lazy(() => import("./cli/commands/provider/secret.ts"))(rest))
+    .with("settings", async () => (await import("./cli/commands/settings.ts")).runAsSettings(rest, {}))
+    .with("relay", async () => (await import("./cli/commands/settings.ts")).runAsRelay(rest, {}))
+    .with("test", () => lazy(() => import("./cli/commands/consumer/test.ts"))(rest))
     .with("service", () => lazy(() => import("./cli/commands/provider/service.ts"))(rest))
     .with("group", () => lazy(() => import("./cli/commands/provider/group.ts"))(rest))
     .with("share", () => lazy(() => import("./cli/commands/provider/share.ts"))(rest))
@@ -94,12 +119,24 @@ async function dispatch(command: string, rest: string[]): Promise<number> {
 
 async function main(argv: readonly string[]): Promise<number> {
   const first = argv[0];
-  if (first === undefined || first === "--help" || first === "-h") {
+  if (first === "--help" || first === "-h") {
     process.stdout.write(`${USAGE}\n`);
-    return first === undefined ? 2 : 0;
+    return 0;
+  }
+  // Owner 标准（2026-09-12）：裸 `ai-fly` ≡ `ai-fly daemon start`
+  if (first === undefined) {
+    return dispatch("daemon", []);
   }
   return dispatch(first, argv.slice(1));
 }
+
+// 管道截断（| head）会让后续 write 收 EPIPE——CLI 正常用法，静默退出
+process.stdout?.on?.("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EPIPE") process.exit(0);
+});
+process.stderr?.on?.("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EPIPE") process.exit(0);
+});
 
 try {
   const code = await main(process.argv.slice(2));

@@ -9,6 +9,7 @@ import { loadConfig, resolveRelayUrls } from "../../config.ts";
 import type { FabricFactory, FabricLike } from "../../../consumer/providers.ts";
 import type { Keyring } from "../../../consumer/store.ts";
 import { loadSdk } from "../../../sdk.ts";
+import { loadSettings } from "../../../app/settings.ts";
 
 export interface CommandContext {
   /** 测试注入的 HOME 替代（默认 os.homedir()）。 */
@@ -44,6 +45,12 @@ export async function createSdkFabricFactory(
   linkRelayUrls?: readonly string[],
 ): Promise<FabricFactory> {
   const sdk = await loadSdk();
+  let relaySettings: readonly string[] | null = null;
+  try {
+    relaySettings = loadSettings(ctxHomedir(ctx)).relayUrls;
+  } catch {
+    // settings 不可读——该层缺席
+  }
   const toOpts = (opts: { dataDir: string; relayUrls?: string[] }): FabricOptions => {
     const fabricOpts: FabricOptions = { dataDir: opts.dataDir };
     const link = opts.relayUrls ?? linkRelayUrls;
@@ -51,6 +58,7 @@ export async function createSdkFabricFactory(
       ...(relayFlag !== undefined ? { flag: relayFlag } : {}),
       ...(link !== undefined ? { link } : {}),
       env: process.env.AIFLY_RELAY,
+      settings: relaySettings,
       file: loadConfig(ctxHomedir(ctx)),
     });
     if (urls !== undefined && urls.length > 0) {

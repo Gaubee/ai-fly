@@ -11,11 +11,13 @@ const SPEC = {
   service: { type: "multi" },
   "max-concurrency": { type: "string" },
   "daily-requests": { type: "string" },
+  unlimited: { type: "boolean" },
 } as const;
 
 const USAGE = `usage:
   ai-fly group add <name> [--service <serviceName>]... [--max-concurrency <n>] [--daily-requests <n>] [--data <dir>]
   ai-fly group set-services <name> [--service <serviceName>]... [--data <dir>]
+  ai-fly group set-limits <name> [--max-concurrency <n>] [--daily-requests <n>] [--unlimited] [--data <dir>]
   ai-fly group remove <name> [--data <dir>]
   ai-fly group list [--data <dir>]`;
 
@@ -26,10 +28,11 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
     const sub = positionals[0];
     if (sub === "add") return add(options, positionals, home);
     if (sub === "set-services") return setServices(options, positionals, home);
+    if (sub === "set-limits") return setLimits(options, positionals, home);
     if (sub === "remove") return remove(options, positionals, home);
     if (sub === "list") return list(options, home);
     if (sub === undefined) throw new UsageError(USAGE);
-    throw new UsageError(`error: unknown group subcommand '${sub}' (known: add, set-services, remove, list)`);
+    throw new UsageError(`error: unknown group subcommand '${sub}' (known: add, set-services, set-limits, remove, list)`);
   } catch (err) {
     return reportCliError(err);
   }
@@ -59,6 +62,33 @@ function add(options: Readonly<Record<string, OptionValue>>, positionals: readon
       "",
     ].join("\n"),
   );
+  return 0;
+}
+
+function setLimits(options: Readonly<Record<string, OptionValue>>, positionals: readonly string[], home: string): number {
+  const name = positionals[1];
+  if (name === undefined) throw new UsageError("error: group set-limits requires a <name> argument");
+  const store = openStore(resolveDataDir(str(options.data), home));
+  if (store.listGroups().every((g) => g.name !== name)) {
+    throw new UsageError(`error: group '${name}' not found`);
+  }
+  const maxConcurrency =
+    options["max-concurrency"] === undefined ? undefined : parsePositiveInt(str(options["max-concurrency"])!, "max-concurrency");
+  const dailyRequests =
+    options["daily-requests"] === undefined ? undefined : parsePositiveInt(str(options["daily-requests"])!, "daily-requests");
+  if (options.unlimited === true && (maxConcurrency !== undefined || dailyRequests !== undefined)) {
+    throw new UsageError("error: --unlimited cannot combine with --max-concurrency/--daily-requests");
+  }
+  const limits =
+    options.unlimited === true || (maxConcurrency === undefined && dailyRequests === undefined)
+      ? undefined
+      : { ...(maxConcurrency !== undefined ? { maxConcurrency } : {}), ...(dailyRequests !== undefined ? { dailyRequests } : {}) };
+  const group = store.setGroupLimits(name, limits);
+  const summary =
+    group.limits === undefined
+      ? "unlimited"
+      : `max-concurrency ${group.limits.maxConcurrency ?? "-"}, daily-requests ${group.limits.dailyRequests ?? "-"}`;
+  process.stdout.write(`group limits: ${name} -> ${summary}\n`);
   return 0;
 }
 

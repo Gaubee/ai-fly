@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { UsageError } from "../../errors.ts";
 import type { OptionValue } from "../../args.ts";
 import { loadConfig, resolveRelayUrls } from "../../config.ts";
+import { loadSettings } from "../../../app/settings.ts";
 import type { ConfigFile } from "../../config.ts";
 import { ProviderStore } from "../../../provider/store.ts";
 import type { ServiceMatchRule, ServiceRewrite } from "../../../provider/store.ts";
@@ -20,7 +21,12 @@ export function resolvedRelayUrls(
   options: Readonly<Record<string, OptionValue>>,
   home: string,
 ): string[] | undefined {
-  const input: { flag?: readonly string[]; env?: string | undefined; file?: ConfigFile } = {};
+  const input: { flag?: readonly string[]; env?: string | undefined; settings?: readonly string[] | null; file?: ConfigFile } = {};
+  try {
+    input.settings = loadSettings(home).relayUrls;
+  } catch {
+    // settings 不可读（损坏等）——该层缺席，链路继续
+  }
   if (Array.isArray(options.relay)) input.flag = options.relay as readonly string[];
   const env = process.env.AIFLY_RELAY;
   if (env !== undefined) input.env = env;
