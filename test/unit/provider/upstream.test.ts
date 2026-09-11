@@ -225,21 +225,44 @@ describe("响应透传", () => {
     expect(of(h.consumerEvents, FRAME_TYPE.ERROR, "r4")).toHaveLength(0);
   });
 
-  it("流式逐块：SSE 三事件块按序到达，不为拼齐缓冲", async () => {
+  it("流式逐块：SSE 事件增量到达，不为拼齐缓冲", async () => {
+    // 满载事件循环下读端可能把相邻两次 write 合成一个分片（合法的到达粒度
+    // 语义），判据因此取「序」而非「数」：首分片必须先于上游 res.end 抵达
+    // 消费端（拼齐缓冲只会把正文积压到流结束后一次发出）。60ms 间隔为
+    // 调度抖动留余量；帧经 onFrame 同步入列，事件序判据对负载免疫。
+    const events: string[] = [];
     const upstream = await startUpstream((_req, res) => {
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.write("data: 1\n\n");
-      // 间隔写入确保独立分片到达（读端按到达粒度转发，不缓冲拼齐）
-      setTimeout(() => res.write("data: 2\n\n"), 20);
-      setTimeout(() => res.end("data: 3\n\n"), 40);
+      setTimeout(() => res.write("data: 2\n\n"), 60);
+      setTimeout(() => {
+        events.push("end");
+        res.end("data: 3\n\n");
+      }, 120);
     });
     const h = makeHarness();
+    const origPush = h.consumerEvents.push.bind(h.consumerEvents);
+    h.consumerEvents.push = (...frames: InboundFrame[]) => {
+      for (const f of frames) {
+        if (f.type === FRAME_TYPE.RESP_CHUNK && (f.header as { id?: string }).id === "r5") {
+          events.push(`chunk:${bodyOf(f).toString()}`);
+        }
+      }
+      return origPush(...frames);
+    };
     const fh = forward(h, makeService(upstream.port), makeReq("r5"));
     await fh.done;
     const chunks = of(h.consumerEvents, FRAME_TYPE.RESP_CHUNK, "r5");
-    expect(chunks.map((c) => bodyOf(c).toString())).toEqual(["data: 1\n\n", "data: 2\n\n", "data: 3\n\n"]);
-    expect((chunks[0]?.header as { seq: number }).seq).toBe(0);
-    expect((chunks[1]?.header as { seq: number }).seq).toBe(1);
+    // 反拼齐：仅含首个事件的首分片，在上游写 end 之前已转发
+    expect(events.indexOf("chunk:data: 1\n\n")).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf("chunk:data: 1\n\n")).toBeLessThan(events.indexOf("end"));
+    // 增量性：不止一个分片；首分片独立（不与后续事件合并）
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    expect(bodyOf(chunks[0]!).toString()).toBe("data: 1\n\n");
+    // 完整性与按序：拼接 == 全正文，seq 严格递增
+    expect(Buffer.concat(chunks.map((c) => bodyOf(c))).toString()).toBe("data: 1\n\ndata: 2\n\ndata: 3\n\n");
+    const seqs = chunks.map((c) => (c.header as { seq: number }).seq);
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
   });
 });
 
