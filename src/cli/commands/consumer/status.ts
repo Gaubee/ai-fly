@@ -74,7 +74,12 @@ function formatDetail(svc: ServiceEntry): string[] {
 export async function run(argv: readonly string[], ctx: CommandContext = {}): Promise<number> {
   const { options, positionals } = parseArgv(
     argv,
-    { data: { type: "string", tilde: true }, verbose: { type: "boolean" }, relay: { type: "multi" } },
+    {
+      data: { type: "string", tilde: true },
+      verbose: { type: "boolean" },
+      relay: { type: "multi" },
+      proxy: { type: "string" },
+    },
     { homedir: ctx.homedir ?? homedir() },
   );
   const verbose = options.verbose === true || positionals.includes("-v");
@@ -88,7 +93,12 @@ export async function run(argv: readonly string[], ctx: CommandContext = {}): Pr
     return 0;
   }
   // 短暂启动引擎取实时状态（含路径类型与请求计数），等待各提供者到达观测终态
-  const factory = await createSdkFabricFactory(options.relay as string[] | undefined, ctx);
+  const factory = await createSdkFabricFactory(
+      options.relay as string[] | undefined,
+      ctx,
+      undefined,
+      options.proxy as string | undefined,
+    );
   const engine = await startEngine({
     rings: engineRings,
     consumersRoot: root,

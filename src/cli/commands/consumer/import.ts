@@ -29,6 +29,7 @@ export async function run(argv: readonly string[], ctx: CommandContext = {}): Pr
       run: { type: "boolean" },
       "strict-ports": { type: "boolean" },
       relay: { type: "multi" },
+      proxy: { type: "string" },
     },
     { homedir: ctx.homedir ?? homedir() },
   );
@@ -60,7 +61,7 @@ export async function run(argv: readonly string[], ctx: CommandContext = {}): Pr
   } else if (linkRelays.length > 0) {
     out(`relay: using ${linkRelays.length} entry URL(s) from the share link (override with --relay)`);
   }
-  const factory = await createSdkFabricFactory(flagRelays, ctx, linkRelays);
+  const factory = await createSdkFabricFactory(flagRelays, ctx, linkRelays, options.proxy as string | undefined);
   const result = await importLink(link, { consumersRoot: root, fabric: factory });
   out(result.redeemed ? "invite redeemed - fabric identity created" : "existing fabric identity reused - invite not consumed");
   for (const line of formatKeyringSummary(result.ring)) out(line);

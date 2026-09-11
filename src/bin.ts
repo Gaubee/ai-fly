@@ -16,7 +16,7 @@ const USAGE = `ai-fly — peer-to-peer HTTP/WebSocket bridge with AI-ready prese
 
 Daemon:
   ai-fly                       run the provider daemon (foreground; Ctrl+C stops)
-  ai-fly daemon start [--detach] [--data <dir>] [--relay <url>]...
+  ai-fly daemon start [--detach] [--data <dir>] [--relay <url>]... [--proxy <url|env|none>]
   ai-fly daemon stop [--force] | info | restart [--detach] | log [--lines <n>]
   ai-fly serve                 alias of 'daemon start'
 
@@ -34,9 +34,9 @@ Provider:
   ai-fly presets [search] [--json]                      featured + models.dev long tail
 
 Consumer:
-  ai-fly join <dweb1-token> [--data <dir>]              admit this device (fabric layer)
-  ai-fly import <aifly1-link> [--run] [--preview]       bundle link: join + keyring
-  ai-fly run [--data <dir>] [--strict-ports]            run the local gateway
+  ai-fly join <dweb1-token> [--data <dir>] [--proxy …]  admit this device (fabric layer)
+  ai-fly import <aifly1-link> [--run] [--preview] [--proxy …]  bundle link: join + keyring
+  ai-fly run [--data <dir>] [--strict-ports] [--proxy …]      run the local gateway
   ai-fly ports [--data <dir>] [<serviceId> --port <n>]  view/override mapped ports
   ai-fly test [--data <dir>] [--service <name>] [--form …] [--content <text>]
                                single AI request through the local gateway

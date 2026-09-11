@@ -10,7 +10,7 @@
 import { existsSync, readdirSync, watch as fsWatch, type FSWatcher } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Fabric, FabricOptions } from "@jixo/opendweb-client-sdk";
+import type { Fabric, FabricOptions, HttpProxyOptions } from "@jixo/opendweb-client-sdk";
 import { ProviderStore } from "./store.ts";
 import type { ServiceConfig } from "./store.ts";
 import { LimitEnforcer } from "./limits.ts";
@@ -26,10 +26,17 @@ export function providerFabricDir(dataDir: string): string {
   return join(dataDir, "fabric");
 }
 
-function fabricOptions(dataDir: string, relayUrls: readonly string[] | undefined): FabricOptions {
+function fabricOptions(
+  dataDir: string,
+  relayUrls: readonly string[] | undefined,
+  httpProxy?: HttpProxyOptions,
+): FabricOptions {
   const opts: FabricOptions = { dataDir: providerFabricDir(dataDir) };
   if (relayUrls !== undefined && relayUrls.length > 0) {
     opts.relay = { mode: "custom", urls: [relayUrls[0]!, ...relayUrls.slice(1)] };
+  }
+  if (httpProxy !== undefined) {
+    opts.httpProxy = httpProxy;
   }
   return opts;
 }
@@ -45,9 +52,10 @@ function dirHasEntries(path: string): boolean {
 export async function openOrCreateFabric(
   dataDir: string,
   relayUrls?: readonly string[] | undefined,
+  httpProxy?: HttpProxyOptions,
 ): Promise<Fabric> {
   const { Fabric } = await loadSdk();
-  const opts = fabricOptions(dataDir, relayUrls);
+  const opts = fabricOptions(dataDir, relayUrls, httpProxy);
   const existed = dirHasEntries(providerFabricDir(dataDir));
   if (existed) {
     try {
@@ -75,12 +83,13 @@ export async function openOrCreateFabric(
 export async function openExistingFabric(
   dataDir: string,
   relayUrls?: readonly string[] | undefined,
+  httpProxy?: HttpProxyOptions,
 ): Promise<Fabric> {
   if (!dirHasEntries(providerFabricDir(dataDir))) {
     throw new Error(`error: no fabric identity under ${dataDir}; run 'ai-fly serve --data <dir>' first`);
   }
   const { Fabric } = await loadSdk();
-  return Fabric.open(fabricOptions(dataDir, relayUrls));
+  return Fabric.open(fabricOptions(dataDir, relayUrls, httpProxy));
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +160,8 @@ export interface DaemonOptions extends ProviderEngineOptions {
   dataDir: string;
   /** 已解析的 relay 入口（flag > env > config；undefined = SDK 默认 n0）。 */
   relayUrls?: readonly string[] | undefined;
+  /** relay 控制面 HTTP 代理（--proxy 旗标 / AIFLY_PROXY env 解析产物）。 */
+  httpProxy?: HttpProxyOptions;
   /** 关闭文件 watcher（测试用）。 */
   watch?: boolean;
   /** $env 解析源（默认 process.env）。 */
@@ -181,7 +192,7 @@ export async function startProviderDaemon(opts: DaemonOptions): Promise<RunningD
   // resolve() 应用 bearerPrefix（默认拼 "Bearer "；Owner 裁决 2026-09-10）。
   const secretsStore = SecretsStore.open(opts.dataDir);
   const secrets = opts.secrets ?? ((name: string) => secretsStore.resolve(name)?.headerValue);
-  const fabric = await openOrCreateFabric(opts.dataDir, opts.relayUrls);
+  const fabric = await openOrCreateFabric(opts.dataDir, opts.relayUrls, opts.httpProxy);
   const engine = new ProviderEngine({
     fabric,
     store,

@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { assertDurationRange, parseArgv, parseDurationMs } from "../../args.ts";
 import { UsageError, CliError, reportCliError } from "../../errors.ts";
 import { openExistingFabric } from "../../../provider/serve.ts";
+import { resolveHttpProxy } from "../../proxy.ts";
 import {
   SHARE_LINK_SECRET_HINT,
   SHARE_TTL_DEFAULT_MS,
@@ -45,7 +46,7 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
         "warning: no relay configured for this command (flag/env/config); the link will carry public default relays - if the provider daemon runs on a custom relay, pass a matching --relay\n",
       );
     }
-    fabric = await openExistingFabric(dataDir, resolvedRelay);
+    fabric = await openExistingFabric(dataDir, resolvedRelay, resolveHttpProxy(undefined));
 
     const invite = await issueInvite(fabric, ttlMs, options["allow-relayless"] === true);
     const relayStatus = await fabric.relayStatus();

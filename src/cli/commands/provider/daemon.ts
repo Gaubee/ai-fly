@@ -35,15 +35,19 @@ const SPEC = {
   relay: { type: "multi" },
   alias: { type: "string" },
   "log-usage": { type: "boolean" },
+  proxy: { type: "string" },
   lines: { type: "string" },
 } as const;
 
 const USAGE = `usage:
-  ai-fly daemon start [--detach] [--data <dir>] [--relay <url>]...
+  ai-fly daemon start [--detach] [--data <dir>] [--relay <url>]... [--proxy <url|env|none>]
   ai-fly daemon stop [--force]
   ai-fly daemon info
-  ai-fly daemon restart [--detach] [--data <dir>] [--relay <url>]...
-  ai-fly daemon log [--lines <n>]`;
+  ai-fly daemon restart [--detach] [--data <dir>] [--relay <url>]... [--proxy <url|env|none>]
+  ai-fly daemon log [--lines <n>]
+
+--proxy: relay 控制面 HTTP 代理（QUIC 数据面永不过代理）；等价 env AIFLY_PROXY。
+         'env' = 读进程环境变量（HTTP_PROXY/HTTPS_PROXY）；'none' = 显式禁用。`;
 
 export async function run(argv: string[], ctx: { homedir?: string } = {}): Promise<number> {
   const home = ctx.homedir ?? homedir();

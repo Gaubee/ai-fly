@@ -5,6 +5,7 @@
 import { homedir } from "node:os";
 import { parseArgv } from "../../args.ts";
 import { UsageError, reportCliError } from "../../errors.ts";
+import { resolveHttpProxy } from "../../proxy.ts";
 import { startProviderDaemon } from "../../../provider/serve.ts";
 import { resolveDataDir, resolvedRelayUrls, str } from "./common.ts";
 
@@ -13,6 +14,7 @@ const SPEC = {
   relay: { type: "multi" },
   alias: { type: "string" },
   "log-usage": { type: "boolean" },
+  proxy: { type: "string" },
 } as const;
 
 export async function run(argv: string[], ctx: { homedir?: string } = {}): Promise<number> {
@@ -24,12 +26,14 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
     }
     const dataDir = resolveDataDir(str(options.data), home);
     const relayUrls = resolvedRelayUrls(options, home) ?? [];
+    const httpProxy = resolveHttpProxy(str(options.proxy));
     // 早期状态：fabric boot（relay 接入）可能耗时数十秒——不可达时不能伪装死
     process.stdout.write(
       [
         "ai-fly daemon starting",
         `  relay: ${relayUrls.length > 0 ? relayUrls.join(", ") : "n0 public relays (default)"}`,
         `  data : ${dataDir}`,
+        ...(httpProxy !== undefined ? [`  proxy: ${httpProxy === "from-env" ? "env" : httpProxy === "none" ? "none" : httpProxy.url}`] : []),
         "booting fabric (unreachable relays can stall this ~30s; Ctrl+C to abort)...",
         "",
       ].join("\n"),
@@ -39,6 +43,7 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
       relayUrls,
       alias: str(options.alias),
       logUsage: options["log-usage"] === true,
+      ...(httpProxy !== undefined ? { httpProxy } : {}),
     });
     process.stdout.write(`${daemon.banner}\n`);
 

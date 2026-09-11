@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { parseArgv } from "../../args.ts";
 import { reportCliError } from "../../errors.ts";
 import { openExistingFabric } from "../../../provider/serve.ts";
+import { resolveHttpProxy } from "../../proxy.ts";
 import { buildServiceDetail, detailDisplayLines } from "../../../provider/detail.ts";
 import { openStore, resolveDataDir, resolvedRelayUrls, str } from "./common.ts";
 
@@ -45,7 +46,7 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
 
     // fabric 身份（存在时；打开失败降级为提示而非失败——状态命令不应被 SDK 问题挡死）。
     try {
-      fabric = await openExistingFabric(dataDir, resolvedRelayUrls(options, home));
+      fabric = await openExistingFabric(dataDir, resolvedRelayUrls(options, home), resolveHttpProxy(undefined));
       const fabricIdHex = await fabric.fabricIdHex();
       const members = await fabric.members();
       const relay = await fabric.relayStatus();

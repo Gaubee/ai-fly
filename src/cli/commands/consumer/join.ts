@@ -12,7 +12,7 @@ import { createSdkFabricFactory, ctxHomedir, ctxOut, type CommandContext } from 
 export async function run(argv: readonly string[], ctx: CommandContext = {}): Promise<number> {
   const { options, positionals } = parseArgv(
     argv,
-    { data: { type: "string", tilde: true }, relay: { type: "multi" } },
+    { data: { type: "string", tilde: true }, relay: { type: "multi" }, proxy: { type: "string" } },
     { homedir: ctx.homedir ?? homedir() },
   );
   const token = positionals[0];
@@ -21,7 +21,12 @@ export async function run(argv: readonly string[], ctx: CommandContext = {}): Pr
   }
   const out = ctxOut(ctx);
   const root = consumersRoot(options.data as string | undefined, ctxHomedir(ctx));
-  const factory = await createSdkFabricFactory(options.relay as string[] | undefined, ctx);
+  const factory = await createSdkFabricFactory(
+    options.relay as string[] | undefined,
+    ctx,
+    undefined,
+    options.proxy as string | undefined,
+  );
   const result = await joinDevice(token, root, { fabric: factory });
   if (result.alreadyJoined) {
     out(`already joined to provider '${result.ring.alias}' (${result.ring.endpointId})`);

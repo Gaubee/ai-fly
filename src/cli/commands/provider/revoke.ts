@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { parseArgv } from "../../args.ts";
 import { UsageError, reportCliError } from "../../errors.ts";
 import { openExistingFabric } from "../../../provider/serve.ts";
+import { resolveHttpProxy } from "../../proxy.ts";
 import { resolveDataDir, resolvedRelayUrls, str } from "./common.ts";
 
 const SPEC = {
@@ -25,7 +26,7 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
       throw new UsageError(`error: unexpected argument '${positionals[1]}'`);
     }
     const dataDir = resolveDataDir(str(options.data), home);
-    fabric = await openExistingFabric(dataDir, resolvedRelayUrls(options, home));
+    fabric = await openExistingFabric(dataDir, resolvedRelayUrls(options, home), resolveHttpProxy(undefined));
     await fabric.revoke(endpointId);
     process.stdout.write(`member revoked: ${endpointId}\n`);
     return 0;

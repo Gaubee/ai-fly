@@ -21,7 +21,12 @@ import {
 export async function run(argv: readonly string[], ctx: CommandContext = {}): Promise<number> {
   const { options } = parseArgv(
     argv,
-    { data: { type: "string", tilde: true }, "strict-ports": { type: "boolean" }, relay: { type: "multi" } },
+    {
+      data: { type: "string", tilde: true },
+      "strict-ports": { type: "boolean" },
+      relay: { type: "multi" },
+      proxy: { type: "string" },
+    },
     { homedir: ctx.homedir ?? homedir() },
   );
   const out = ctxOut(ctx);
@@ -32,7 +37,12 @@ export async function run(argv: readonly string[], ctx: CommandContext = {}): Pr
   if (engineRings.length === 0) {
     throw new CliError("error: no imported providers - run 'ai-fly import <aifly1-link>' or 'ai-fly join <token>' first");
   }
-  const factory = await createSdkFabricFactory(options.relay as string[] | undefined, ctx);
+  const factory = await createSdkFabricFactory(
+    options.relay as string[] | undefined,
+    ctx,
+    undefined,
+    options.proxy as string | undefined,
+  );
   out(
     `gateway starting - booting fabric for ${engineRings.length} provider ring(s)` +
       " (unreachable relays can stall this ~30s; Ctrl+C to abort)...",

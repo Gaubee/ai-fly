@@ -10,6 +10,7 @@ import type { FabricFactory, FabricLike } from "../../../consumer/providers.ts";
 import type { Keyring } from "../../../consumer/store.ts";
 import { loadSdk } from "../../../sdk.ts";
 import { loadSettings } from "../../../app/settings.ts";
+import { resolveHttpProxy } from "../../proxy.ts";
 
 export interface CommandContext {
   /** 测试注入的 HOME 替代（默认 os.homedir()）。 */
@@ -38,13 +39,16 @@ export function ctxHomedir(ctx: CommandContext): string {
  * provider 在那个 relay 上，不拨它就永远会不了面）：逐次解析为
  * flag > ring/链接内嵌 relay（opts.relayUrls，调用侧按 ring 传入）> env > file。
  * @param linkRelayUrls aifly1. 链接内嵌 relay（import 的 join 阶段用；空 = 缺席）
+ * @param proxyFlag --proxy 旗标值（url | 'env' | 'none'；缺省回落 AIFLY_PROXY env）
  */
 export async function createSdkFabricFactory(
   relayFlag: readonly string[] | undefined,
   ctx: CommandContext = {},
   linkRelayUrls?: readonly string[],
+  proxyFlag?: string,
 ): Promise<FabricFactory> {
   const sdk = await loadSdk();
+  const httpProxy = resolveHttpProxy(proxyFlag);
   let relaySettings: readonly string[] | null = null;
   try {
     relaySettings = loadSettings(ctxHomedir(ctx)).relayUrls;
@@ -53,6 +57,9 @@ export async function createSdkFabricFactory(
   }
   const toOpts = (opts: { dataDir: string; relayUrls?: string[] }): FabricOptions => {
     const fabricOpts: FabricOptions = { dataDir: opts.dataDir };
+    if (httpProxy !== undefined) {
+      fabricOpts.httpProxy = httpProxy;
+    }
     const link = opts.relayUrls ?? linkRelayUrls;
     const urls = resolveRelayUrls({
       ...(relayFlag !== undefined ? { flag: relayFlag } : {}),
