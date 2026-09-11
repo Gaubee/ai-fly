@@ -1,5 +1,6 @@
-// daemon 后台态（cli-parity A1）：`~/.aifly/daemon/` 下三件——pid /
-// last-start.json（复活参数记忆）/ daemon.log（--detach 的 stdio 落点）。
+// 后台态（cli-parity A1）：`~/.aifly/daemon/`（provider daemon）与
+// `~/.aifly/gateway/`（consumer 网关 run --detach）各三件——pid /
+// last-start.json（复活参数记忆）/ *.log（--detach 的 stdio 落点）。
 // 纯 fs + process 语义，跨平台终止：posix SIGTERM→SIGKILL；win32 无跨进程
 // 优雅信号 → taskkill（v1 接受硬停，USAGE 明示）。
 // 复活入口 = process.argv[1]（dev=tsx 源文件、装包=dist/ai-fly.js 皆成立）。
@@ -10,6 +11,8 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import process from "node:process";
 
+export type StateKind = "daemon" | "gateway";
+
 export interface DaemonStateDir {
   root: string;
   pidFile: string;
@@ -17,13 +20,18 @@ export interface DaemonStateDir {
   logFile: string;
 }
 
-export function daemonDir(base = homedir()): DaemonStateDir {
-  const root = join(base, ".aifly", "daemon");
-  return { root, pidFile: join(root, "pid"), lastStartFile: join(root, "last-start.json"), logFile: join(root, "daemon.log") };
+export function daemonDir(base = homedir(), kind: StateKind = "daemon"): DaemonStateDir {
+  const root = join(base, ".aifly", kind);
+  return {
+    root,
+    pidFile: join(root, "pid"),
+    lastStartFile: join(root, "last-start.json"),
+    logFile: join(root, `${kind}.log`),
+  };
 }
 
-export function ensureDaemonDir(base = homedir()): DaemonStateDir {
-  const dir = daemonDir(base);
+export function ensureDaemonDir(base = homedir(), kind: StateKind = "daemon"): DaemonStateDir {
+  const dir = daemonDir(base, kind);
   mkdirSync(dir.root, { recursive: true });
   return dir;
 }
@@ -32,20 +40,20 @@ export function ensureDaemonDir(base = homedir()): DaemonStateDir {
 export interface LastStart {
   /** 复活入口（process.argv[1] 绝对路径）。 */
   entry: string;
-  /** start 收到的完整参数（含子命令 token "start"——原样回放）。 */
+  /** start 收到的完整参数（含子命令 token——原样回放）。 */
   args: string[];
   /** 启动时刻（ms）。 */
   startedAt: number;
 }
 
-export function writePid(pid: number, base = homedir()): void {
-  const dir = ensureDaemonDir(base);
+export function writePid(pid: number, base = homedir(), kind: StateKind = "daemon"): void {
+  const dir = ensureDaemonDir(base, kind);
   writeFileSync(dir.pidFile, `${pid}\n`);
 }
 
-export function readPid(base = homedir()): number | null {
+export function readPid(base = homedir(), kind: StateKind = "daemon"): number | null {
   try {
-    const raw = readFileSync(daemonDir(base).pidFile, "utf8").trim();
+    const raw = readFileSync(daemonDir(base, kind).pidFile, "utf8").trim();
     const pid = Number.parseInt(raw, 10);
     return Number.isInteger(pid) && pid > 0 ? pid : null;
   } catch {
@@ -53,19 +61,19 @@ export function readPid(base = homedir()): number | null {
   }
 }
 
-export function clearPid(base = homedir()): void {
-  const { pidFile } = daemonDir(base);
+export function clearPid(base = homedir(), kind: StateKind = "daemon"): void {
+  const { pidFile } = daemonDir(base, kind);
   if (existsSync(pidFile)) writeFileSync(pidFile, "");
 }
 
-export function writeLastStart(last: LastStart, base = homedir()): void {
-  const dir = ensureDaemonDir(base);
+export function writeLastStart(last: LastStart, base = homedir(), kind: StateKind = "daemon"): void {
+  const dir = ensureDaemonDir(base, kind);
   writeFileSync(dir.lastStartFile, `${JSON.stringify(last, null, 2)}\n`);
 }
 
-export function readLastStart(base = homedir()): LastStart | null {
+export function readLastStart(base = homedir(), kind: StateKind = "daemon"): LastStart | null {
   try {
-    const raw = JSON.parse(readFileSync(daemonDir(base).lastStartFile, "utf8"));
+    const raw = JSON.parse(readFileSync(daemonDir(base, kind).lastStartFile, "utf8"));
     if (typeof raw.entry === "string" && Array.isArray(raw.args)) {
       return { entry: raw.entry, args: raw.args, startedAt: Number(raw.startedAt) || Date.now() };
     }

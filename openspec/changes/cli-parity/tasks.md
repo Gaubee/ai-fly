@@ -80,5 +80,13 @@
           （QUIC UDP+TCP）、gateway :8787；容器公告需 DWEB_PUBLIC_*_URL
           覆盖（否则 services.json 广播 127.0.0.1）——ai-fly 侧填 :3340
           （SDK RelayMode::custom 直拨 iroh relay，不走网关发现）
-       f. CLI 缺口：`ai-fly run`（消费网关）无 --detach——Windows 上经
-          ssh 后台化网关会随会话被杀，建议与 daemon 对齐补 --detach
+       f. [已修] CLI 缺口 `ai-fly run --detach` → 已补（与 daemon 全对齐：
+          --detach/stop/info/restart/log，状态目录 ~/.aifly/gateway/，
+          daemon-state 泛化 kind）；E2E 实测：detach/info/log/test/restart/
+          stop + ports 钉端口后 DeepSeek 真实 401 往返（440ms）✓
+       g. [新发现] 网关端口自动错开（requested 被占 → NOTICE + auto-assign）
+          时，实际端口不回写 keyring；`ai-fly test` 按 defaultPort 解析会打到
+          占用者（本例 4399 被外来 python http.server 占，收到 501 HTML）。
+          临时规避：`ai-fly ports <serviceId> --port <n>` 钉死端口（已验证）。
+          修法方向：网关 listenerInfo 实际端口持久化进 ring.ports，或 test
+          先探测网关存活端口

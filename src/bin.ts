@@ -36,7 +36,8 @@ Provider:
 Consumer:
   ai-fly join <dweb1-token> [--data <dir>] [--proxy …]  admit this device (fabric layer)
   ai-fly import <aifly1-link> [--run] [--preview] [--proxy …]  bundle link: join + keyring
-  ai-fly run [--data <dir>] [--strict-ports] [--proxy …]      run the local gateway
+  ai-fly run [--data <dir>] [--strict-ports] [--proxy …] [--detach]  run the local gateway
+  ai-fly run stop|info|restart|log [--force] [--lines <n>]           gateway lifecycle (mirrors daemon)
   ai-fly ports [--data <dir>] [<serviceId> --port <n>]  view/override mapped ports
   ai-fly test [--data <dir>] [--service <name>] [--form …] [--content <text>]
                                single AI request through the local gateway
