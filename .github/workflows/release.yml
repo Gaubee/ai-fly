@@ -61,15 +61,40 @@ jobs:
             exit 1
           fi
 
+      # dist-tag 从 tag 推导：v0.3.0-alpha.1 → alpha（预发布通道）；
+      # 正式版 → latest。npm 侧只有 latest 是默认安装目标，alpha 需
+      # `npx ai-fly@alpha` / `npm i -g ai-fly@alpha` 显式指定。
+      - name: resolve dist-tag
+        if: startsWith(github.ref, 'refs/tags/')
+        id: dist
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == *"-"* ]]; then
+            CHANNEL="${GITHUB_REF_NAME#v}"      # v0.3.0-alpha.1 -> 0.3.0-alpha.1
+            CHANNEL="${CHANNEL#*-}"             # -> alpha.1（剥到第一个 '-'）
+            CHANNEL="${CHANNEL%%.*}"            # -> alpha
+            echo "tag=${CHANNEL}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
       # trusted publishing：不设 NODE_AUTH_TOKEN / registry-url——npm 以
       # OIDC 声明身份；非 scoped 包默认 public。
       # --provenance 暂缺：npm 的 sigstore 溯源只支持 public 源仓库；本仓库
       # 转 public 后把 --provenance 加回来（trusted publishing 不受影响）
       - name: npm publish
-        run: npm publish
+        if: startsWith(github.ref, 'refs/tags/')
+        run: npm publish --tag "${{ steps.dist.outputs.tag }}"
+      - name: npm publish (manual)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: npm publish --tag alpha
 
       - name: github release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag
+        run: |
+          ARGS=(--generate-notes --verify-tag)
+          if [[ "${{ steps.dist.outputs.tag }}" != "latest" ]]; then
+            ARGS+=(--prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" "${ARGS[@]}"

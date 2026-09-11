@@ -27,6 +27,22 @@ node scripts/release.mjs <version>   # 显式版本（如 0.1.0）
 node scripts/release.mjs patch       # 或 patch / minor / major 自动递增
 ```
 
+### 3a. 预发布通道（alpha / beta / rc）
+
+```bash
+node scripts/release.mjs 0.3.0-alpha.1   # 发 alpha 通道
+node scripts/release.mjs 0.3.0           # 验证通过后发正式版（latest）
+```
+
+- 版本带 `-<channel>.N` 后缀即预发布：npm dist-tag = 通道名（`alpha`），
+  GitHub Release 标记 prerelease；无后缀 = `latest`。
+- dist-tag 由 CI 从 tag 推导（release.yml `resolve dist-tag` 步），两侧无需
+  手工对齐。
+- 预发布不影响默认安装：`npm i ai-fly` 仍取 latest；实机验证用
+  `npx ai-fly@alpha` / `npm i -g ai-fly@alpha`。
+- 版本序遵循 semver precedence：`0.3.0-alpha.1 < 0.3.0-alpha.2 < 0.3.0`；
+  正式版之后不能再发更低版本（脚本与 guard 拦截）。
+
 脚本职责（顺序即门禁）：
 
 1. **前置**：工作树干净、当前分支 = main、与 origin/main 同步。
@@ -41,16 +57,19 @@ node scripts/release.mjs patch       # 或 patch / minor / major 自动递增
 之后 CI（`.github/workflows/release.yml`）接管：
 
 - `v*` tag 触发 → install → typecheck → vitest → build（tsdown）→
-  **tag/version guard** → `npm publish`（trusted publishing/OIDC，
+  **tag/version guard** → dist-tag 推导（prerelease 段 → 通道名，否则 latest）→
+  `npm publish --tag <channel>`（trusted publishing/OIDC，
   无 token，无 provenance——npm 溯源仅支持 public 源仓库，仓库转 public 后在
   release.yml 加回 `--provenance`；npm 侧配置：package `ai-fly` ↔ repo `Gaubee/ai-fly` ↔ workflow
-  `release.yml` ↔ environment `npm-publish`）→ GitHub Release（自动 notes）。
+  `release.yml` ↔ environment `npm-publish`）→ GitHub Release（自动 notes，
+  预发布通道标 `--prerelease`）。
 
 ## 4. 发布后核验
 
 ```bash
 gh run watch            # 或 Actions 页盯跑
-npm view ai-fly version # 应等于刚发的版本
+npm view ai-fly version # 应等于刚发的版本（latest 通道）
+npm view ai-fly dist-tags  # alpha/latest 指向确认
 gh release view         # Release 与 notes 就位
 ```
 

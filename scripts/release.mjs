@@ -2,6 +2,8 @@
 // 发布驱动（RELEASE.md 标准的执行面）：前置检查 → 门禁（typecheck + vitest）
 // → 版本对齐（bump 或复用）→ annotated tag → push main + tag。
 // 用法：node scripts/release.mjs <version | patch | minor | major>
+//   version 支持 prerelease：0.3.0-alpha.1 → npm dist-tag = alpha，
+//   GitHub Release 标记 --prerelease；无后缀 → dist-tag = latest。
 // CI 侧（release.yml）只信任 tag；本地门禁与 CI 门禁重复是有意的纵深。
 
 import { execFileSync } from "node:child_process";
@@ -33,7 +35,7 @@ if (local !== remote) fail("main is out of sync with origin/main - push/pull fir
 const pkgPath = new URL("../package.json", import.meta.url);
 const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
 const current = pkg.version;
-const semver = /^(\d+)\.(\d+)\.(\d+)$/;
+const semver = /^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+[a-z0-9.-]*))?$/i;
 const match = semver.exec(arg);
 const bumpOf = (kind) => {
   const [, major, minor, patch] = semver.exec(current);
@@ -44,16 +46,36 @@ const bumpOf = (kind) => {
 };
 const target = match !== null ? arg : ["patch", "minor", "major"].includes(arg) ? bumpOf(arg) : fail(`invalid version or bump kind: ${arg}`);
 const compare = (a, b) => {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  return pa[0] !== pb[0] ? pa[0] - pb[0] : pa[1] !== pb[1] ? pa[1] - pb[1] : pa[2] - pb[2];
+  const core = (v) => v.split("-")[0].split(".").map(Number);
+  const pre = (v) => v.includes("-") ? v.split("-").slice(1).join("-") : null;
+  const [pa, pb] = [core(a), core(b)];
+  const c = pa[0] !== pb[0] ? pa[0] - pb[0] : pa[1] !== pb[1] ? pa[1] - pb[1] : pa[2] - pb[2];
+  if (c !== 0) return c;
+  // 同 core：正式版 > 预发布；预发布之间按点分段（数字段数值比较，字母段字典序）
+  const [qa, qb] = [pre(a), pre(b)];
+  if (qa === null) return qb === null ? 0 : 1;
+  if (qb === null) return -1;
+  const sa = qa.split("."), sb = qb.split(".");
+  for (let i = 0; i < Math.max(sa.length, sb.length); i++) {
+    const x = sa[i], y = sb[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    const [na, nb] = [Number(x), Number(y)];
+    if (Number.isNaN(na) || Number.isNaN(nb)) {
+      if (x !== y) return x < y ? -1 : 1;
+    } else if (na !== nb) return na - nb;
+  }
+  return 0;
 };
 if (compare(target, current) < 0) fail(`target ${target} is lower than current ${current}`);
 const tag = `v${target}`;
 if (git("tag", "--list", tag) !== "") fail(`tag ${tag} already exists`);
 if (git("ls-remote", "--tags", "origin", tag) !== "") fail(`tag ${tag} already exists on origin`);
 
-console.log(`release: ${current} -> ${target} (${tag})`);
+// dist-tag：prerelease 取通道名（0.3.0-alpha.1 → alpha），正式版 latest
+const distTag = target.includes("-") ? target.split("-")[1].split(".")[0] : "latest";
+
+console.log(`release: ${current} -> ${target} (${tag}, npm dist-tag: ${distTag})`);
 
 // [3] 门禁：typecheck + vitest（integration/e2e 属实机验证面，不在此列）
 console.log("release: gate - typecheck");
