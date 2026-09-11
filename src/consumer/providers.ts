@@ -592,7 +592,11 @@ export class ProviderConnection implements ProviderRoute {
         }
       }
     }
-    let ring = applyCatalog(this.ring, { alias: header.alias, relayUrls: header.relayUrls, services });
+    // 磁盘侧 actualPorts 可能已被引擎监听回写更新（端口自动错开）——目录同步
+    // 若用构造期内存快照整体落盘会覆写清空；应用前先取磁盘现值
+    const persisted = loadKeyring(this.root, this.ring.endpointId);
+    const base = persisted === undefined ? this.ring : { ...this.ring, actualPorts: persisted.actualPorts };
+    let ring = applyCatalog(base, { alias: header.alias, relayUrls: header.relayUrls, services });
     ring = reconcileKeyMetadata(ring, header.groups.map((g) => ({ keyId: g.keyId, group: g.group })));
     this.ring = ring;
     this.alias = ring.alias;

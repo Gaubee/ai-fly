@@ -21,7 +21,7 @@ import {
   type ProviderTransportSession,
   type ProviderTransportSessionFactory,
 } from "../../../src/consumer/providers.ts";
-import { loadKeyring, saveKeyring, type Keyring } from "../../../src/consumer/store.ts";
+import { loadKeyring, saveKeyring, setActualPorts, type Keyring } from "../../../src/consumer/store.ts";
 
 // ---------------------------------------------------------------------------
 // 测试基建：可控的会话工厂 + provider 侧真实 WireSession
@@ -610,5 +610,31 @@ describe("fullJitterDelayMs", () => {
   it("默认参数 1s→60s", () => {
     expect(fullJitterDelayMs(0, { random: () => 1 })).toBe(1000);
     expect(fullJitterDelayMs(7, { random: () => 1 })).toBe(60000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 目录同步 × actualPorts 回写共存（cli-hardening 修复的回归锚点）
+// ---------------------------------------------------------------------------
+describe("目录同步与 actualPorts 回写共存", () => {
+  it("AUTH_OK refresh 不覆写磁盘侧 actualPorts（引擎回写的错开端口保留）", async () => {
+    const ep = epId();
+    const ring = ringOf(ep, [{ keyId: "k", key: "sk-aifly-test-000000000001", group: "g" }]);
+    saveKeyring(root, ring);
+    const host = fakeFactoryHost();
+    const conn = makeConnection(ring, host);
+    conn.start();
+    const session = connectOk(host);
+    const provider = new ProviderSide(session.peerTransport);
+    await settle();
+    await provider.authOk([{ keyId: "k", group: "g", services: [svc("s1", "s1", 4481)] }]);
+    await settle();
+    // 引擎监听回写：端口 4481 被占，实际落在 53001
+    setActualPorts(root, ep, { s1: 53001 });
+    // 目录 refresh 到达——必须保留磁盘侧 actualPorts，不得用构造期内存快照清空
+    await provider.authOk([{ keyId: "k", group: "g", services: [svc("s1", "s1", 4481)] }]);
+    await settle();
+    expect(loadKeyring(root, ep)?.actualPorts).toEqual({ s1: 53001 });
+    await conn.stop();
   });
 });
