@@ -57,10 +57,28 @@
          真实 401（伪 key 掩码回显 ****ummy）端到端 1055ms 往返 ✓
 
        改进项（后续 change）：
-       a. daemon 启动期在 relay 连接确认前零输出、banner 要等 fabric boot
-          完成——relay 不可达时像挂死；应早期打印 connecting 状态或异步 boot
-       b. fabric 原生层缺代理支持（HTTP_PROXY/SOCKS）——受限网络（本例
-          Windows TUN 死节点、macmini→aps1 QUIC 阻断）下 relay 不可用；
-          iroh 侧支持 proxy_url 的话透出 --proxy 全局选项
-       c. euc1 对两地均可达而 aps1 仅本机可达——share 链接只内嵌 provider
-          当前 relay 单点，可考虑多 relay 冗余嵌入
+       a. [已修] daemon 启动期零输出伪装死 → 早期状态输出（8e436b5，alpha.2
+          起）：starting/relay/data 三行先于 fabric boot；Windows 实机
+          daemon.log 验证 ✓
+       b. [已修] fabric 控制面代理透出 → --proxy <url|env|none> + AIFLY_PROXY
+          （eb1ddc8，alpha.2 起）；SDK 语义：仅 relay 控制面走代理，QUIC
+          数据面永不过代理
+       c. [部分] share 链接多 relay 冗余（验证于 gaubee-cloud 自建 relay）：
+          双入口嵌入/join/E2E 单轮全通 ✓；但两条 SDK 层发现——
+          c1. ring relayUrls 死条目在首位时，新会话建立被阻断（>2min 不
+              failover；云死后 euc1-only 链接立即通的判别实验证实）
+          c2. relay 中断后恢复，运行中的消费网关不重连（会话永久放弃，
+              需重启网关）；mid-session relay 死亡时在途流量不受影响
+              （p2p 打洞直连，设计行为 ✓）
+          两者均属 opendweb fabric 层（dweb-fabric），非 ai-fly CLI 层
+       d. [环境] Windows（gaubeehonor）数据面：控制面经自建 relay 验证通
+          （invite 兑换成功、relay 日志见 endpoint 注册），但长驻数据流被
+          本机网络反复掐断（relay 日志 Stream terminated ×2）——TUN 代理/
+          防火墙环境问题；同一自建 relay 上 macmini E2E 全通证明部署正确
+       e. [部署] opendweb server docker 快速路径上线（gaubee-cloud，
+          ghcr.io/jixoai/opendweb:0.3.1）：iroh relay http://39.107.213.167:3340
+          （QUIC UDP+TCP）、gateway :8787；容器公告需 DWEB_PUBLIC_*_URL
+          覆盖（否则 services.json 广播 127.0.0.1）——ai-fly 侧填 :3340
+          （SDK RelayMode::custom 直拨 iroh relay，不走网关发现）
+       f. CLI 缺口：`ai-fly run`（消费网关）无 --detach——Windows 上经
+          ssh 后台化网关会随会话被杀，建议与 daemon 对齐补 --detach
