@@ -33,7 +33,10 @@ export async function run(argv: readonly string[], ctx: CommandContext = {}): Pr
       if (ring.services.length === 0) out("  (no services known yet - run the gateway to fetch the catalog)");
       for (const s of ring.services) {
         const pinned = ring.ports[s.serviceId] !== undefined;
-        out(`  ${s.serviceId}  ${s.name}  port ${desiredPortFor(s, ring.ports)}  [${pinned ? "pinned" : `default ${s.defaultPort}`}]`);
+        const actual = ring.actualPorts[s.serviceId];
+        const shifted = actual !== undefined && actual !== desiredPortFor(s, ring.ports);
+        const note = shifted ? `  [LIVE: ${actual} - auto-shifted by running gateway]` : "";
+        out(`  ${s.serviceId}  ${s.name}  port ${desiredPortFor(s, ring.ports)}  [${pinned ? "pinned" : `default ${s.defaultPort}`}]${note}`);
       }
     }
     return 0;

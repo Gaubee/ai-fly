@@ -68,7 +68,7 @@ async function set(options: Readonly<Record<string, unknown>>, positionals: read
     value = (await readHidden(`value for '${name}': `)).trim();
   }
   if (value === "") throw new UsageError("error: secret value must not be empty");
-  const store = SecretsStore.open(resolveDataDir(undefined, home));
+  const store = SecretsStore.open(resolveDataDir(str(options.data as string | undefined), home));
   const entry = store.set(name, value, { bearerPrefix: options["no-bearer"] !== true });
   process.stdout.write(
     `secret set: ${entry.name} (bearer prefix ${entry.bearerPrefix ? "on" : "off"}) - inject with service add --secret ${entry.name}\n`,

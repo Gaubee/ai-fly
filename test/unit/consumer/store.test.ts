@@ -45,7 +45,7 @@ function service(serviceId: string, name: string, port: number): ServiceEntry {
 }
 
 function ringOf(ep: string, alias = "prov"): Keyring {
-  return { alias, endpointId: ep, relayUrls: ["http://r1"], keys: [], services: [], ports: {} };
+  return { alias, endpointId: ep, relayUrls: ["http://r1"], keys: [], services: [], ports: {}, actualPorts: {} };
 }
 
 let root: string;

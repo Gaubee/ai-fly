@@ -38,6 +38,8 @@ export interface Keyring {
   keys: KeyringKey[];
   services: ServiceEntry[];
   ports: Record<string, number>;
+  /** 网关最近一次实际监听端口（自动错开回写；区别于 ports 的用户偏好）。 */
+  actualPorts: Record<string, number>;
 }
 
 export const KEYRING_SCHEMA = z.object({
@@ -53,6 +55,7 @@ export const KEYRING_SCHEMA = z.object({
   ),
   services: z.array(SERVICE_ENTRY_SCHEMA),
   ports: z.record(z.string(), z.number().int().min(0).max(65535)),
+  actualPorts: z.record(z.string(), z.number().int().min(0).max(65535)).default({}),
 });
 
 /** 目录刷新载荷（AUTH_OK / import 视图）应用于钥环时的输入。 */
@@ -257,6 +260,7 @@ export function mergeImportView(
     keys: [],
     services: [],
     ports: {},
+    actualPorts: {},
   };
   const merged = new Map(ring.services.map((s) => [s.serviceId, s]));
   for (const s of payload.services) merged.set(s.serviceId, s); // 链接版本胜出
@@ -282,11 +286,16 @@ export function applyCatalog(ring: Keyring, patch: CatalogPatch): Keyring {
   for (const [serviceId, port] of Object.entries(ring.ports)) {
     if (alive.has(serviceId)) ports[serviceId] = port;
   }
+  const actualPorts: Record<string, number> = {};
+  for (const [serviceId, port] of Object.entries(ring.actualPorts ?? {})) {
+    if (alive.has(serviceId)) actualPorts[serviceId] = port;
+  }
   const next: Keyring = {
     ...ring,
     relayUrls: [...patch.relayUrls],
     services: [...patch.services],
     ports,
+    actualPorts,
   };
   if (patch.alias !== undefined && patch.alias !== "") next.alias = patch.alias;
   return next;
@@ -354,6 +363,22 @@ export function setPort(root: string, endpointId: string, serviceId: string, por
   return next;
 }
 
+/** 网关实际监听端口回写（引擎启动路径；整体替换并修剪到存活服务）。 */
+export function setActualPorts(root: string, endpointId: string, actual: Readonly<Record<string, number>>): Keyring {
+  const existing = loadKeyring(root, endpointId);
+  if (existing === undefined) {
+    throw new CliError(`error: provider '${endpointId}' not found`);
+  }
+  const alive = new Set(existing.services.map((s) => s.serviceId));
+  const actualPorts: Record<string, number> = {};
+  for (const [serviceId, port] of Object.entries(actual)) {
+    if (alive.has(serviceId)) actualPorts[serviceId] = port;
+  }
+  const next = { ...existing, actualPorts };
+  saveKeyring(root, next);
+  return next;
+}
+
 /** forget：整环删除（钥环 + fabric 身份目录；提供方侧撤销需提供方操作）。 */
 export function removeKeyring(root: string, ref: string): { dir: string; ring: Keyring } {
   const dir = findKeyringDir(root, ref);
@@ -369,5 +394,5 @@ export function removeKeyring(root: string, ref: string): { dir: string; ring: K
   rmSync(dir, { recursive: true, force: true });
   if (ring !== undefined) return { dir, ring };
   // 目录在而钥环缺（中间态）：仍按整目录删除，返回最小描述
-  return { dir, ring: { alias: ref, endpointId: ref, relayUrls: [], keys: [], services: [], ports: {} } };
+  return { dir, ring: { alias: ref, endpointId: ref, relayUrls: [], keys: [], services: [], ports: {}, actualPorts: {} } };
 }

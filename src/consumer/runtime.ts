@@ -5,7 +5,7 @@
 
 import { ProviderManager, type ProviderTransportSessionFactory } from "./providers.ts";
 import { Gateway } from "./gateway.ts";
-import type { Keyring } from "./store.ts";
+import { setActualPorts, type Keyring } from "./store.ts";
 
 export interface EngineOptions {
   rings: readonly Keyring[];
@@ -46,6 +46,22 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   for (const ring of opts.rings) {
     if (ring.services.length > 0) {
       await gateway.syncProviderServices(ring.endpointId, ring.alias, ring.services, ring.ports);
+    }
+  }
+  // 实际监听端口回写（自动错开时 ai-fly test 按 actualPorts 命中真实端口，
+  // 不再打到 defaultPort 的占用者）；失败不阻断引擎，NOTICE 提示
+  const live = new Map(gateway.listenerInfo().map((l) => [l.serviceId, l.port]));
+  for (const ring of opts.rings) {
+    const actual: Record<string, number> = {};
+    for (const s of ring.services) {
+      const port = live.get(s.serviceId);
+      if (port !== undefined) actual[s.serviceId] = port;
+    }
+    if (Object.keys(actual).length === 0) continue;
+    try {
+      setActualPorts(opts.consumersRoot, ring.endpointId, actual);
+    } catch (err) {
+      opts.onNotice?.(`warning: could not persist actual ports for '${ring.alias}': ${(err as Error).message}`);
     }
   }
   manager.start();

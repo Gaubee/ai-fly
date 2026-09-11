@@ -56,7 +56,8 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
     if (target === undefined) {
       throw new UsageError(`error: service '${serviceName}' not found (imported: ${flat.map((f) => f.svc.name).join(", ")})`);
     }
-    const port = desiredPortFor(target.svc, target.ring.ports);
+    // 网关实际端口优先（自动错开回写 actualPorts），其次 pin（ring.ports），最后 defaultPort
+    const port = target.ring.actualPorts[target.svc.serviceId] ?? desiredPortFor(target.svc, target.ring.ports);
 
     const result = await testLocalService({
       port,
