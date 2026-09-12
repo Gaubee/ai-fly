@@ -1,6 +1,6 @@
 {
   "name": "ai-fly",
-  "version": "0.3.1",
+  "version": "0.3.2-alpha.1",
   "description": "ai-fly — peer-to-peer HTTP/WebSocket bridge with AI-ready presets, over OpenDWeb fabric",
   "license": "MIT OR Apache-2.0",
   "type": "module",
