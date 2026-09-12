@@ -23,6 +23,12 @@ import { applyWriter, previewWriter } from "./writers/index.ts";
 import { resolveTargetPort } from "./writers/common.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
 import {
+  discoverHooks,
+  installUserHook,
+  readHookScript,
+  removeUserHook,
+} from "../provider/hook.ts";
+import {
   deriveModels,
   fetchModelsDevPresets,
   fetchModelsDevRaw,
@@ -250,6 +256,39 @@ export function createRpcRouter(deps: RpcRouterDeps) {
         revoke: rpc.provider.keys.revoke.handler(({ input }) => ({
           key: keyView(host.providerStore().revokeKey(input.keyId)),
         })),
+      },
+      // hooks 脚本资源域（provider-local ~ ：管理面同 group/secret）。
+      hooks: {
+        list: rpc.provider.hooks.list.handler(() => ({
+          hooks: discoverHooks(home()).map((h) => ({ name: h.name, source: h.source, fns: h.fns })),
+        })),
+        get: rpc.provider.hooks.get.handler(({ input }) => {
+          const found = readHookScript(input.name, home());
+          if (found === undefined) {
+            throw new DomainError("NOT_FOUND", `error: hook script '${input.name}' not found`);
+          }
+          return { name: input.name, source: found.source, path: found.path, content: found.content };
+        }),
+        add: rpc.provider.hooks.add.handler(({ input }) => {
+          try {
+            const installed = installUserHook(input.name, input.content, home());
+            return { name: installed.name, path: installed.path, fns: installed.fns };
+          } catch (err) {
+            throw new DomainError("INVALID_INPUT", (err as Error).message);
+          }
+        }),
+        remove: rpc.provider.hooks.remove.handler(({ input }) => {
+          try {
+            removeUserHook(input.name, home());
+            return { removed: true as const };
+          } catch (err) {
+            const msg = (err as Error).message;
+            throw new DomainError(
+              msg.includes("not found") || msg.includes("builtin") ? "NOT_FOUND" : "INVALID_INPUT",
+              msg,
+            );
+          }
+        }),
       },
       // 密钥库（provider-local；直连 SecretsStore——无内存态，daemon 运行时写入即刻
       // 生效。remove 未命中 StoreError(not-found) -> NOT_FOUND；list 投影名称/开关/时间戳）。

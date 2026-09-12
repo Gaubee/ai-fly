@@ -31,3 +31,19 @@
       codex/GUI 显示与创建面 humanize/订阅测试）——519 全绿
 - [ ] 7d. 发布 0.4.0-alpha.4（含 hooks 终态）→ 实机 codex 真 token 验证 →
       0.4.0 latest → Owner 视觉验收
+
+## 视觉验收整改（Owner 反馈 2026-09-12）
+
+- [x] V1 Advanced 新增 hooks 管理页（内建/用户卡片、fns 徽章、查看内容、
+      安装（name+内容校验）、删除（仅用户库））；RPC provider.hooks
+      list/get/add/remove 接 hook.ts 管理面
+- [x] V2 服务创建/编辑表单 hooks 脚本选择器（选项=hooks.list，label 含
+      钩子清单；secret 选择优先，hooks 次之）
+- [x] V3 keys 并入 group 卡片（组内清单/issue/revoke；移除独立 keys tab）
+- [x] V4 服务卡 share 按钮（含服务的组选择 → share.create → 链接展示/
+      复制 + 私密警告）
+- [x] V5 图标本地化：webui/public/icons/presets/{openai,anthropic,deepseek,
+      codex}.svg；presetLogoUrl 走本地路径（不对接实时服务/不依赖
+      models.dev；codex 专属图标修复）；onerror 首字母 tile 回退保留
+- [x] 验证：519 vitest + tsc + svelte-check 基线 + vite build（icons 进
+      dist）→ 0.4.0-alpha.5

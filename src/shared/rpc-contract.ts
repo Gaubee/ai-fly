@@ -258,8 +258,11 @@ export const PRESET_SCHEMA = z.strictObject({
 });
 
 /** 预设图标地址（models.dev logos；iconId 缺省取 id）。UI 端 onerror 回退首字母 tile。 */
+/** 预设图标：本地资产（webui/static/icons/presets/<id>.svg；Owner 裁决
+ * 2026-09-12 图标本地化——不对接实时服务、不依赖 models.dev）。UI 端
+ * onerror 回退首字母 tile（既有行为）。 */
 export function presetLogoUrl(preset: Pick<Preset, "id" | "iconId">): string {
-  return `https://models.dev/logos/${encodeURIComponent(preset.iconId ?? preset.id)}.svg`;
+  return `/icons/presets/${encodeURIComponent(preset.iconId ?? preset.id)}.svg`;
 }
 
 // ---------------------------------------------------------------------------
@@ -444,6 +447,46 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
           }),
         )
         .output(SERVICE_TEST_RESULT_SCHEMA),
+    },
+    hooks: {
+      /** hooks 脚本清单（内建 + 用户库；fns = 命名规范发现的钩子函数）。 */
+      list: oc
+        .input(z.object({}))
+        .output(
+          z.object({
+            hooks: z.array(
+              z.strictObject({
+                name: z.string(),
+                source: z.enum(["user", "builtin"]),
+                fns: z.array(z.string()),
+              }),
+            ),
+          }),
+        ),
+      /** 脚本内容查看（含 path）。 */
+      get: oc
+        .input(z.strictObject({ name: z.string().min(1).max(64) }))
+        .output(
+          z.strictObject({
+            name: z.string(),
+            source: z.enum(["user", "builtin"]),
+            path: z.string(),
+            content: z.string(),
+          }),
+        ),
+      /** 安装用户脚本（校验：可加载 + 至少一个导出函数；失败回滚）。 */
+      add: oc
+        .input(
+          z.strictObject({
+            name: z.string().min(1).max(64),
+            content: z.string().min(1).max(65536),
+          }),
+        )
+        .output(z.strictObject({ name: z.string(), path: z.string(), fns: z.array(z.string()) })),
+      /** 删除（仅用户库；内建拒绝）。 */
+      remove: oc
+        .input(z.strictObject({ name: z.string().min(1).max(64) }))
+        .output(z.object({ removed: z.boolean() })),
     },
     secrets: {
       /** 密钥库清单（仅名称与时间戳；值由设计不跨 RPC）。 */

@@ -40,6 +40,16 @@
   import {
     maskSecret,
     serviceForm,
+    hooksPanel,
+    loadHooks,
+    hookAdd,
+    submitHookAdd,
+    removeHookScript,
+    hookView,
+    openHookView,
+    serviceShare,
+    openServiceShare,
+    submitServiceShare,
     openServiceAdd,
     openServiceEdit,
     closeServiceForm,
@@ -308,8 +318,8 @@
     <TabsList>
       <TabsTrigger value="services">{t("adv.tab.services")}</TabsTrigger>
       <TabsTrigger value="groups">{t("adv.tab.groups")}</TabsTrigger>
-      <TabsTrigger value="keys">{t("adv.tab.keys")}</TabsTrigger>
       <TabsTrigger value="secrets">{t("adv.tab.secrets")}</TabsTrigger>
+      <TabsTrigger value="hooks">{t("adv.tab.hooks")}</TabsTrigger>
       <TabsTrigger value="relay">{t("adv.tab.relay")}</TabsTrigger>
       <TabsTrigger value="settings">{t("adv.tab.settings")}</TabsTrigger>
     </TabsList>
@@ -365,6 +375,7 @@
                       variant="ghost"
                       onclick={() => (serviceTestOpen = serviceTestOpen === service.serviceId ? null : service.serviceId)}
                     >{t("common.test")}</PressButton>
+                    <PressButton variant="ghost" onclick={() => openServiceShare(service.name)}>{t("adv.services.share")}</PressButton>
                     <PressButton variant="ghost" onclick={() => openServiceEdit(service)}>{t("common.edit")}</PressButton>
                     {#if serviceRemove.confirm === service.name}
                       <PressButton
@@ -506,6 +517,22 @@
                 value={serviceForm.secretName}
                 onchange={(name) => (serviceForm.secretName = name)}
               />
+              <!-- hooks 脚本选择器（Owner 视觉验收 2026-09-12）：无密钥选择时生效 -->
+              <div class="flex items-center gap-2">
+                <span class="w-24 flex-none font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">hooks</span>
+                <div class="w-72">
+                  <Select
+                    options={[
+                      { value: "", label: "none" },
+                      ...hooksPanel.scripts.map((h) => ({
+                        value: h.name,
+                        label: `${h.name} (${h.fns.join(", ")})`,
+                      })),
+                    ]}
+                    bind:value={serviceForm.hooks}
+                  />
+                </div>
+              </div>
               <!-- 连通测试（M3 6.3）：自定义服务不传 apiForm（服务端缺省）/
                    presetId（无模型下拉），密钥取表单当前选择 -->
               <TestConnection upstream={serviceForm.upstream} secretName={serviceForm.secretName} />
@@ -591,6 +618,38 @@
                   {:else}
                     <span class="text-[11px] text-muted-foreground">{t("f.noServices")}</span>
                   {/each}
+                </div>
+                <!-- 组内 keys（Owner 视觉验收 2026-09-12：keys 归组管理） -->
+                <div class="mt-1.5 flex flex-wrap items-center gap-1.5 border-t border-border pt-1.5">
+                  <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">keys</span>
+                  {#each app.keys.filter((k) => k.group === group.name) as key (key.keyId)}
+                    <span class="inline-flex items-center gap-1">
+                      <code class="font-mono text-[10px] {key.revokedAt !== undefined ? 'text-muted-foreground line-through' : ''}">{key.keyId.slice(0, 8)}</code>
+                      {#if key.revokedAt === undefined}
+                        {#if keyRevoke.confirm === key.keyId}
+                          <PressButton
+                            variant="tonal"
+                            class="jx-pair-destructive"
+                            loading={keyRevoke.busy === key.keyId}
+                            onclick={() => void revokeKey(key.keyId)}
+                          >{t("adv.keys.confirmRevoke")}</PressButton>
+                          <PressButton variant="ghost" onclick={() => (keyRevoke.confirm = "")}>{t("common.cancel")}</PressButton>
+                        {:else}
+                          <PressButton variant="ghost" class="h-5 px-1.5 text-[10px]" onclick={() => (keyRevoke.confirm = key.keyId)}>&times; revoke</PressButton>
+                        {/if}
+                      {/if}
+                    </span>
+                  {:else}
+                    <span class="text-[11px] text-muted-foreground">no keys</span>
+                  {/each}
+                  <PressButton
+                    variant="ghost"
+                    class="h-5 px-1.5 text-[10px]"
+                    onclick={() => {
+                      keyIssue.group = group.name;
+                      void issueKey();
+                    }}
+                  >+ key</PressButton>
                 </div>
                 {#if groupEdit.open === group.name}
                   <!-- 行内编辑：名称只读（行头）；成员勾选 + 限额（保存走
@@ -686,85 +745,7 @@
     </TabsContent>
 
     <!-- ── 密钥 ─────────────────────────────────────────────── -->
-    <TabsContent value="keys">
-      <div class="flex flex-col gap-3">
-        <Card title={t("adv.keys.issue")} scroll={false}>
-          <div class="flex flex-wrap items-end gap-3 p-3">
-            <div class="w-56">
-              <Select
-                label={t("f.group")}
-                options={keyGroupOptions}
-                placeholder="pick a group"
-                bind:value={keyIssue.group}
-              />
-            </div>
-            <PressButton
-              variant="fill"
-              loading={keyIssue.busy}
-              class={keyIssue.group === "" ? "pointer-events-none opacity-50" : undefined}
-              onclick={() => void issueKey()}
-            >
-              issue key
-            </PressButton>
-          </div>
-          <ErrorAlert error={keyIssue.error} />
-        </Card>
-
-        {#if app.keys.length === 0 && !app.busy.keys}
-          <Card scroll={false}>
-            <p class="p-4 text-xs text-muted-foreground">{t("adv.keys.empty")}</p>
-          </Card>
-        {:else}
-          <table class="w-full border border-border bg-card text-xs shadow-2xs">
-            <thead>
-              <tr class="border-b border-border text-left font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
-                <th class="px-3 py-2 font-normal">key</th>
-                <th class="px-3 py-2 font-normal">{t("adv.keys.group")}</th>
-                <th class="px-3 py-2 font-normal">{t("adv.keys.created")}</th>
-                <th class="px-3 py-2 font-normal">{t("f.status")}</th>
-                <th class="px-3 py-2 font-normal"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each app.keys as key (key.keyId)}
-                <tr class="border-b border-border/50" transition:slide={{ duration: 150 }}>
-                  <td class="px-3 py-1.5 font-mono text-muted-foreground">{key.keyId.slice(0, 12)}</td>
-                  <td class="px-3 py-1.5 font-mono">{key.group}</td>
-                  <td class="px-3 py-1.5 text-muted-foreground">{formatDate(key.createdAt)}</td>
-                  <td class="px-3 py-1.5">
-                    {#if key.revokedAt !== undefined}
-                      <Badge variant="tonal" class="jx-hue-error">{t("adv.keys.revoked")}</Badge>
-                    {:else}
-                      <Badge variant="tonal" class="jx-hue-success">{t("adv.keys.active")}</Badge>
-                    {/if}
-                  </td>
-                  <td class="px-3 py-1.5 text-right">
-                    {#if key.revokedAt === undefined}
-                      {#if keyRevoke.confirm === key.keyId}
-                        <span class="inline-flex items-center gap-1.5">
-                          <PressButton
-                            variant="tonal"
-                            class="jx-pair-destructive"
-                            loading={keyRevoke.busy === key.keyId}
-                            onclick={() => void revokeKey(key.keyId)}
-                          >{t("adv.keys.confirmRevoke")}</PressButton>
-                          <PressButton variant="ghost" onclick={() => (keyRevoke.confirm = "")}>{t("common.cancel")}</PressButton>
-                        </span>
-                      {:else}
-                        <PressButton variant="ghost" onclick={() => (keyRevoke.confirm = key.keyId)}>{t("adv.keys.revoke")}</PressButton>
-                      {/if}
-                    {/if}
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        {/if}
-        <ErrorAlert error={keyRevoke.error} />
-      </div>
-    </TabsContent>
-
-    <!-- ── 密钥库（provider 侧上游密钥，M3 6.1/6.2）─────────── -->
+        <!-- ── 密钥库（provider 侧上游密钥，M3 6.1/6.2）─────────── -->
     <TabsContent value="secrets">
       <div class="flex flex-col gap-3">
         <Card title="secrets" scroll={false}>
@@ -861,7 +842,53 @@
     </TabsContent>
 
     <!-- ── 中继与限额 ───────────────────────────────────────── -->
-    <TabsContent value="relay">
+    <TabsContent value="hooks">
+  <div class="flex flex-col gap-3">
+    {loadHooks()}
+    <div class="flex items-center justify-between">
+      <p class="text-xs text-muted-foreground">
+        hook scripts: builtin library + ~/.aifly/hooks (user overrides builtin);
+        exported function names are the hook inventory (authHeader = HTTP auth header hook).
+      </p>
+      <PressButton
+        variant="outline"
+        onclick={() => {
+          hookAdd.open = true;
+          hookAdd.name = "";
+          hookAdd.content = "";
+          hookAdd.error = null;
+        }}
+      >{t("adv.hooks.add")}</PressButton>
+    </div>
+
+    {#if hooksPanel.busy && hooksPanel.scripts.length === 0}
+      <Skeleton class="h-10" />
+    {:else if hooksPanel.scripts.length === 0}
+      <Card scroll={false}><p class="p-4 text-xs text-muted-foreground">no hook scripts</p></Card>
+    {:else}
+      <div class="flex flex-col gap-2">
+        {#each hooksPanel.scripts as script (script.name)}
+          <div class="flex flex-wrap items-center gap-2 border border-border bg-card px-3 py-2.5 shadow-2xs">
+            <span class="font-mono text-xs">{script.name}</span>
+            <Badge variant={script.source === "user" ? "tonal" : "outline"}>{script.source}</Badge>
+            {#each script.fns as fn (fn)}
+              <Badge variant="tonal" class="jx-hue-info">{fn}()</Badge>
+            {/each}
+            <span class="ml-auto flex items-center gap-1.5">
+              <PressButton variant="ghost" onclick={() => void openHookView(script.name)}>{t("common.view")}</PressButton>
+              {#if script.source === "user"}
+                <PressButton variant="ghost" onclick={() => void removeHookScript(script.name)}>{t("common.remove")}</PressButton>
+              {/if}
+            </span>
+          </div>
+        {/each}
+      </div>
+    {/if}
+    <ErrorAlert error={hooksPanel.error} />
+  </div>
+</TabsContent>
+
+<TabsContent value="relay">
       <div class="flex flex-col gap-3">
         <Card title={t("adv.tab.relay")} scroll={false}>
           <div class="flex flex-col gap-3 p-3">
@@ -968,3 +995,94 @@
 </Dialog>
 
 <RelayPickerDialog bind:open={relayDialogOpen} />
+
+
+<!-- 服务分享（Owner 视觉验收 2026-09-12：服务卡可见分享链接） -->
+<Dialog bind:open={serviceShare.open} title="{t('adv.services.share')}: {serviceShare.service}">
+  <div class="flex flex-col gap-3 p-4">
+    {#if serviceShare.link !== ""}
+      <Alert variant="tonal" class="jx-hue-warning" assertive title={t("adv.share.secretWarning")}>
+        {t("adv.share.secretBody")}
+      </Alert>
+      <CopyField value={serviceShare.link} label="aifly1. link" />
+      <p class="text-[11px] text-muted-foreground">
+        key id <code class="font-mono">{serviceShare.keyId}</code>
+      </p>
+    {:else}
+      {#if serviceShare.groups.length > 1}
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">{t("f.group")}</span>
+          <div class="w-56">
+            <Select
+              options={serviceShare.groups.map((g) => ({ value: g, label: g }))}
+              bind:value={serviceShare.group}
+            />
+          </div>
+        </div>
+      {/if}
+      <ErrorAlert error={serviceShare.error} />
+    {/if}
+  </div>
+  {#snippet footer()}
+    <CardFooter label="service share">
+      {#if serviceShare.link !== ""}
+        <PressButton variant="fill" onclick={() => (serviceShare.open = false)}>{t("adv.keys.done")}</PressButton>
+      {:else}
+        <PressButton variant="ghost" onclick={() => (serviceShare.open = false)}>{t("common.cancel")}</PressButton>
+        <PressButton
+          variant="fill"
+          loading={serviceShare.busy}
+          class={serviceShare.group === "" ? "pointer-events-none opacity-50" : undefined}
+          onclick={() => void submitServiceShare()}
+        >{t("adv.services.share")}</PressButton>
+      {/if}
+    </CardFooter>
+  {/snippet}
+</Dialog>
+
+<!-- hooks 脚本安装 -->
+<Dialog bind:open={hookAdd.open} title={t("adv.hooks.add")}>
+  <div class="flex flex-col gap-3 p-4">
+    <label class="flex flex-col gap-1">
+      <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">name</span>
+      <input
+        class="border border-border bg-background px-2 py-1.5 font-mono text-xs"
+        placeholder="my-hook"
+        bind:value={hookAdd.name}
+      />
+    </label>
+    <label class="flex flex-col gap-1">
+      <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">script (CJS)</span>
+      <textarea
+        class="min-h-40 border border-border bg-background px-2 py-1.5 font-mono text-xs"
+        placeholder={'module.exports.authHeader = ({ homedir, args, secrets }) => {\n  return "Bearer ...";\n};'}
+        bind:value={hookAdd.content}
+      ></textarea>
+    </label>
+    <p class="text-[11px] text-muted-foreground">
+      installed to ~/.aifly/hooks/&lt;name&gt;.cjs - exported function names become the hook inventory.
+    </p>
+    <ErrorAlert error={hookAdd.error} />
+  </div>
+  {#snippet footer()}
+    <CardFooter label="hook add">
+      <PressButton variant="ghost" onclick={() => (hookAdd.open = false)}>{t("common.cancel")}</PressButton>
+      <PressButton variant="fill" loading={hookAdd.busy} onclick={() => void submitHookAdd()}>install</PressButton>
+    </CardFooter>
+  {/snippet}
+</Dialog>
+
+<!-- hooks 脚本查看 -->
+<Dialog bind:open={hookView.open} title="hooks: {hookView.name}">
+  <div class="flex flex-col gap-2 p-4">
+    <p class="text-[11px] text-muted-foreground">
+      [{hookView.source}] <code class="font-mono">{hookView.path}</code>
+    </p>
+    {#if hookView.busy}
+      <Skeleton class="h-24" />
+    {:else}
+      <pre class="max-h-80 overflow-auto border border-border bg-background p-2 font-mono text-[11px]">{hookView.content}</pre>
+    {/if}
+    <ErrorAlert error={hookView.error} />
+  </div>
+</Dialog>

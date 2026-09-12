@@ -29,6 +29,8 @@ export const serviceForm = $state({
   name: "",
   upstream: "",
   port: "",
+  /** 选中的 hooks 脚本（"" = 无；选项来自 hooksPanel——表单打开时懒加载）。 */
+  hooks: "",
   /** 选中密钥名（undefined = 不注入 authorization；$secret: 语法，M3 6.2）。 */
   secretName: undefined as string | undefined,
   match: [{ type: "suffix", value: "" }] as Array<{ type: string; value: string }>,
@@ -42,6 +44,8 @@ export function openServiceAdd(): void {
   serviceForm.name = "";
   serviceForm.upstream = "";
   serviceForm.port = "";
+  serviceForm.hooks = "";
+  void loadHooks();
   serviceForm.secretName = undefined;
   serviceForm.match = [{ type: "suffix", value: "" }];
   serviceForm.error = null;
@@ -53,6 +57,8 @@ export function openServiceEdit(service: ServiceConfigView): void {
   serviceForm.name = service.name;
   serviceForm.upstream = service.upstream;
   serviceForm.port = String(service.defaultPort);
+  serviceForm.hooks = service.hooks ?? "";
+  void loadHooks();
   const authorization = service.rewrite?.headerSet?.["authorization"];
   serviceForm.secretName =
     typeof authorization === "object" && authorization.args?.name !== undefined
@@ -83,6 +89,7 @@ function serviceInput(): { ok: true; input: ServiceAddInput } | { ok: false; mes
   if (serviceForm.port.trim() !== "" && port === undefined) {
     return { ok: false, message: "port must be a positive integer" };
   }
+  const hooks = serviceForm.hooks;
   return {
     ok: true,
     input: {
@@ -90,10 +97,12 @@ function serviceInput(): { ok: true; input: ServiceAddInput } | { ok: false; mes
       upstream,
       match,
       ...(port !== undefined ? { defaultPort: port } : {}),
-      // 有密钥 → secret 钩子注入（引擎请求期从本机密钥库取值）；无 → 不带
+      // 有密钥 → secret 脚本注入优先；否则用显式选择的 hooks 脚本
       ...(secretName !== undefined && secretName !== ""
         ? { hooks: "secret", rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: secretName } } } } }
-        : {}),
+        : hooks !== ""
+          ? { hooks }
+          : {}),
     },
   };
 }
@@ -443,5 +452,157 @@ export async function setModelsDev(enabled: boolean): Promise<void> {
     toastRpcError(settingsEdit.error);
   } finally {
     settingsEdit.modelsDevBusy = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// hooks 脚本资源域（Owner 视觉验收 2026-09-12：管理面同 group/secret）
+// ---------------------------------------------------------------------------
+
+export interface HookScriptRow {
+  name: string;
+  source: "user" | "builtin";
+  fns: string[];
+}
+
+export const hooksPanel = $state({
+  scripts: [] as HookScriptRow[],
+  loaded: false,
+  busy: false,
+  error: null as RpcError | null,
+});
+
+export async function loadHooks(force = false): Promise<void> {
+  if (hooksPanel.busy || (hooksPanel.loaded && !force)) return;
+  hooksPanel.busy = true;
+  hooksPanel.error = null;
+  try {
+    const result = await call((c) => c.provider.hooks.list({}));
+    hooksPanel.scripts = result.hooks;
+    hooksPanel.loaded = true;
+  } catch (error) {
+    hooksPanel.error = toRpcError(error);
+    toastRpcError(hooksPanel.error);
+  } finally {
+    hooksPanel.busy = false;
+  }
+}
+
+export const hookView = $state({
+  open: false,
+  name: "",
+  source: "user" as "user" | "builtin",
+  path: "",
+  content: "",
+  busy: false,
+  error: null as RpcError | null,
+});
+
+export async function openHookView(name: string): Promise<void> {
+  hookView.open = true;
+  hookView.name = name;
+  hookView.busy = true;
+  hookView.error = null;
+  hookView.content = "";
+  try {
+    const found = await call((c) => c.provider.hooks.get({ name }));
+    hookView.source = found.source;
+    hookView.path = found.path;
+    hookView.content = found.content;
+  } catch (error) {
+    hookView.error = toRpcError(error);
+  } finally {
+    hookView.busy = false;
+  }
+}
+
+export const hookAdd = $state({
+  open: false,
+  name: "",
+  content: "",
+  busy: false,
+  error: null as RpcError | null,
+});
+
+export async function submitHookAdd(): Promise<void> {
+  if (hookAdd.busy) return;
+  if (!/^[a-z][a-z0-9_-]{0,63}$/.test(hookAdd.name.trim())) {
+    hookAdd.error = { code: "INVALID_INPUT", message: "name: lowercase identifier (letters/digits/-/_)" };
+    return;
+  }
+  if (hookAdd.content.trim() === "") {
+    hookAdd.error = { code: "INVALID_INPUT", message: "script content is required" };
+    return;
+  }
+  hookAdd.busy = true;
+  hookAdd.error = null;
+  try {
+    const installed = await call((c) =>
+      c.provider.hooks.add({ name: hookAdd.name.trim(), content: hookAdd.content }),
+    );
+    hookAdd.open = false;
+    toastSuccess("Hook script installed", `${installed.name} (${installed.fns.join(", ")})`);
+    await loadHooks(true);
+  } catch (error) {
+    hookAdd.error = toRpcError(error);
+    toastRpcError(hookAdd.error);
+  } finally {
+    hookAdd.busy = false;
+  }
+}
+
+export async function removeHookScript(name: string): Promise<void> {
+  try {
+    await call((c) => c.provider.hooks.remove({ name }));
+    toastSuccess("Hook script removed", name);
+    await loadHooks(true);
+  } catch (error) {
+    toastRpcError(toRpcError(error));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 服务级分享（Owner 视觉验收：服务卡要能看到分享链接）
+// ---------------------------------------------------------------------------
+
+export const serviceShare = $state({
+  open: false,
+  service: "",
+  /** 候选组（包含该服务的组）。 */
+  groups: [] as string[],
+  group: "",
+  link: "",
+  keyId: "",
+  busy: false,
+  error: null as RpcError | null,
+});
+
+export function openServiceShare(serviceName: string): void {
+  const groups = app.groups.filter((g) => g.serviceIds.includes(serviceName)).map((g) => g.name);
+  serviceShare.open = true;
+  serviceShare.service = serviceName;
+  serviceShare.groups = groups;
+  serviceShare.group = groups[0] ?? "";
+  serviceShare.link = "";
+  serviceShare.keyId = "";
+  serviceShare.error =
+    groups.length === 0
+      ? { code: "INVALID_INPUT", message: "add this service to a group first (groups tab)" }
+      : null;
+}
+
+export async function submitServiceShare(): Promise<void> {
+  if (serviceShare.busy || serviceShare.group === "") return;
+  serviceShare.busy = true;
+  serviceShare.error = null;
+  try {
+    const result = await call((c) => c.provider.share.create({ group: serviceShare.group }));
+    serviceShare.link = result.link;
+    serviceShare.keyId = result.keyId;
+  } catch (error) {
+    serviceShare.error = toRpcError(error);
+    toastRpcError(serviceShare.error);
+  } finally {
+    serviceShare.busy = false;
   }
 }
