@@ -161,7 +161,7 @@ export const zh: Record<string, string> = {
   "adv.title": "高级设置",
   "adv.subtitle": "net-fly 内部结构——match 全集、rewrite 规则、密钥、密钥库、中继",
   "adv.tab.services": "服务",
-  "adv.tab.groups": "分组",
+  "adv.tab.groups": "分支 和 API Key",
   "adv.tab.keys": "密钥",
   "adv.tab.secrets": "密钥库",
   "adv.tab.relay": "中继与限额",

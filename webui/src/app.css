@@ -1,6 +1,7 @@
 @import 'tailwindcss';
 /* jixoai-theme 项会落 $lib/jixoai.css（含 --brand-hue: 95 品牌琥珀），
- * jx-pure 提供裸元素面（Part B 挂在根容器 .jx-pure 作用域上）；
+ * jx-pure 提供裸元素面——按 upstream 惯例只罩内容块容器，不挂应用根
+ * （挂根会把组件内裸 button 画成 raised 块，2026-09-13 视觉验收 #6）；
  * 组件自身按需引其 css；此处做 tailwind + 主题令牌扇入（A4/B3.1）。 */
 @import './lib/jixoai.css';
 @import './lib/jx-pure.css';

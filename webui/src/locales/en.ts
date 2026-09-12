@@ -162,7 +162,7 @@ export const en: Record<string, string> = {
   "adv.title": "Advanced",
   "adv.subtitle": "net-fly internals - match sets, rewrite rules, keys, secrets, relay",
   "adv.tab.services": "services",
-  "adv.tab.groups": "groups",
+  "adv.tab.groups": "branches & api keys",
   "adv.tab.keys": "keys",
   "adv.tab.secrets": "secrets",
   "adv.tab.relay": "relay & limits",

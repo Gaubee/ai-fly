@@ -8,7 +8,7 @@
      部署在独立机器，app 只消费其 relay URL——Owner 裁决 2026-09-12）。
      状态机在 stores/advanced。 -->
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import Card, { CardFooter } from "$lib/ui/card";
   import Badge from "$lib/ui/badge";
   import PressButton from "$lib/ui/press-button";
@@ -100,6 +100,14 @@
   });
   $effect(() => {
     if (!keyDialogOpen && keyIssue.result !== null) keyIssue.result = null;
+  });
+
+  // hooks 面板按需加载（Owner 视觉验收 2026-09-13 #5：模板里调
+  // loadHooks() 会把 Promise 渲染成 "[object Promise]"——加载是副作用，
+  // 归 $effect；untrack 隔离 loadHooks 内部读的 busy/loaded（否则
+  // busy 翻转会把本效果卷进重跑）。增删后的强刷由 store 自身负责）
+  $effect(() => {
+    if (tab === "hooks") untrack(() => void loadHooks());
   });
 
   // ── 密钥库区（M3 6.1）：页面内联卡（非 dialog）──────────────────────
@@ -619,32 +627,31 @@
                     <span class="text-[11px] text-muted-foreground">{t("f.noServices")}</span>
                   {/each}
                 </div>
-                <!-- 组内 keys（Owner 视觉验收 2026-09-12：keys 归组管理） -->
-                <div class="mt-1.5 flex flex-wrap items-center gap-1.5 border-t border-border pt-1.5">
+                <!-- 组内 keys（Owner 视觉验收 2026-09-13 #3/#4：keys 归组管理；
+                     revoked 不再显示；一行一 key 的 list-item 布局，非内联 chips） -->
+                <div class="mt-1.5 flex flex-col gap-1 border-t border-border pt-1.5">
                   <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">keys</span>
-                  {#each app.keys.filter((k) => k.group === group.name) as key (key.keyId)}
-                    <span class="inline-flex items-center gap-1">
-                      <code class="font-mono text-[10px] {key.revokedAt !== undefined ? 'text-muted-foreground line-through' : ''}">{key.keyId.slice(0, 8)}</code>
-                      {#if key.revokedAt === undefined}
-                        {#if keyRevoke.confirm === key.keyId}
-                          <PressButton
-                            variant="tonal"
-                            class="jx-pair-destructive"
-                            loading={keyRevoke.busy === key.keyId}
-                            onclick={() => void revokeKey(key.keyId)}
-                          >{t("adv.keys.confirmRevoke")}</PressButton>
-                          <PressButton variant="ghost" onclick={() => (keyRevoke.confirm = "")}>{t("common.cancel")}</PressButton>
-                        {:else}
-                          <PressButton variant="ghost" class="h-5 px-1.5 text-[10px]" onclick={() => (keyRevoke.confirm = key.keyId)}>&times; revoke</PressButton>
-                        {/if}
+                  {#each app.keys.filter((k) => k.group === group.name && k.revokedAt === undefined) as key (key.keyId)}
+                    <div class="flex items-center gap-2 pl-1">
+                      <code class="font-mono text-[11px]">{key.keyId.slice(0, 8)}</code>
+                      {#if keyRevoke.confirm === key.keyId}
+                        <PressButton
+                          variant="tonal"
+                          class="jx-pair-destructive"
+                          loading={keyRevoke.busy === key.keyId}
+                          onclick={() => void revokeKey(key.keyId)}
+                        >{t("adv.keys.confirmRevoke")}</PressButton>
+                        <PressButton variant="ghost" onclick={() => (keyRevoke.confirm = "")}>{t("common.cancel")}</PressButton>
+                      {:else}
+                        <PressButton variant="ghost" class="h-5 px-1.5 text-[10px]" onclick={() => (keyRevoke.confirm = key.keyId)}>{t("common.remove")}</PressButton>
                       {/if}
-                    </span>
+                    </div>
                   {:else}
-                    <span class="text-[11px] text-muted-foreground">no keys</span>
+                    <span class="pl-1 text-[11px] text-muted-foreground">no keys</span>
                   {/each}
                   <PressButton
                     variant="ghost"
-                    class="h-5 px-1.5 text-[10px]"
+                    class="h-5 self-start px-1.5 text-[10px]"
                     onclick={() => {
                       keyIssue.group = group.name;
                       void issueKey();
@@ -844,7 +851,6 @@
     <!-- ── 中继与限额 ───────────────────────────────────────── -->
     <TabsContent value="hooks">
   <div class="flex flex-col gap-3">
-    {loadHooks()}
     <div class="flex items-center justify-between">
       <p class="text-xs text-muted-foreground">
         hook scripts: builtin library + ~/.aifly/hooks (user overrides builtin);

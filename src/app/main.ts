@@ -453,6 +453,11 @@ export async function assembleApp(deps: AppDeps): Promise<AppHandles> {
   } else {
     log.info(`tray + app window ready (v${readPackageVersion(root)})`);
     log.info(`ui entry (one-time token): ${uiUrl}`);
+  const extraTokens = Number.parseInt(process.env.AIFLY_EXTRA_UI_TOKEN ?? "0", 10) || 0;
+  for (let i = 0; i < extraTokens && i < 16; i += 1) {
+    // 本机走查/测试便利：额外一次性 token（同门禁语义，用后即焚）
+    log.info(`ui entry (extra one-time token): ${webServer.uiUrl(port)}`);
+  }
   }
 
   return { host, webServer, shell, port, uiUrl, dev, quit };

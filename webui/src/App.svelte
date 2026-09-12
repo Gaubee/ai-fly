@@ -47,7 +47,11 @@
   }
 </script>
 
-<div class="jx-pure flex h-dvh flex-col bg-background text-foreground">
+<!-- 不挂 .jx-pure（Owner 视觉验收 2026-09-13 #6）：裸元素面只该罩内容
+     块（upstream 惯例——markdown 容器），罩在应用根会把 jixoai 组件里的
+     裸 button（tabs/select/dropdown/popover）全部画成描边+硬阴影的 raised
+     块，与组件库默认皮肤冲突。页面里需要 bare 面的元素自带 utility paint。 -->
+<div class="flex h-dvh flex-col bg-background text-foreground">
   <!-- appHeader：品牌 inline-start（单行——font-nav 纵向度量大，双行会溢出
        固定高度；min-height 而非 height，内容再高也撑开不裁切）；inline-end
        = 连接状态（合并原连接横幅与左下角 offline 指示）+ theme-toggle。
