@@ -17,5 +17,11 @@
       新增 `ai-fly app` 命令（spawn dist/app/main.js）；release.yml 补
       webui:build。安装冒烟：sandbox prefix 安装 tarball → `ai-fly app` →
       "ui server listening (webui: .../node_modules/ai-fly/webui/dist)" ✓
-- [ ] 7. 发布：alpha.1（$file/codex）→ alpha.2（+GUI 随包）→ 实机真 token
-      验证（codex 登录态机器）→ 0.4.0 latest
+- [x] 7b. $script: 第四种凭据源（Owner 裁决 2026-09-12：统一 Node 脚本跨平台、
+      无 VM——node:vm 非安全边界且 Bun/Deno 支持残缺）。CJS 模块导出同步函数，
+      createRequire 加载（Node/Bun/Deno 同语义），每请求调用（值按调用计算，
+      token 刷新即刻生效；脚本文件修改需重启——require 缓存）；ctx 透传
+      {homedir}；?bearer 同 $file。E2E：~/.aifly/codex.cjs 读登录态 →
+      service test 401 实证；rewrite 54 例
+- [ ] 7. 发布：alpha.1（$file/codex）→ alpha.2（+GUI 随包）→ alpha.3
+      （+$script）→ 实机真 token 验证（codex 登录态机器）→ 0.4.0 latest

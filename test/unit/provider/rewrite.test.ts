@@ -490,3 +490,67 @@ describe("$file 头链矩阵", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// $script: 脚本型凭据（Owner 裁决 2026-09-12：Node 脚本统一跨平台，无 VM）
+// ---------------------------------------------------------------------------
+describe("$script 头链矩阵", () => {
+  it("命中（模块导出函数）+ ?bearer；无后缀原样", () => {
+    const scripts = (mods: Record<string, unknown>) =>
+      (p: string): unknown => mods[p] ?? (() => "mod-" + p);
+    expect(
+      resolveHeaderValue("$script:~/.aifly/codex.cjs?bearer", {}, undefined, undefined, scripts({})),
+    ).toMatch(/^Bearer mod-\//);
+    expect(resolveHeaderValue("$script:/x/a.cjs", {}, undefined, undefined, scripts({}))).toMatch(/^mod-\//);
+  });
+
+  it("{default: fn} 导出形态亦支持；ctx.homedir 透传", () => {
+    const scripts = (): unknown => ({ default: (ctx: { homedir: string }) => `home=${ctx.homedir.length > 0}` });
+    expect(resolveHeaderValue("$script:/x/a.cjs", {}, undefined, undefined, scripts)).toBe("home=true");
+  });
+
+  it("未命中（模块缺失/非函数导出/抛错/空串/非字符串）-> SecretMissingError（不泄路径）", () => {
+    const ref = "$script:~/.aifly/x.cjs";
+    const cases: Array<(p: string) => unknown> = [
+      () => undefined,
+      () => 42,
+      () => ({ notDefault: 1 }),
+      () => () => { throw new Error("boom"); },
+      () => "",
+      () => ({ default: () => 123n }),
+    ];
+    for (const src of cases) {
+      try {
+        resolveHeaderValue(ref, {}, undefined, undefined, src);
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(SecretMissingError);
+        expect((err as Error).message).not.toContain(".aifly");
+      }
+    }
+  });
+
+  it("默认源：真实 CJS 模块加载（每请求调用函数，值按调用计算）", async () => {
+    const { mkdtempSync, writeFileSync, rmSync, readFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { defaultScriptCredentialSource } = await import("../../../src/provider/rewrite.ts");
+    const dir = mkdtempSync(join(tmpdir(), "aifly-script-cred-"));
+    const mod = join(dir, "cred.cjs");
+    writeFileSync(mod, "module.exports = () => JSON.parse(require('node:fs').readFileSync(process.env.HOME + '/token.txt', 'utf8')).token;\n");
+    const home = mkdtempSync(join(tmpdir(), "aifly-script-home-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      writeFileSync(join(home, "token.txt"), JSON.stringify({ token: "t1" }));
+      expect(resolveHeaderValue("$script:" + mod, {}, undefined, undefined, undefined)).toBe("t1");
+      writeFileSync(join(home, "token.txt"), JSON.stringify({ token: "t2" }));
+      expect(resolveHeaderValue("$script:" + mod, {}, undefined, undefined, undefined)).toBe("t2"); // 每请求重算
+      expect(defaultScriptCredentialSource(join(dir, "missing.cjs"))).toBeUndefined();
+    } finally {
+      process.env.HOME = prevHome;
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});

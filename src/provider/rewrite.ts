@@ -14,6 +14,7 @@
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { FORBIDDEN_REQ_HEADER_NAMES } from "../wire/frames.ts";
 import type { ReqHeader } from "../wire/frames.ts";
@@ -134,6 +135,53 @@ export function evalJsonPath(root: unknown, jsonPath: string): unknown {
   return cur;
 }
 
+/** 脚本凭据读取面（模块绝对路径 -> 导出函数或 undefined；由 resolveHeaderValue 调用取值）。 */
+export type ScriptCredentialSource = (modulePath: string) => unknown;
+
+export const SCRIPT_REF_PREFIX = "$script:";
+
+/** `$script:<path>[?bearer]` 的解析结果。 */
+export interface ScriptRef {
+  path: string;
+  bearer: boolean;
+}
+
+export function parseScriptRef(value: string): ScriptRef | null {
+  let body = value.slice(SCRIPT_REF_PREFIX.length);
+  let bearer = false;
+  if (body.endsWith("?bearer")) {
+    bearer = true;
+    body = body.slice(0, -"?bearer".length);
+  }
+  if (body === "") return null;
+  return { path: body, bearer };
+}
+
+/**
+ * 默认脚本凭据源：createRequire 同步加载 CJS 模块并返回其导出——
+ * 函数导出由 resolveHeaderValue 每请求调用（值按调用计算，token 刷新即刻生效）；
+ * 脚本文件本身的修改需重启 daemon（require 缓存，跨 Node/Bun/Deno 一致）。
+ * 信任模型与 $cmd 等价：脚本以 ai-fly 同权限执行宿主 IO（无 VM 隔离——
+ * node:vm 非安全边界且 Bun/Deno 支持残缺，Owner 裁决 2026-09-12 取简方案）。
+ */
+export const defaultScriptCredentialSource: ScriptCredentialSource = (modulePath): unknown => {
+  try {
+    return createRequire(import.meta.url)(modulePath);
+  } catch {
+    return undefined;
+  }
+};
+
+/** 脚本导出归一：函数 / {default: fn} 取函数；其余视为无效（undefined）。 */
+function scriptExportFn(mod: unknown): ((ctx: { homedir: string }) => unknown) | undefined {
+  if (typeof mod === "function") return mod as (ctx: { homedir: string }) => unknown;
+  if (mod !== null && typeof mod === "object" && "default" in mod) {
+    const d = (mod as { default?: unknown }).default;
+    if (typeof d === "function") return d as (ctx: { homedir: string }) => unknown;
+  }
+  return undefined;
+}
+
 /** 默认文件凭据源：读文件 + JSON 解析 + 点径求值（仅字符串值；`~` 已在上层展开）。 */
 export const defaultFileCredentialSource: FileCredentialSource = (path, jsonPath): string | undefined => {
   let raw: string;
@@ -165,6 +213,7 @@ export function resolveHeaderValue(
   env: EnvSource,
   secrets?: SecretSource | undefined,
   files: FileCredentialSource = defaultFileCredentialSource,
+  scripts: ScriptCredentialSource = defaultScriptCredentialSource,
 ): string | undefined {
   if (value.startsWith(SECRET_REF_PREFIX)) {
     const name = value.slice(SECRET_REF_PREFIX.length);
@@ -183,6 +232,21 @@ export function resolveHeaderValue(
     if (resolved === undefined || resolved === "") {
       throw new SecretMissingError();
     }
+    return ref.bearer ? `Bearer ${resolved}` : resolved;
+  }
+  if (value.startsWith(SCRIPT_REF_PREFIX)) {
+    const ref = parseScriptRef(value);
+    if (ref === null) throw new SecretMissingError();
+    const absPath = ref.path.startsWith("~/") ? join(homedir(), ref.path.slice(1)) : ref.path;
+    const fn = scriptExportFn(scripts(absPath));
+    if (fn === undefined) throw new SecretMissingError();
+    let resolved: unknown;
+    try {
+      resolved = fn({ homedir: homedir() });
+    } catch {
+      throw new SecretMissingError();
+    }
+    if (typeof resolved !== "string" || resolved === "") throw new SecretMissingError();
     return ref.bearer ? `Bearer ${resolved}` : resolved;
   }
   if (!value.startsWith("$env:")) return value;
