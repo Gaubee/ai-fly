@@ -1,70 +1,102 @@
 {
-  "version": 1,
-  "providers": [
+ "version": 1,
+ "providers": [
+  {
+   "id": "openai",
+   "label": "OpenAI",
+   "apiForm": "openai-completions",
+   "baseUrl": "https://api.openai.com",
+   "keyEnv": "OPENAI_API_KEY",
+   "defaultPort": 4300,
+   "matchDomains": [
+    "api.openai.com"
+   ],
+   "routes": [
     {
-      "id": "openai",
-      "label": "OpenAI",
-      "apiForm": "openai-completions",
-      "baseUrl": "https://api.openai.com",
-      "keyEnv": "OPENAI_API_KEY",
-      "defaultPort": 4300,
-      "matchDomains": [
-        "api.openai.com"
-      ],
-      "routes": [
-        {
-          "forms": ["openai-chat", "openai-responses"],
-          "localPrefix": "/v1",
-          "upstreamPrefix": "/v1"
-        }
-      ],
-      "notes": "Official OpenAI API: chat completions + responses under /v1. $env injection expects the full header value, e.g. OPENAI_API_KEY='Bearer <key>'.",
-      "source": "https://models.dev/api.json (@ai-sdk/openai default base URL)"
-    },
-    {
-      "id": "anthropic",
-      "label": "Anthropic (Claude)",
-      "apiForm": "anthropic-messages",
-      "baseUrl": "https://api.anthropic.com",
-      "keyEnv": "ANTHROPIC_API_KEY",
-      "defaultPort": 4301,
-      "matchDomains": [
-        "api.anthropic.com"
-      ],
-      "routes": [
-        {
-          "forms": ["anthropic"],
-          "localPrefix": "/v1",
-          "upstreamPrefix": "/v1"
-        }
-      ],
-      "notes": "Anthropic Messages API (Claude models). Also the protocol claude-code speaks natively.",
-      "source": "https://models.dev/api.json (@ai-sdk/anthropic default base URL)"
-    },
-    {
-      "id": "deepseek",
-      "label": "DeepSeek",
-      "apiForm": "openai-completions",
-      "baseUrl": "https://api.deepseek.com",
-      "keyEnv": "DEEPSEEK_API_KEY",
-      "defaultPort": 4304,
-      "matchDomains": [
-        "api.deepseek.com"
-      ],
-      "routes": [
-        {
-          "forms": ["openai-chat", "openai-responses"],
-          "localPrefix": "/v1",
-          "upstreamPrefix": "/v1"
-        },
-        {
-          "forms": ["anthropic"],
-          "localPrefix": "/anthropic",
-          "upstreamPrefix": "/anthropic"
-        }
-      ],
-      "notes": "OpenAI-compatible at /v1/* (chat completions + responses, codex-ready); Anthropic-compatible surface at /anthropic/* (per vendor docs).",
-      "source": "https://models.dev/api.json + https://api-docs.deepseek.com/guides/anthropic_api"
+     "forms": [
+      "openai-chat",
+      "openai-responses"
+     ],
+     "localPrefix": "/v1",
+     "upstreamPrefix": "/v1"
     }
-  ]
+   ],
+   "notes": "Official OpenAI API: chat completions + responses under /v1. $env injection expects the full header value, e.g. OPENAI_API_KEY='Bearer <key>'.",
+   "source": "https://models.dev/api.json (@ai-sdk/openai default base URL)"
+  },
+  {
+   "id": "anthropic",
+   "label": "Anthropic (Claude)",
+   "apiForm": "anthropic-messages",
+   "baseUrl": "https://api.anthropic.com",
+   "keyEnv": "ANTHROPIC_API_KEY",
+   "defaultPort": 4301,
+   "matchDomains": [
+    "api.anthropic.com"
+   ],
+   "routes": [
+    {
+     "forms": [
+      "anthropic"
+     ],
+     "localPrefix": "/v1",
+     "upstreamPrefix": "/v1"
+    }
+   ],
+   "notes": "Anthropic Messages API (Claude models). Also the protocol claude-code speaks natively.",
+   "source": "https://models.dev/api.json (@ai-sdk/anthropic default base URL)"
+  },
+  {
+   "id": "deepseek",
+   "label": "DeepSeek",
+   "apiForm": "openai-completions",
+   "baseUrl": "https://api.deepseek.com",
+   "keyEnv": "DEEPSEEK_API_KEY",
+   "defaultPort": 4304,
+   "matchDomains": [
+    "api.deepseek.com"
+   ],
+   "routes": [
+    {
+     "forms": [
+      "openai-chat",
+      "openai-responses"
+     ],
+     "localPrefix": "/v1",
+     "upstreamPrefix": "/v1"
+    },
+    {
+     "forms": [
+      "anthropic"
+     ],
+     "localPrefix": "/anthropic",
+     "upstreamPrefix": "/anthropic"
+    }
+   ],
+   "notes": "OpenAI-compatible at /v1/* (chat completions + responses, codex-ready); Anthropic-compatible surface at /anthropic/* (per vendor docs).",
+   "source": "https://models.dev/api.json + https://api-docs.deepseek.com/guides/anthropic_api"
+  },
+  {
+   "id": "codex",
+   "label": "Codex (ChatGPT backend)",
+   "apiForm": "openai-responses",
+   "baseUrl": "https://chatgpt.com",
+   "defaultPort": 4306,
+   "matchDomains": [
+    "chatgpt.com"
+   ],
+   "routes": [
+    {
+     "forms": [
+      "openai-responses"
+     ],
+     "localPrefix": "/codex",
+     "upstreamPrefix": "/backend-api/codex"
+    }
+   ],
+   "authHeader": "$file:~/.codex/auth.json#.tokens.access_token?bearer",
+   "notes": "ChatGPT Codex backend (Responses API). Auth reads ~/.codex/auth.json per request (codex CLI login state; no key needed). Point agents at OPENAI_BASE_URL=http://127.0.0.1:<port>/codex with wire_api=responses. WS clients: ws://127.0.0.1:<port>/codex/responses upgrades to wss upstream.",
+   "source": "https://github.com/openai/codex (~/.codex/auth.json login state)"
+  }
+ ]
 }

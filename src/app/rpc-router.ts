@@ -75,9 +75,11 @@ export function presetToServiceInput(
     ...(input.port !== undefined ? { defaultPort: input.port } : { defaultPort: preset.defaultPort }),
     ...(input.secretName !== undefined
       ? { rewrite: { headerSet: { authorization: `$secret:${input.secretName}` } } }
-      : keyEnv !== undefined
-        ? { rewrite: { headerSet: { authorization: `$env:${keyEnv}` } } }
-        : {}),
+      : preset.authHeader !== undefined
+        ? { rewrite: { headerSet: { authorization: preset.authHeader } } }
+        : keyEnv !== undefined
+          ? { rewrite: { headerSet: { authorization: `$env:${keyEnv}` } } }
+          : {}),
   };
   const envHint =
     input.secretName === undefined && keyEnv !== undefined

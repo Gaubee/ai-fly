@@ -415,3 +415,78 @@ describe("路由顺序命中与 pattern 模式（M3-r7）", () => {
     expect(buildUpstreamRequest(service, makeReq({ path: "/x/a/b" }), {}).url.pathname).toBe("/base/y/a/b");
   });
 });
+
+// ---------------------------------------------------------------------------
+// $file: 文件型凭据（cli-codex：~/.codex/auth.json#.tokens.access_token?bearer）
+// ---------------------------------------------------------------------------
+describe("$file 头链矩阵", () => {
+  const files = (map: Record<string, string>) =>
+    (path: string, jsonPath: string): string | undefined => {
+      expect(path.startsWith("/")).toBe(true); // ~ 已在引用语法层展开；注入源收绝对路径
+      return map[jsonPath];
+    };
+
+  it("命中 + ?bearer：拼 Bearer 前缀", () => {
+    const src = files({ ".tokens.access_token": "tok-1" });
+    expect(resolveHeaderValue("$file:~/.codex/auth.json#.tokens.access_token?bearer", {}, undefined, src)).toBe(
+      "Bearer tok-1",
+    );
+  });
+
+  it("命中无 ?bearer：原样值", () => {
+    const src = files({ ".key": "raw-value" });
+    expect(resolveHeaderValue("$file:/x/cfg.json#.key", {}, undefined, src)).toBe("raw-value");
+  });
+
+  it("文件/键/空值未命中 -> SecretMissingError（错误信息不含路径）", () => {
+    const ref = "$file:~/.codex/auth.json#.tokens.access_token";
+    for (const src of [files({}), files({ ".other": "v" }), files({ ".tokens.access_token": "" })]) {
+      try {
+        resolveHeaderValue(ref, {}, undefined, src);
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(SecretMissingError);
+        expect((err as Error).message).not.toContain(".codex");
+      }
+    }
+  });
+
+  it("格式非法（缺 # / 空点径）-> SecretMissingError", () => {
+    expect(() => resolveHeaderValue("$file:/x/a.json", {}, undefined, files({}))).toThrow(SecretMissingError);
+    expect(() => resolveHeaderValue("$file:/x/a.json#", {}, undefined, files({}))).toThrow(SecretMissingError);
+  });
+
+  it("parseFileRef / evalJsonPath 纯函数", async () => {
+    const { parseFileRef, evalJsonPath } = await import("../../../src/provider/rewrite.ts");
+    expect(parseFileRef("$file:~/.codex/auth.json#.tokens.access_token?bearer")).toEqual({
+      path: "~/.codex/auth.json",
+      jsonPath: ".tokens.access_token",
+      bearer: true,
+    });
+    expect(parseFileRef("$file:/a.json#noliteral")).toBeNull();
+    const doc = { tokens: { access_token: "t" }, arr: [{ k: 1 }, { k: 2 }] };
+    expect(evalJsonPath(doc, ".tokens.access_token")).toBe("t");
+    expect(evalJsonPath(doc, ".arr[1].k")).toBe(2);
+    expect(evalJsonPath(doc, ".arr[9].k")).toBeUndefined();
+    expect(evalJsonPath(doc, ".tokens.refresh_token")).toBeUndefined();
+    expect(evalJsonPath(doc, "tokens")).toBeUndefined(); // 须以 . 开头
+  });
+
+  it("默认源：真实文件读取（tmp HOME 由 os.homedir 走当前环境——用绝对路径直接验）", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { defaultFileCredentialSource } = await import("../../../src/provider/rewrite.ts");
+    const dir = mkdtempSync(join(tmpdir(), "aifly-file-cred-"));
+    const f = join(dir, "auth.json");
+    writeFileSync(f, JSON.stringify({ tokens: { access_token: "tok-2" } }));
+    try {
+      expect(defaultFileCredentialSource(f, ".tokens.access_token")).toBe("tok-2");
+      expect(defaultFileCredentialSource(join(dir, "missing.json"), ".x")).toBeUndefined();
+      writeFileSync(f, "not-json");
+      expect(defaultFileCredentialSource(f, ".x")).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

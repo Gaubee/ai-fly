@@ -89,3 +89,36 @@ describe("ai-fly service add 路由参数", () => {
     expect(text).not.toContain("sk-xyz");
   });
 });
+
+describe("ai-fly service add --preset codex（cli-codex）", () => {
+  it("路由 + $file 凭据模板预填（无需 --secret/--port）", async () => {
+    const home = mkdtempSync(join(tmpdir(), `aifly-codex-${process.pid}`));
+    const data = join(home, "provider");
+    const code = await run(["add", "my-codex", "--preset", "codex", "--data", data], { homedir: home });
+    expect(code).toBe(0);
+    const svc = ProviderStore.open(data).listServices().find((s) => s.name === "my-codex");
+    expect(svc?.upstream).toBe("https://chatgpt.com/");
+    expect(svc?.defaultPort).toBe(4306);
+    expect(svc?.routes?.[0]).toMatchObject({
+      forms: ["openai-responses"],
+      localPrefix: "/codex",
+      upstreamPrefix: "/backend-api/codex",
+    });
+    expect(svc?.rewrite?.headerSet).toEqual({
+      authorization: "$file:~/.codex/auth.json#.tokens.access_token?bearer",
+    });
+    const text = lines.join("");
+    expect(text).toContain("/codex=/backend-api/codex");
+  });
+
+  it("--secret 覆盖 preset 的 authHeader", async () => {
+    const home = mkdtempSync(join(tmpdir(), `aifly-codex2-${process.pid}`));
+    const data = join(home, "provider");
+    const secret = await import("../../src/cli/commands/provider/secret.ts");
+    await secret.run(["set", "ck", "--value", "sk-x", "--data", data], { homedir: home });
+    lines.length = 0;
+    await run(["add", "codex2", "--preset", "codex", "--secret", "ck", "--data", data], { homedir: home });
+    const svc = ProviderStore.open(data).listServices().find((s) => s.name === "codex2");
+    expect(svc?.rewrite?.headerSet).toEqual({ authorization: "$secret:ck" });
+  });
+});

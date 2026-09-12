@@ -12,6 +12,9 @@
 //   SecretMissingError -> secret_missing，不回退空值、不带引用名出网）；与
 //   $env 可并存于不同头。
 
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { FORBIDDEN_REQ_HEADER_NAMES } from "../wire/frames.ts";
 import type { ReqHeader } from "../wire/frames.ts";
 import { routeLocalPrefix } from "../shared/rpc-contract.ts";
@@ -61,6 +64,10 @@ export type EnvSource = Record<string, string | undefined>;
 /** 密钥读取面（name -> value；未命中 undefined——由 resolveHeaderValue 升级为错误）。 */
 export type SecretSource = (name: string) => string | undefined;
 
+/** 文件凭据读取面（绝对路径 + JSON path -> 值；未命中 undefined）。每请求调用——
+ *  无内存态（与 $secret 同法则：外部写入即刻生效，无需缓存/watchFiles）。 */
+export type FileCredentialSource = (path: string, jsonPath: string) => string | undefined;
+
 export interface UpstreamPlan {
   /** 最终上游 URL（已过双重断言；含查询串）。 */
   url: URL;
@@ -72,16 +79,92 @@ export interface UpstreamPlan {
   isWebSocketUpgrade: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// $file: 文件型凭据引用
+// ---------------------------------------------------------------------------
+
+export const FILE_REF_PREFIX = "$file:";
+
+/** `$file:<path>#<json-path>[?bearer]` 的解析结果。 */
+export interface FileRef {
+  path: string;
+  jsonPath: string;
+  bearer: boolean;
+}
+
 /**
- * 头值解析：literal 原样；`$secret:<name>` 优先于 `$env:` 判定——命中密钥库返回
- * 完整值，未命中（含空名/空值/未注入密钥源）抛 SecretMissingError（不回退空值、
- * 不省略该头）；`$env:<VAR>` 语义保持——空串/未设置返回 undefined（= 省略该头）。
- * 两者可并存于不同头（逐头独立解析）。
+ * 解析 `$file:` 引用。path 支持 `~` 前缀（解析时展开）；jsonPath 为 jq 风格
+ * 点径（`.tokens.access_token`，支持 `[n]` 数组下标）；`?bearer` 后缀给非空
+ * 值拼 `Bearer ` 前缀。格式非法（缺 `#`）抛 SecretMissingError 同族的
+ * UsageError 语义由调用方决定——此处返回 null 交由上层按未命中处理。
+ */
+export function parseFileRef(value: string): FileRef | null {
+  const body = value.slice(FILE_REF_PREFIX.length);
+  const hash = body.indexOf("#");
+  if (hash <= 0) return null;
+  let spec = body.slice(hash + 1);
+  let bearer = false;
+  if (spec.endsWith("?bearer")) {
+    bearer = true;
+    spec = spec.slice(0, -"?bearer".length);
+  }
+  if (spec === "" || !spec.startsWith(".")) return null;
+  return { path: body.slice(0, hash), jsonPath: spec, bearer };
+}
+
+/** jq 风格点径求值（`.a.b` / `.a[0].b`；起点须以 `.` 开头）。未命中返回 undefined。 */
+export function evalJsonPath(root: unknown, jsonPath: string): unknown {
+  if (!jsonPath.startsWith(".")) return undefined;
+  let cur: unknown = root;
+  const segments = jsonPath
+    .slice(1)
+    .split(/(?=\[)|\./)
+    .filter((s) => s !== "");
+  for (const seg of segments) {
+    if (cur === null || cur === undefined) return undefined;
+    const arr = /^\[(\d+)\]$/.exec(seg);
+    if (arr !== null) {
+      if (!Array.isArray(cur)) return undefined;
+      cur = cur[Number(arr[1])];
+      continue;
+    }
+    if (typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[seg];
+  }
+  return cur;
+}
+
+/** 默认文件凭据源：读文件 + JSON 解析 + 点径求值（仅字符串值；`~` 已在上层展开）。 */
+export const defaultFileCredentialSource: FileCredentialSource = (path, jsonPath): string | undefined => {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  const value = evalJsonPath(parsed, jsonPath);
+  return typeof value === "string" && value !== "" ? value : undefined;
+};
+
+/**
+ * 头值解析：literal 原样；`$secret:<name>` 优先于 `$env:`/`$file:` 判定——命中
+ * 密钥库返回完整值，未命中（含空名/空值/未注入密钥源）抛 SecretMissingError
+ * （不回退空值、不省略该头）；`$file:<path>#<json-path>[?bearer]` 每请求读盘
+ * （文件/键/空值未命中同抛 SecretMissingError；`?bearer` 拼前缀）；
+ * `$env:<VAR>` 语义保持——空串/未设置返回 undefined（= 省略该头）。
+ * 各源可并存于不同头（逐头独立解析）。
  */
 export function resolveHeaderValue(
   value: string,
   env: EnvSource,
   secrets?: SecretSource | undefined,
+  files: FileCredentialSource = defaultFileCredentialSource,
 ): string | undefined {
   if (value.startsWith(SECRET_REF_PREFIX)) {
     const name = value.slice(SECRET_REF_PREFIX.length);
@@ -90,6 +173,17 @@ export function resolveHeaderValue(
       throw new SecretMissingError();
     }
     return resolved;
+  }
+  if (value.startsWith(FILE_REF_PREFIX)) {
+    const ref = parseFileRef(value);
+    if (ref === null) throw new SecretMissingError();
+    // `~` 展开属引用语法层——注入源收到的一律是绝对路径
+    const absPath = ref.path.startsWith("~/") ? join(homedir(), ref.path.slice(1)) : ref.path;
+    const resolved = files(absPath, ref.jsonPath);
+    if (resolved === undefined || resolved === "") {
+      throw new SecretMissingError();
+    }
+    return ref.bearer ? `Bearer ${resolved}` : resolved;
   }
   if (!value.startsWith("$env:")) return value;
   const name = value.slice("$env:".length);

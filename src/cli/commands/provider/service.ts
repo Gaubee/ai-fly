@@ -99,6 +99,13 @@ function add(options: Readonly<Record<string, OptionValue>>, positionals: readon
   const headerSetSpecs = multi(options["header-set"]).map(parseHeaderSetSpec);
   if (options.secret !== undefined) {
     headerSetSpecs.push({ name: "authorization", value: `\$secret:${str(options.secret)}` });
+  } else if (
+    preset?.authHeader !== undefined &&
+    !headerSetSpecs.some((h) => h.name.toLowerCase() === "authorization")
+  ) {
+    // preset 自带凭据模板（如 codex 的 $file:~/.codex/auth.json#...）——显式
+    // --secret/--header-set 均可覆盖
+    headerSetSpecs.push({ name: "authorization", value: preset.authHeader });
   }
   const dataDir = resolveDataDir(str(options.data), home);
   const store = openStore(dataDir);
@@ -271,21 +278,44 @@ function get(options: Readonly<Record<string, OptionValue>>, positionals: readon
 async function test(options: Readonly<Record<string, OptionValue>>, positionals: readonly string[], home: string): Promise<number> {
   const name = positionals[1];
   if (name === undefined) throw new UsageError("error: service test requires a <name> argument");
-  const formRaw = options.form === undefined ? "openai-chat" : str(options.form)!;
-  if (!ROUTE_FORMS.includes(formRaw as RouteFormLiteral)) {
-    throw new UsageError(`error: --form must be one of ${ROUTE_FORMS.join(", ")}`);
-  }
   const dataDir = resolveDataDir(str(options.data), home);
   const store = openStore(dataDir);
   const service = store.getServiceByName(name);
   if (service === undefined) throw new UsageError(`error: service '${name}' not found`);
+  // 缺省 form：命中路由（--local-prefix 或唯一路由）的首个形态——codex 等
+  // responses-only 服务的 test 不必手写 --form
+  let formRaw: string;
+  if (options.form !== undefined) {
+    formRaw = str(options.form)!;
+  } else {
+    const localPrefix = options["local-prefix"] !== undefined ? str(options["local-prefix"]) : undefined;
+    const routes = (service.routes ?? []).filter((r) => r.mode !== "pattern");
+    const hit =
+      localPrefix !== undefined
+        ? routes.find((r) => r.localPrefix === localPrefix)
+        : routes.length === 1
+          ? routes[0]
+          : undefined;
+    formRaw = hit?.forms[0] ?? "openai-chat";
+  }
+  if (!ROUTE_FORMS.includes(formRaw as RouteFormLiteral)) {
+    throw new UsageError(`error: --form must be one of ${ROUTE_FORMS.join(", ")}`);
+  }
   const { testServiceRoute } = await import("../../../provider/route-test.ts");
   const { SecretsStore } = await import("../../../provider/secrets.ts");
   const secretsStore = SecretsStore.open(dataDir);
+  const hitLocalPrefix =
+    options["local-prefix"] !== undefined
+      ? str(options["local-prefix"])!
+      : (() => {
+          // 缺省 form 的路由命中也提供缺省 localPrefix（responses-only 服务零参数可测）
+          const routes = (service.routes ?? []).filter((r) => r.mode !== "pattern");
+          return routes.length === 1 ? routes[0]!.localPrefix : undefined;
+        })();
   const result = await testServiceRoute({
     service,
     form: formRaw as RouteFormLiteral,
-    ...(options["local-prefix"] !== undefined ? { localPrefix: str(options["local-prefix"])! } : {}),
+    ...(hitLocalPrefix !== undefined ? { localPrefix: hitLocalPrefix } : {}),
     ...(options.model !== undefined ? { model: str(options.model)! } : {}),
     ...(options.content !== undefined ? { content: str(options.content)! } : {}),
     secrets: (secretName: string) => secretsStore.resolve(secretName)?.headerValue,

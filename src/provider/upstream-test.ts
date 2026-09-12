@@ -137,8 +137,9 @@ export async function probeUpstreamModels(input: {
 }
 
 /**
- * 执行一次最小连通测试。三个 apiForm 的请求形状（spec「上游连通性测试」）：
+ * 执行一次最小连通测试。四个 apiForm 的请求形状（spec「上游连通性测试」）：
  * - openai-completions: POST {upstream}/chat/completions，max_tokens:1，authorization 头
+ * - openai-responses: POST {upstream}/responses，input:"ping"，max_output_tokens:1，authorization 头（cli-codex）
  * - anthropic-messages: POST {upstream}/v1/messages，max_tokens:1，authorization +
  *   anthropic-version: 2023-06-01
  * - gemini-native: POST {upstream}/v1beta/models/{model}:generateContent，
@@ -205,6 +206,10 @@ export async function testUpstream(input: UpstreamTestInput): Promise<UpstreamTe
       max_tokens: 1,
       stream: false,
     });
+    if (secretValue !== undefined) headers.authorization = secretValue;
+  } else if (apiForm === "openai-responses") {
+    url = `${base}${endsWithVersionSegment(base) ? "/responses" : "/v1/responses"}`;
+    body = JSON.stringify({ model, input: "ping", max_output_tokens: 1, stream: false });
     if (secretValue !== undefined) headers.authorization = secretValue;
   } else if (apiForm === "anthropic-messages") {
     url = `${base}/v1/messages`;

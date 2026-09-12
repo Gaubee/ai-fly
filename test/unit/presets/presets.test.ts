@@ -72,9 +72,13 @@ describe("curated presets", () => {
     expect(new Set(curated.map((p) => p.defaultPort)).size).toBe(curated.length);
   });
 
-  it("remote presets declare keyEnv", () => {
+  it("curated presets declare a credential source (keyEnv or authHeader)", () => {
     for (const preset of loadCuratedPresets()) {
-      expect(preset.keyEnv, `${preset.id} should declare keyEnv`).toBeDefined();
+      // cli-codex 起，凭据可走 $file:（authHeader）；无 authHeader 的远程预设仍须 keyEnv
+      expect(
+        preset.keyEnv !== undefined || preset.authHeader !== undefined,
+        `${preset.id} should declare keyEnv or authHeader`,
+      ).toBe(true);
     }
   });
 });

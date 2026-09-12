@@ -200,7 +200,7 @@ export const CONSUMER_PROVIDER_STATUS_SCHEMA = z.object({
 // 预设（presets spec 数据契约的运行时形状；精选源见 presets/providers.json）
 // ---------------------------------------------------------------------------
 
-export const API_FORM_SCHEMA = z.enum(["openai-completions", "anthropic-messages", "gemini-native"]);
+export const API_FORM_SCHEMA = z.enum(["openai-completions", "openai-responses", "anthropic-messages", "gemini-native"]);
 
 export const PRESET_SCHEMA = z.strictObject({
   id: z.string().min(1).max(128),
@@ -211,6 +211,9 @@ export const PRESET_SCHEMA = z.strictObject({
   iconId: z.string().min(1).max(128).optional(),
   /** 惯用环境变量名（仅用于 $env 注入建议与文档；本地运行时模板无此字段）。 */
   keyEnv: z.string().min(1).max(256).optional(),
+  /** 预填 authorization 头值模板（如 `$file:~/.codex/auth.json#.tokens.access_token?bearer`）；
+   *  优先级：显式 secretName > authHeader > keyEnv。 */
+  authHeader: z.string().min(3).max(2048).optional(),
   /** 使用方本地端口建议（避开 <1024 特权段）。 */
   defaultPort: z.number().int().min(1024).max(65535),
   /** 官方域名集（exact/suffix 建议的生成源）。 */
