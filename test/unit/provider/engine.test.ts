@@ -59,7 +59,7 @@ beforeEach(async () => {
     name: "api",
     upstream: `http://127.0.0.1:${mockPort}`,
     match: [{ type: "suffix", value: ".local" }],
-    rewrite: { headerSet: { authorization: "$env:TEST_UPSTREAM_KEY" } },
+    rewrite: { headerSet: { authorization: { hook: "authHeader", args: { var: "TEST_UPSTREAM_KEY" } } } },
   });
   serviceId = svc.serviceId;
   store.addGroup("friends", ["api"], { maxConcurrency: 1 });
@@ -227,7 +227,7 @@ describe("REQ 全链路", () => {
       name: "sec-api",
       upstream: `http://127.0.0.1:${mockPort}`,
       match: [{ type: "suffix", value: ".local" }],
-      rewrite: { headerSet: { authorization: "$secret:test-key" } },
+      rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: "test-key" } } } },
     });
     store.addGroup("secret-holders", ["sec-api"]);
     const keySecret = store.issueKey("secret-holders");
@@ -312,7 +312,7 @@ describe("横幅与空 $env 警告（纯函数）", () => {
     const services = [
       {
         ...store.getService(serviceId)!,
-        rewrite: { headerSet: { a: "$env:SET_VAR", b: "$env:EMPTY_VAR", c: "$env:UNSET_VAR" } },
+        rewrite: { headerSet: { a: { hook: "authHeader", args: { var: "SET_VAR" } }, b: { hook: "authHeader", args: { var: "EMPTY_VAR" } }, c: { hook: "authHeader", args: { var: "UNSET_VAR" } } } },
       },
     ];
     const refs = findEmptyEnvRefs(services, { SET_VAR: "x", EMPTY_VAR: "" });

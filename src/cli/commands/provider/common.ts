@@ -86,12 +86,34 @@ export function parseMatchSpec(raw: string): ServiceMatchRule {
 }
 
 /** "Name=value"（首个 = 分割；Name 小写化）。 */
-export function parseHeaderSetSpec(raw: string): { name: string; value: string } {
+type HeaderValueInput = string | { hook: string; args?: Record<string, string> | undefined; bearer?: boolean | undefined };
+
+export function parseHeaderSetSpec(raw: string): { name: string; value: HeaderValueInput } {
   const idx = raw.indexOf("=");
   if (idx <= 0) {
-    throw new UsageError(`error: invalid --header-set value: ${raw} (expected <name>=<value>, value may be $env:VAR)`);
+    throw new UsageError(
+      `error: invalid --header-set value: ${raw} (expected <name>=<value> or <name>={"hook":...}; value is a literal or hook invocation JSON)`,
+    );
   }
-  return { name: raw.slice(0, idx).trim().toLowerCase(), value: raw.slice(idx + 1) };
+  const name = raw.slice(0, idx).trim().toLowerCase();
+  const rawValue = raw.slice(idx + 1);
+  if (rawValue.startsWith("{")) {
+    // 钩子调用对象（两协议之二）：值以 { 开头按 JSON 解析
+    try {
+      const parsed: unknown = JSON.parse(rawValue);
+      if (
+        parsed === null ||
+        typeof parsed !== "object" ||
+        typeof (parsed as { hook?: unknown }).hook !== "string"
+      ) {
+        throw new Error("not a hook invocation");
+      }
+      return { name, value: parsed as { hook: string; args?: Record<string, string>; bearer?: boolean } };
+    } catch {
+      throw new UsageError(`error: invalid --header-set hook JSON for '${name}' (expected {"hook":"authHeader",...})`);
+    }
+  }
+  return { name, value: rawValue };
 }
 
 /** 各命令的 rewrite 组装（仅在存在任一重写选项时构造）。 */
@@ -99,7 +121,7 @@ export function buildRewrite(input: {
   host?: string | undefined;
   strip?: string | undefined;
   append?: string | undefined;
-  headerSet: Array<{ name: string; value: string }>;
+  headerSet: Array<{ name: string; value: HeaderValueInput }>;
   headerRemove: string[];
 }): ServiceRewrite | undefined {
   const rewrite: ServiceRewrite = {};
@@ -107,9 +129,9 @@ export function buildRewrite(input: {
   if (input.strip !== undefined) rewrite.pathPrefixStrip = input.strip;
   if (input.append !== undefined) rewrite.pathPrefixAppend = input.append;
   if (input.headerSet.length > 0) {
-    const headerSet: Record<string, string> = {};
+    const headerSet: Record<string, HeaderValueInput> = {};
     for (const h of input.headerSet) headerSet[h.name] = h.value;
-    rewrite.headerSet = headerSet;
+    rewrite.headerSet = headerSet as ServiceRewrite["headerSet"];
   }
   if (input.headerRemove.length > 0) rewrite.headerRemove = input.headerRemove;
   return Object.keys(rewrite).length === 0 ? undefined : rewrite;

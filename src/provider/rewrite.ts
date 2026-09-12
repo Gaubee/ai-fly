@@ -20,6 +20,7 @@ import { FORBIDDEN_REQ_HEADER_NAMES } from "../wire/frames.ts";
 import type { ReqHeader } from "../wire/frames.ts";
 import { routeLocalPrefix } from "../shared/rpc-contract.ts";
 import { compileMatchPattern, matchRequestPath } from "./match-pattern.ts";
+import { resolveHookValue, type HeaderValue } from "./hook.ts";
 import { expandUriTemplate } from "./uri-template.ts";
 import { parseUpstreamUrl } from "./store.ts";
 import type { ServiceConfig } from "./store.ts";
@@ -201,70 +202,64 @@ export const defaultFileCredentialSource: FileCredentialSource = (path, jsonPath
 };
 
 /**
- * 头值解析：literal 原样；`$secret:<name>` 优先于 `$env:`/`$file:` 判定——命中
- * 密钥库返回完整值，未命中（含空名/空值/未注入密钥源）抛 SecretMissingError
- * （不回退空值、不省略该头）；`$file:<path>#<json-path>[?bearer]` 每请求读盘
- * （文件/键/空值未命中同抛 SecretMissingError；`?bearer` 拼前缀）；
- * `$env:<VAR>` 语义保持——空串/未设置返回 undefined（= 省略该头）。
- * 各源可并存于不同头（逐头独立解析）。
+ * 头值解析（两协议，Owner 裁决 2026-09-12 最终形态）：
+ * - string 字面量：原样（空串 = 省略该头）
+ * - 对象 = 钩子调用：{ hook: <函数名>, args?, bearer? }——脚本取
+ *   ctx.script（service.hooks），缺席时按 args 形态推导内建
+ *   （var→env / name→secret / path→file）；经 resolveHookValue 三态取值
+ *   （string/Promise 每请求拉取；AsyncIterable 订阅 latest）；bearer 拼
+ *   前缀。未命中抛 SecretMissingError（零上游请求；不泄脚本路径与值）。
  */
-export function resolveHeaderValue(
-  value: string,
-  env: EnvSource,
-  secrets?: SecretSource | undefined,
-  files: FileCredentialSource = defaultFileCredentialSource,
-  scripts: ScriptCredentialSource = defaultScriptCredentialSource,
-): string | undefined {
-  if (value.startsWith(SECRET_REF_PREFIX)) {
-    const name = value.slice(SECRET_REF_PREFIX.length);
-    const resolved = secrets?.(name);
-    if (resolved === undefined || resolved === "") {
-      throw new SecretMissingError();
-    }
-    return resolved;
+export async function resolveHeaderEntry(
+  entry: HeaderValue,
+  ctx: {
+    script?: string | undefined;
+    env?: EnvSource;
+    secrets?: SecretSource | undefined;
+    home?: string;
+    loader?: (name: string, home: string) => Record<string, unknown> | undefined;
+  },
+): Promise<string | undefined> {
+  if (typeof entry === "string") return entry === "" ? undefined : entry;
+  const args = entry.args ?? {};
+  let script = ctx.script;
+  if (script === undefined || script === "") {
+    if (args.var !== undefined) script = "env";
+    else if (args.name !== undefined) script = "secret";
+    else if (args.path !== undefined) script = "file";
+    else throw new SecretMissingError();
   }
-  if (value.startsWith(FILE_REF_PREFIX)) {
-    const ref = parseFileRef(value);
-    if (ref === null) throw new SecretMissingError();
-    // `~` 展开属引用语法层——注入源收到的一律是绝对路径
-    const absPath = ref.path.startsWith("~/") ? join(homedir(), ref.path.slice(1)) : ref.path;
-    const resolved = files(absPath, ref.jsonPath);
-    if (resolved === undefined || resolved === "") {
-      throw new SecretMissingError();
-    }
-    return ref.bearer ? `Bearer ${resolved}` : resolved;
+  let raw: string;
+  try {
+    raw = await resolveHookValue(
+      entry.hook,
+      {
+        script,
+        ...(ctx.home !== undefined ? { home: ctx.home } : {}),
+        ...(Object.keys(args).length > 0 ? { args } : {}),
+        ...(ctx.secrets !== undefined ? { secrets: ctx.secrets } : {}),
+        ...(ctx.env !== undefined ? { env: (n: string) => ctx.env?.[n] } : {}),
+        ...(ctx.loader !== undefined ? { loader: ctx.loader } : {}),
+      },
+    );
+  } catch {
+    throw new SecretMissingError();
   }
-  if (value.startsWith(SCRIPT_REF_PREFIX)) {
-    const ref = parseScriptRef(value);
-    if (ref === null) throw new SecretMissingError();
-    const absPath = ref.path.startsWith("~/") ? join(homedir(), ref.path.slice(1)) : ref.path;
-    const fn = scriptExportFn(scripts(absPath));
-    if (fn === undefined) throw new SecretMissingError();
-    let resolved: unknown;
-    try {
-      resolved = fn({ homedir: homedir() });
-    } catch {
-      throw new SecretMissingError();
-    }
-    if (typeof resolved !== "string" || resolved === "") throw new SecretMissingError();
-    return ref.bearer ? `Bearer ${resolved}` : resolved;
-  }
-  if (!value.startsWith("$env:")) return value;
-  const name = value.slice("$env:".length);
-  if (name === "") return undefined;
-  const resolved = env[name];
-  return resolved === undefined || resolved === "" ? undefined : resolved;
+  return entry.bearer === true ? `Bearer ${raw}` : raw;
 }
 
-/** 服务声明的全部 $env 变量名（启动横幅 WARNING 用）。 */
+/** 服务声明的 env 钩子变量名（启动横幅 WARNING 用：声明而未设置）。 */
 export function collectEnvVarNames(service: ServiceConfig): string[] {
   const names = new Set<string>();
   const headerSet = service.rewrite?.headerSet;
   if (headerSet === undefined) return [];
-  for (const value of Object.values(headerSet)) {
-    if (value.startsWith("$env:")) {
-      const name = value.slice("$env:".length);
-      if (name !== "") names.add(name);
+  for (const entry of Object.values(headerSet)) {
+    if (
+      typeof entry === "object" &&
+      entry.args?.var !== undefined &&
+      (service.hooks === undefined || service.hooks === "env")
+    ) {
+      names.add(entry.args.var);
     }
   }
   return [...names];
@@ -378,12 +373,12 @@ export function isWebSocketUpgradeRequest(headers: Record<string, string>): bool
 // 主构造
 // ---------------------------------------------------------------------------
 
-export function buildUpstreamRequest(
+export async function buildUpstreamRequest(
   service: ServiceConfig,
   req: ReqHeader,
   env: EnvSource = process.env,
   secrets?: SecretSource | undefined,
-): UpstreamPlan {
+): Promise<UpstreamPlan> {
   const upstream = parseUpstreamUrl(service.upstream);
 
   // 1) path：防御性形状检查 -> 路径路由（**按声明顺序命中，先声明先匹配**
@@ -478,7 +473,7 @@ export function buildUpstreamRequest(
     for (const [name, value] of Object.entries(headerSet)) {
       // $secret 未命中在此抛 SecretMissingError（上游 catch 映射 secret_missing）；
       // $env 空串/未设置 = 省略。
-      const resolved = resolveHeaderValue(value, env, secrets);
+      const resolved = await resolveHeaderEntry(value, { script: service.hooks, env, secrets });
       if (resolved === undefined) continue;
       headers[name] = resolved;
     }

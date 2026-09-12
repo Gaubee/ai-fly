@@ -140,7 +140,7 @@ function mergeTimeouts(overrides?: Partial<UpstreamTimeouts> | undefined): Upstr
 export async function forwardRequest(ctx: ForwardCtx): Promise<void> {
   let plan: UpstreamPlan;
   try {
-    plan = buildUpstreamRequest(ctx.service, ctx.req, ctx.env ?? process.env, ctx.secrets);
+    plan = await buildUpstreamRequest(ctx.service, ctx.req, ctx.env ?? process.env, ctx.secrets);
   } catch (err) {
     // 分类：$secret 未命中（secret_missing）> 路由白名单外（path_not_offered，
     // 消费侧 404）> RewriteError（protocol_error）> 兜底。前三类都是零上游请求；

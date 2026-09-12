@@ -366,7 +366,7 @@ export async function generateShare(): Promise<void> {
           ? { defaultPort: parsePositiveInt(share.port) }
           : {}),
         ...(share.secretName !== undefined
-          ? { rewrite: { headerSet: { authorization: `$secret:${share.secretName}` } } }
+          ? { hooks: "secret", rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: share.secretName } } } } }
           : {}),
         ...(routes !== undefined ? { routes } : {}),
       }),

@@ -181,7 +181,7 @@ describe("响应透传", () => {
       res.end('{"ok":true}');
     });
     const service = makeService(upstream.port, {
-      rewrite: { headerSet: { authorization: "$env:UPSTREAM_KEY" } },
+      rewrite: { headerSet: { authorization: { hook: "authHeader", args: { var: "UPSTREAM_KEY" } } } },
     });
     const h = makeHarness();
     const body = ENC.encode('{"q":"hi"}');
@@ -196,17 +196,22 @@ describe("响应透传", () => {
     expect(seen?.body.toString()).toBe('{"q":"hi"}');
   });
 
-  it("$env 空串 -> 该头省略", async () => {
+  it("env 钩子空串 -> fail-fast ERROR(secret_missing)（语义收紧：不再静默省略）", async () => {
     const upstream = await startUpstream((_req, res) => {
       res.writeHead(204);
       res.end();
     });
-    const service = makeService(upstream.port, { rewrite: { headerSet: { authorization: "$env:EMPTY_KEY", "x-lit": "v" } } });
+    const service = makeService(upstream.port, {
+      hooks: "env",
+      rewrite: { headerSet: { authorization: { hook: "authHeader", args: { var: "EMPTY_KEY" } }, "x-lit": "v" } },
+    });
     const h = makeHarness();
     const fh = forward(h, service, makeReq("r3"), new Uint8Array(0), { env: { EMPTY_KEY: "" } });
     await fh.done;
-    expect(upstream.requests[0]?.headers.authorization).toBeUndefined();
-    expect(upstream.requests[0]?.headers["x-lit"]).toBe("v");
+    const err = of(h.consumerEvents, FRAME_TYPE.ERROR, "r3")[0]?.header as { code: string };
+    expect(err.code).toBe("secret_missing");
+    expect(upstream.requests).toHaveLength(0); // 零上游请求
+    expect(fh.usage).toEqual([{ status: "secret_missing", bytes: 0 }]);
   });
 
   it("上游 404 原样透传（status + 正文 + contentType，无 ERROR 帧）", async () => {
@@ -339,7 +344,7 @@ describe("错误与超时族", () => {
     });
     const h = makeHarness();
     const service = makeService(upstream.port, {
-      rewrite: { headerSet: { authorization: "$secret:openai", "x-env": "$env:SOME_VAR" } },
+      rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: "openai" } }, "x-env": { hook: "authHeader", args: { var: "SOME_VAR" } } } },
     });
     const fh = forward(h, service, makeReq("rs1", { method: "POST" }), new Uint8Array(0), {
       secrets: (name) => (name === "openai" ? "Bearer sk-lib-9" : undefined),
@@ -356,7 +361,7 @@ describe("错误与超时族", () => {
     const upstream = await startUpstream((_req, res) => res.end("never"));
     const h = makeHarness();
     const service = makeService(upstream.port, {
-      rewrite: { headerSet: { authorization: "$secret:openai" } },
+      rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: "openai" } } } },
     });
     const fh = forward(h, service, makeReq("rs2", { method: "POST" }), new Uint8Array(0), {
       secrets: () => undefined,

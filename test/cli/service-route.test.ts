@@ -81,11 +81,12 @@ describe("ai-fly service add 路由参数", () => {
     lines.length = 0;
     await run(["add", "withsec", "--upstream", "https://api.example.com/", "--match", "suffix:api.example.com", "--secret", "kk", "--port", "4314", "--data", data], { homedir: home });
     const svc = ProviderStore.open(data).listServices().find((s) => s.name === "withsec");
-    expect(svc?.rewrite?.headerSet).toEqual({ authorization: "$secret:kk" });
+    expect(svc?.rewrite?.headerSet).toEqual({ authorization: { hook: "authHeader", args: { name: "kk" } } });
+    expect(svc?.hooks).toBe("secret");
     lines.length = 0;
     expect(await run(["get", "withsec", "--data", data], { homedir: home })).toBe(0);
     const text = lines.join("");
-    expect(text).toContain("$secret:kk");
+    expect(text).toContain("hook authHeader (name=kk)");
     expect(text).not.toContain("sk-xyz");
   });
 });
@@ -105,7 +106,7 @@ describe("ai-fly service add --preset codex（cli-codex）", () => {
       upstreamPrefix: "/backend-api/codex",
     });
     expect(svc?.rewrite?.headerSet).toEqual({
-      authorization: "$file:~/.codex/auth.json#.tokens.access_token?bearer",
+      authorization: { hook: "authHeader", bearer: true },
     });
     const text = lines.join("");
     expect(text).toContain("/codex=/backend-api/codex");
@@ -119,6 +120,6 @@ describe("ai-fly service add --preset codex（cli-codex）", () => {
     lines.length = 0;
     await run(["add", "codex2", "--preset", "codex", "--secret", "ck", "--data", data], { homedir: home });
     const svc = ProviderStore.open(data).listServices().find((s) => s.name === "codex2");
-    expect(svc?.rewrite?.headerSet).toEqual({ authorization: "$secret:ck" });
+    expect(svc?.rewrite?.headerSet).toEqual({ authorization: { hook: "authHeader", args: { name: "ck" } } });
   });
 });

@@ -22,7 +22,7 @@ Daemon:
   ai-fly app                   launch the tray GUI (desktop app)
 
 Provider:
-  ai-fly service add <name> [--upstream <url> | --preset <id>] [--route <local>=<up>[@forms]]...
+  ai-fly service add <name> [--upstream <url> | --preset <id>] [--hooks <script>] [--route ...]...
                                [--route-pattern <match>=<template>]... [--secret <name>]
                                [--port <n>] [--match <type>:<value>]... [--data <dir>]
   ai-fly service list|get|remove <name> [--data <dir>]
@@ -33,6 +33,7 @@ Provider:
   ai-fly share --group <name> [--ttl <dur>]             mint a share link (token + key)
   ai-fly revoke <endpointId>                            eject a device (fabric-level)
   ai-fly presets [search] [--json]                      featured + models.dev long tail
+  ai-fly hooks list|get|add|remove|run                  hook scripts (builtin + ~/.aifly/hooks)
 
 Consumer:
   ai-fly join <dweb1-token> [--data <dir>] [--proxy …]  admit this device (fabric layer)
@@ -96,6 +97,7 @@ async function dispatch(command: string, rest: string[]): Promise<number> {
     })
     .with("daemon", () => lazy(() => import("./cli/commands/provider/daemon.ts"))(rest))
     .with("presets", () => lazy(() => import("./cli/commands/provider/presets.ts"))(rest))
+    .with("hooks", () => lazy(() => import("./cli/commands/provider/hooks.ts"))(rest))
     .with("secret", () => lazy(() => import("./cli/commands/provider/secret.ts"))(rest))
     .with("settings", async () => (await import("./cli/commands/settings.ts")).runAsSettings(rest, {}))
     .with("relay", async () => (await import("./cli/commands/settings.ts")).runAsRelay(rest, {}))

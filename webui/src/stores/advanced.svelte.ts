@@ -55,7 +55,9 @@ export function openServiceEdit(service: ServiceConfigView): void {
   serviceForm.port = String(service.defaultPort);
   const authorization = service.rewrite?.headerSet?.["authorization"];
   serviceForm.secretName =
-    authorization?.startsWith("$secret:") ? authorization.slice("$secret:".length) : undefined;
+    typeof authorization === "object" && authorization.args?.name !== undefined
+      ? authorization.args.name
+      : undefined;
   serviceForm.match = service.match.map((rule) => ({ type: rule.type, value: rule.value }));
   serviceForm.error = null;
 }
@@ -88,9 +90,9 @@ function serviceInput(): { ok: true; input: ServiceAddInput } | { ok: false; mes
       upstream,
       match,
       ...(port !== undefined ? { defaultPort: port } : {}),
-      // 有密钥 → $secret: 注入（引擎请求期从本机密钥库取值）；无 → 不带
+      // 有密钥 → secret 钩子注入（引擎请求期从本机密钥库取值）；无 → 不带
       ...(secretName !== undefined && secretName !== ""
-        ? { rewrite: { headerSet: { authorization: `$secret:${secretName}` } } }
+        ? { hooks: "secret", rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: secretName } } } } }
         : {}),
     },
   };

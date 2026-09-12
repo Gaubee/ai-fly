@@ -73,12 +73,13 @@ export function presetToServiceInput(
     match: preset.matchDomains.map((domain) => ({ type: "suffix" as const, value: domain })),
     ...(preset.routes !== undefined && preset.routes.length > 0 ? { routes: preset.routes } : {}),
     ...(input.port !== undefined ? { defaultPort: input.port } : { defaultPort: preset.defaultPort }),
+    ...(preset.hooks !== undefined ? { hooks: preset.hooks } : {}),
     ...(input.secretName !== undefined
-      ? { rewrite: { headerSet: { authorization: `$secret:${input.secretName}` } } }
+      ? { hooks: "secret", rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: input.secretName } } } } }
       : preset.authHeader !== undefined
         ? { rewrite: { headerSet: { authorization: preset.authHeader } } }
         : keyEnv !== undefined
-          ? { rewrite: { headerSet: { authorization: `$env:${keyEnv}` } } }
+          ? { hooks: "env", rewrite: { headerSet: { authorization: { hook: "authHeader", args: { var: keyEnv } } } } }
           : {}),
   };
   const envHint =

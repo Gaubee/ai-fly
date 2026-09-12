@@ -52,9 +52,11 @@ export function buildServiceDetail(service: ServiceConfig): ServiceDetail {
     const prefix = prefixDisclosure(service);
     if (prefix !== undefined) rewrite.prefix = prefix;
     if (service.rewrite.headerSet !== undefined) {
+      // 两协议：string 原样透传（字面量非凭据语义由配置方自负）；hook 调用
+      // 对象按引用整体掩码（args 可能含路径/名——一律不披露）
       rewrite.headerSet = Object.entries(service.rewrite.headerSet).map(([name, value]) => ({
         name,
-        value: isMaskedRef(value) ? ENV_VALUE_MASK : value,
+        value: typeof value === "string" ? (isMaskedRef(value) ? ENV_VALUE_MASK : value) : ENV_VALUE_MASK,
       }));
     }
   }

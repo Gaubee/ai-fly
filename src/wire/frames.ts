@@ -301,6 +301,7 @@ export const SERVICE_ENTRY_SCHEMA = z.strictObject({
   name: z.string().min(1).max(256),
   match: z.array(SERVICE_MATCH_SCHEMA).max(64),
   defaultPort: z.number().int().min(1).max(65535),
+      hooks: z.string().optional(),
   detail: SERVICE_DETAIL_SCHEMA.optional(),
 });
 

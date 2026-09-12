@@ -94,9 +94,13 @@
      "upstreamPrefix": "/backend-api/codex"
     }
    ],
-   "authHeader": "$file:~/.codex/auth.json#.tokens.access_token?bearer",
+   "authHeader": {
+    "hook": "authHeader",
+    "bearer": true
+   },
    "notes": "ChatGPT Codex backend (Responses API). Auth reads ~/.codex/auth.json per request (codex CLI login state; no key needed). Point agents at OPENAI_BASE_URL=http://127.0.0.1:<port>/codex with wire_api=responses. WS clients: ws://127.0.0.1:<port>/codex/responses upgrades to wss upstream.",
-   "source": "https://github.com/openai/codex (~/.codex/auth.json login state)"
+   "source": "https://github.com/openai/codex (~/.codex/auth.json login state)",
+   "hooks": "codex"
   }
  ]
 }

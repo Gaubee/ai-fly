@@ -68,7 +68,7 @@ export async function testServiceRoute(input: RouteTestInput): Promise<RouteTest
     bodyLen: 0,
   };
   try {
-    const plan = buildUpstreamRequest(input.service, req, input.env, input.secrets);
+    const plan = await buildUpstreamRequest(input.service, req, input.env, input.secrets);
     // UpstreamPlan.host（rewrite.hostHeader 覆盖）是网关职责；undici fetch 亦
     // 禁改 Host 头——测试请求用 URL 本身的主机（缺省即上游 host）
     const response = await fetchImpl(plan.url, {

@@ -54,3 +54,24 @@ Owner 需求（2026-09-12）：新增特殊 Provider "Codex"——上游
 - wire 协议零变化（$file 是 provider 本地 rewrite 值域扩展，服务配置文件
   即可声明；旧服务不受影响）
 - 契约 additive（authHeader?/apiForm 枚举扩展），旧客户端兼容
+
+
+## 演进：hooks 统一脚本标准（Owner 裁决 2026-09-12，多轮收敛终态）
+
+前述 $file:/$script: 字符串语法**全部废弃**（破坏性更新，无兼容层）。终态：
+
+- **两协议**：headerSet 值 = 字面量 string | `{hook, args?, bearer?}`（配置
+  结构化，无解析语法）
+- **hooks 脚本 = 资源域**（与 group/secret 同构）：内建库随包
+  （codex/secret/env/file 四脚本）+ 用户库 ~/.aifly/hooks/（覆盖内建）；
+  CLI `ai-fly hooks list|get|add|remove|run`
+- **函数名命名规范 = 钩子清单**：discoverHooks 枚举两库聚合导出函数名；
+  authHeader 为 HTTP 认证头钩子；request/response 对象钩子留注释锚
+- **三态返回**：string / Promise（每请求拉取）；AsyncIterable（订阅模式：
+  首请求等待首个 yield 并建后台消费，后续 push 更新 latest——watch 语义）
+- **ctx**：{ homedir, args, secrets(name), env(name) }（密钥库/环境访问器）
+- **服务配置** `hooks: "<script>"`（--hooks / preset.hooks / --secret 自动
+  wiring secret 脚本）；`--header-set name={"hook":...}` JSON 值
+- **wire/detail 脱敏**：hook 对象整体掩码 ●
+- E2E 实证：内建 codex 伪 token → chatgpt.com 真实 401；订阅热更新
+  （Bearer t7→t8 零重启，daemon 长驻 + 捕获服务器）

@@ -32,6 +32,7 @@ const SPEC = {
   route: { type: "multi" },
   "route-pattern": { type: "multi" },
   secret: { type: "string" },
+  hooks: { type: "string" },
   preset: { type: "string" },
   // service test 子命令
   form: { type: "string" },
@@ -96,15 +97,20 @@ function add(options: Readonly<Record<string, OptionValue>>, positionals: readon
       ? (preset.routes ?? [])
       : []),
   ];
+  const hooksOverride =
+    options.hooks !== undefined
+      ? str(options.hooks)
+      : options.secret !== undefined
+        ? "secret"
+        : preset?.hooks;
   const headerSetSpecs = multi(options["header-set"]).map(parseHeaderSetSpec);
   if (options.secret !== undefined) {
-    headerSetSpecs.push({ name: "authorization", value: `\$secret:${str(options.secret)}` });
+    headerSetSpecs.push({ name: "authorization", value: { hook: "authHeader", args: { name: str(options.secret)! } } });
   } else if (
     preset?.authHeader !== undefined &&
     !headerSetSpecs.some((h) => h.name.toLowerCase() === "authorization")
   ) {
-    // preset 自带凭据模板（如 codex 的 $file:~/.codex/auth.json#...）——显式
-    // --secret/--header-set 均可覆盖
+    // preset 自带钩子调用对象（如 codex）——显式 --secret/--header-set 均可覆盖
     headerSetSpecs.push({ name: "authorization", value: preset.authHeader });
   }
   const dataDir = resolveDataDir(str(options.data), home);
@@ -118,6 +124,8 @@ function add(options: Readonly<Record<string, OptionValue>>, positionals: readon
       options.port === undefined
         ? preset?.defaultPort
         : parsePortNumber(str(options.port)!, "port"),
+    // hooks 脚本：显式 --hooks > preset.hooks > --secret 时缺省 secret
+    ...(hooksOverride !== undefined ? { hooks: hooksOverride } : {}),
     rewrite: buildRewrite({
       host: str(options.host),
       strip: str(options.strip),
@@ -263,8 +271,9 @@ function get(options: Readonly<Record<string, OptionValue>>, positionals: readon
     if (service.rewrite.pathPrefixStrip !== undefined) rewrite.push(`strip: ${service.rewrite.pathPrefixStrip}`);
     if (service.rewrite.pathPrefixAppend !== undefined) rewrite.push(`append: ${service.rewrite.pathPrefixAppend}`);
     for (const [headerName, value] of Object.entries(service.rewrite.headerSet ?? {})) {
-      rewrite.push(`header ${headerName}: ${value}`);
+      rewrite.push(`header ${headerName}: ${humanizeHeaderValue(value)}`);
     }
+    if (service.hooks !== undefined) rewrite.push(`hooks: ${service.hooks}`);
     for (const headerName of service.rewrite.headerRemove ?? []) {
       rewrite.push(`remove header ${headerName}`);
     }
@@ -328,4 +337,11 @@ async function test(options: Readonly<Record<string, OptionValue>>, positionals:
   if (result.error !== undefined) out(`error: ${result.error}`);
   if (result.bodyExcerpt !== undefined) out(result.bodyExcerpt.slice(0, 1200));
   return result.ok ? 0 : 1;
+}
+
+/** 头值 humanize：字面量原样；钩子调用 `hook <fn>(k=v, …)[ bearer]`。 */
+function humanizeHeaderValue(value: string | { hook: string; args?: Record<string, string> | undefined; bearer?: boolean | undefined }): string {
+  if (typeof value === "string") return value;
+  const args = Object.entries(value.args ?? {}).map(([k, v]) => `${k}=${v}`).join(", ");
+  return `hook ${value.hook}${args !== "" ? ` (${args})` : ""}${value.bearer === true ? " [bearer]" : ""}`;
 }

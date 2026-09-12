@@ -224,7 +224,7 @@ describe("orpc over ws", () => {
     expect(applied.service.defaultPort).toBe(4300);
     expect(applied.service.match).toEqual([{ type: "suffix", value: "api.openai.com" }]);
     expect(applied.service.rewrite).toEqual({
-      headerSet: { authorization: "$env:OPENAI_API_KEY" },
+      headerSet: { authorization: { hook: "authHeader", args: { var: "OPENAI_API_KEY" } } },
     });
     expect(applied.service.routes).toEqual([
       { forms: ["openai-chat", "openai-responses"], localPrefix: "/v1", upstreamPrefix: "/v1" },
@@ -238,7 +238,7 @@ describe("orpc over ws", () => {
       secretName: "openai-main",
     });
     expect(viaSecret.service.rewrite).toEqual({
-      headerSet: { authorization: "$secret:openai-main" },
+      headerSet: { authorization: { hook: "authHeader", args: { name: "openai-main" } } },
     });
     expect(viaSecret.envHint).toBeUndefined();
 

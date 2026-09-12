@@ -45,7 +45,14 @@ export const SERVICE_REWRITE_SCHEMA = z.strictObject({
   hostHeader: z.string().min(1).max(2048).optional(),
   pathPrefixStrip: z.string().min(1).max(2048).optional(),
   pathPrefixAppend: z.string().min(1).max(2048).optional(),
-  headerSet: z.record(z.string().min(1).max(1024), z.string().max(8192)).optional(),
+  headerSet: z.record(z.string().min(1).max(1024), z.union([
+        z.string().max(8192),
+        z.strictObject({
+          hook: z.string().min(1).max(128),
+          args: z.record(z.string().min(1).max(128), z.string().max(2048)).optional(),
+          bearer: z.boolean().optional(),
+        }),
+      ])).optional(),
   headerRemove: z.array(z.string().min(1).max(1024)).max(32).optional(),
 });
 
@@ -101,6 +108,7 @@ export const SERVICE_SCHEMA = z.strictObject({
   upstream: z.string().min(1).max(2048),
   rewrite: SERVICE_REWRITE_SCHEMA.optional(),
   routes: z.array(SERVICE_ROUTE_SCHEMA).max(3).optional(),
+  hooks: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).optional(),
   defaultPort: z.number().int().min(1).max(65535),
 });
 
@@ -112,6 +120,7 @@ export const SERVICE_INPUT_SCHEMA = z.strictObject({
   defaultPort: z.number().int().min(1).max(65535).optional(),
   rewrite: SERVICE_REWRITE_SCHEMA.optional(),
   routes: z.array(SERVICE_ROUTE_SCHEMA).max(3).optional(),
+  hooks: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).optional(),
 });
 
 export const GROUP_LIMITS_SCHEMA = z.strictObject({
@@ -151,7 +160,21 @@ export const SERVICE_ENTRY_SCHEMA = z.object({
         .object({
           host: z.string().optional(),
           prefix: z.string().optional(),
-          headerSet: z.array(z.strictObject({ name: z.string(), value: z.string() })).optional(),
+          headerSet: z
+            .array(
+              z.strictObject({
+                name: z.string(),
+                value: z.union([
+                  z.string(),
+                  z.strictObject({
+                    hook: z.string(),
+                    args: z.record(z.string(), z.string()).optional(),
+                    bearer: z.boolean().optional(),
+                  }),
+                ]),
+              }),
+            )
+            .optional(),
         })
         .optional(),
       /** 按标准路由披露（消费侧呈现各标准本地 base 与可用性判定）。 */
@@ -211,9 +234,16 @@ export const PRESET_SCHEMA = z.strictObject({
   iconId: z.string().min(1).max(128).optional(),
   /** 惯用环境变量名（仅用于 $env 注入建议与文档；本地运行时模板无此字段）。 */
   keyEnv: z.string().min(1).max(256).optional(),
-  /** 预填 authorization 头值模板（如 `$file:~/.codex/auth.json#.tokens.access_token?bearer`）；
-   *  优先级：显式 secretName > authHeader > keyEnv。 */
-  authHeader: z.string().min(3).max(2048).optional(),
+  /** 选中的 hooks 脚本名（applyAsService 透传为服务 hooks 字段）。 */
+  hooks: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).optional(),
+  /** 预填 authorization 头的钩子调用对象；优先级：显式 secretName > authHeader > keyEnv。 */
+  authHeader: z
+    .strictObject({
+      hook: z.string().min(1).max(128),
+      args: z.record(z.string().min(1).max(128), z.string().max(2048)).optional(),
+      bearer: z.boolean().optional(),
+    })
+    .optional(),
   /** 使用方本地端口建议（避开 <1024 特权段）。 */
   defaultPort: z.number().int().min(1024).max(65535),
   /** 官方域名集（exact/suffix 建议的生成源）。 */

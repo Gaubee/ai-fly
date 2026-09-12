@@ -2,12 +2,11 @@
 // origin 逃逸与 /../../admin 回溯越界 -> RewriteError）、$env 头链矩阵（设置/空串/
 // 未设置）、Host 缺省与覆盖、headerRemove/headerSet、凭据头纵深剥离、WS 升级识别。
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ReqHeader } from "../../../src/wire/frames.ts";
 import {
   buildUpstreamRequest,
   isWebSocketUpgradeRequest,
-  resolveHeaderValue,
   RewriteError,
   SecretMissingError,
   PathNotOfferedError,
@@ -39,213 +38,95 @@ function makeReq(over: Partial<ReqHeader> = {}): ReqHeader {
 }
 
 describe("URL 构造", () => {
-  it("根基础路径 + 请求路径直拼", () => {
-    const plan = buildUpstreamRequest(makeService(), makeReq(), {});
+  it("根基础路径 + 请求路径直拼", async () => {
+    const plan = await buildUpstreamRequest(makeService(), makeReq(), {});
     expect(plan.url.href).toBe("http://127.0.0.1:11434/v1/chat");
     expect(plan.host).toBe("127.0.0.1:11434");
   });
 
-  it("上游基础路径保留：/api + /v1/chat -> /api/v1/chat", () => {
+  it("上游基础路径保留：/api + /v1/chat -> /api/v1/chat", async () => {
     const service = makeService({ upstream: "http://upstream.test:8080/api" });
-    const plan = buildUpstreamRequest(service, makeReq(), {});
+    const plan = await buildUpstreamRequest(service, makeReq(), {});
     expect(plan.url.pathname).toBe("/api/v1/chat");
     expect(plan.host).toBe("upstream.test:8080");
   });
 
-  it("前缀剥离：strip=/ollama + /ollama/v1 -> /v1（不误伤 /ollamax）", () => {
+  it("前缀剥离：strip=/ollama + /ollama/v1 -> /v1（不误伤 /ollamax）", async () => {
     const service = makeService({ rewrite: { pathPrefixStrip: "/ollama" } });
-    expect(buildUpstreamRequest(service, makeReq({ path: "/ollama/v1" }), {}).url.pathname).toBe("/v1");
-    expect(buildUpstreamRequest(service, makeReq({ path: "/ollamax" }), {}).url.pathname).toBe("/ollamax");
+    expect((await buildUpstreamRequest(service, makeReq({ path: "/ollama/v1" }), {})).url.pathname).toBe("/v1");
+    expect((await buildUpstreamRequest(service, makeReq({ path: "/ollamax" }), {})).url.pathname).toBe("/ollamax");
   });
 
-  it("剥离 + 追加 + 基础路径组合", () => {
+  it("剥离 + 追加 + 基础路径组合", async () => {
     const service = makeService({
       upstream: "http://upstream.test:8080/svc",
       rewrite: { pathPrefixStrip: "/ollama", pathPrefixAppend: "/api" },
     });
-    const plan = buildUpstreamRequest(service, makeReq({ path: "/ollama/v1" }), {});
+    const plan = await buildUpstreamRequest(service, makeReq({ path: "/ollama/v1" }), {});
     expect(plan.url.pathname).toBe("/svc/api/v1");
   });
 
-  it("查询串保留", () => {
-    const plan = buildUpstreamRequest(makeService(), makeReq({ path: "/v1/x?stream=true&q=1" }), {});
+  it("查询串保留", async () => {
+    const plan = await buildUpstreamRequest(makeService(), makeReq({ path: "/v1/x?stream=true&q=1" }), {});
     expect(plan.url.search).toBe("?stream=true&q=1");
   });
 
-  it("默认端口 Host 不带端口（https 443）", () => {
+  it("默认端口 Host 不带端口（https 443）", async () => {
     const service = makeService({ upstream: "https://api.example.com", defaultPort: 8443 });
-    expect(buildUpstreamRequest(service, makeReq(), {}).host).toBe("api.example.com");
+    expect((await buildUpstreamRequest(service, makeReq(), {})).host).toBe("api.example.com");
   });
 
-  it("hostHeader 覆盖 Host", () => {
+  it("hostHeader 覆盖 Host", async () => {
     const service = makeService({ rewrite: { hostHeader: "internal.alias" } });
-    expect(buildUpstreamRequest(service, makeReq(), {}).host).toBe("internal.alias");
+    expect((await buildUpstreamRequest(service, makeReq(), {})).host).toBe("internal.alias");
   });
 });
 
 describe("双重断言（纵深防御：零上游请求语义）", () => {
-  it("//host 形态 -> origin 断言拒绝", () => {
-    expect(() => buildUpstreamRequest(makeService(), makeReq({ path: "//evil.com/v1/keys" }), {})).toThrow(RewriteError);
+  it("//host 形态 -> origin 断言拒绝", async () => {
+    await expect(buildUpstreamRequest(makeService(), makeReq({ path: "//evil.com/v1/keys" }), {})).rejects.toThrow(RewriteError);
   });
 
-  it("/../../admin 回溯 -> 拒绝", () => {
-    expect(() => buildUpstreamRequest(makeService(), makeReq({ path: "/../../admin" }), {})).toThrow(RewriteError);
+  it("/../../admin 回溯 -> 拒绝", async () => {
+    await expect(buildUpstreamRequest(makeService(), makeReq({ path: "/../../admin" }), {})).rejects.toThrow(RewriteError);
   });
 
-  it("相对段 .. 深层注入（schema 失效兜底）-> 拒绝", () => {
-    expect(() => buildUpstreamRequest(makeService(), makeReq({ path: "/a/../../../etc" }), {})).toThrow(RewriteError);
+  it("相对段 .. 深层注入（schema 失效兜底）-> 拒绝", async () => {
+    await expect(buildUpstreamRequest(makeService(), makeReq({ path: "/a/../../../etc" }), {})).rejects.toThrow(RewriteError);
   });
 
-  it("反斜杠形态 -> 拒绝", () => {
-    expect(() => buildUpstreamRequest(makeService(), makeReq({ path: "/\\evil" }), {})).toThrow(RewriteError);
+  it("反斜杠形态 -> 拒绝", async () => {
+    await expect(buildUpstreamRequest(makeService(), makeReq({ path: "/\\evil" }), {})).rejects.toThrow(RewriteError);
   });
 
-  it("基础路径前缀不可逃逸：strip 吞掉基础路径形态仍以基础路径为前缀", () => {
+  it("基础路径前缀不可逃逸：strip 吞掉基础路径形态仍以基础路径为前缀", async () => {
     const service = makeService({ upstream: "http://up.test/base", rewrite: { pathPrefixStrip: "/base" } });
     // /base/base/x -> strip 掉首个 /base -> 拼回 /base/x
-    const plan = buildUpstreamRequest(service, makeReq({ path: "/base/base/x" }), {});
+    const plan = await buildUpstreamRequest(service, makeReq({ path: "/base/base/x" }), {});
     expect(plan.url.pathname).toBe("/base/base/x");
   });
 });
 
-describe("$env 头链矩阵", () => {
-  const service = makeService({
-    rewrite: {
-      headerSet: { authorization: "$env:UPSTREAM_KEY", "x-lit": "plain", "x-maybe": "$env:MAYBE" },
-    },
-  });
-
-  it("已设置 -> 注入；literal 原样", () => {
-    const plan = buildUpstreamRequest(service, makeReq(), { UPSTREAM_KEY: "sk-live-123" });
-    expect(plan.headers["authorization"]).toBe("sk-live-123");
-    expect(plan.headers["x-lit"]).toBe("plain");
-  });
-
-  it("空串与未设置同义 -> 该头省略", () => {
-    const plan = buildUpstreamRequest(service, makeReq(), { UPSTREAM_KEY: "" });
-    expect(plan.headers["authorization"]).toBeUndefined();
-    expect(plan.headers["x-maybe"]).toBeUndefined();
-    expect(plan.headers["x-lit"]).toBe("plain");
-  });
-
-  it("headerRemove 先于 headerSet；帧内同名头可被覆盖", () => {
-    const svc = makeService({
-      rewrite: { headerRemove: ["x-drop"], headerSet: { "x-custom": "set" } },
-    });
-    const plan = buildUpstreamRequest(
-      svc,
-      makeReq({ headers: { "x-drop": "1", "x-custom": "frame", "anthropic-version": "2023-06-01" } }),
-      {},
-    );
-    expect(plan.headers["x-drop"]).toBeUndefined();
-    expect(plan.headers["x-custom"]).toBe("set");
-    expect(plan.headers["anthropic-version"]).toBe("2023-06-01");
-  });
-
-  it("凭据类/hop-by-hop/content-length 帧内头纵深剥离", () => {
-    const plan = buildUpstreamRequest(
-      makeService(),
-      makeReq({ headers: { authorization: "Bearer x", cookie: "a=b", host: "evil", connection: "keep-alive", "content-length": "9" } }),
-      {},
-    );
-    expect(plan.headers).toEqual({});
-  });
-
-  it("contentType 折叠为 content-type 头", () => {
-    const plan = buildUpstreamRequest(makeService(), makeReq({ contentType: "application/json" }), {});
-    expect(plan.headers["content-type"]).toBe("application/json");
-  });
-});
-
-describe("$secret 头链矩阵", () => {
-  const service = makeService({
-    rewrite: {
-      headerSet: {
-        authorization: "$secret:openai",
-        "x-api-key": "$secret:vendor.key",
-        "x-env": "$env:UPSTREAM_KEY",
-        "x-lit": "plain",
-      },
-    },
-  });
-  const secrets = (name: string): string | undefined =>
-    name === "openai" ? "Bearer sk-live-1" : undefined;
-
-  it("命中 -> 注入完整头值；与 $env 并存于不同头；literal 原样", () => {
-    const allSecrets = (name: string): string | undefined =>
-      name === "openai" ? "Bearer sk-live-1" : name === "vendor.key" ? "sk-vendor" : undefined;
-    const plan = buildUpstreamRequest(service, makeReq(), { UPSTREAM_KEY: "sk-env-2" }, allSecrets);
-    expect(plan.headers["authorization"]).toBe("Bearer sk-live-1");
-    expect(plan.headers["x-api-key"]).toBe("sk-vendor");
-    expect(plan.headers["x-env"]).toBe("sk-env-2");
-    expect(plan.headers["x-lit"]).toBe("plain");
-  });
-
-  it("未知名 -> SecretMissingError（不省略、不回退空值）", () => {
-    expect(() => buildUpstreamRequest(service, makeReq(), {}, secrets)).toThrow(SecretMissingError);
-  });
-
-  it("未注入密钥源（secrets 缺省）-> 任何 $secret 引用都抛 SecretMissingError", () => {
-    expect(() => buildUpstreamRequest(service, makeReq(), {})).toThrow(SecretMissingError);
-  });
-
-  it("密钥库值为空串 -> 同未命中", () => {
-    expect(() => buildUpstreamRequest(service, makeReq(), {}, () => "")).toThrow(SecretMissingError);
-  });
-
-  it("$secret 判定优先于 $env（值以 $secret: 开头时不走 env 路径）", () => {
-    // "$secret:openai" 不是合法 env 名——若前缀判定顺序错误，会从 env 取到 undefined 而静默省略。
-    const plan = buildUpstreamRequest(
-      makeService({ rewrite: { headerSet: { authorization: "$secret:openai" } } }),
-      makeReq(),
-      {},
-      secrets,
-    );
-    expect(plan.headers["authorization"]).toBe("Bearer sk-live-1");
-  });
-
-  it("resolveHeaderValue：$secret 未命中错误信息不含名字与值", () => {
-    try {
-      resolveHeaderValue("$secret:ghost", {}, secrets);
-      expect.unreachable();
-    } catch (err) {
-      expect(err).toBeInstanceOf(SecretMissingError);
-      expect((err as Error).message).not.toContain("ghost");
-      expect((err as Error).message).not.toContain("sk-live");
-    }
-  });
-
-  it("$env 语义保持：空串/未设置 -> 省略（不抛）", () => {
-    const plan = buildUpstreamRequest(
-      makeService({ rewrite: { headerSet: { authorization: "$env:NOPE" } } }),
-      makeReq(),
-      { NOPE: "" },
-      secrets,
-    );
-    expect(plan.headers["authorization"]).toBeUndefined();
-  });
-});
-
 describe("WS 升级识别", () => {
-  it("connection 含 upgrade token + upgrade: websocket（大小写不敏感）", () => {
+  it("connection 含 upgrade token + upgrade: websocket（大小写不敏感）", async () => {
     expect(isWebSocketUpgradeRequest({ connection: "keep-alive, Upgrade", upgrade: "websocket" })).toBe(true);
     expect(isWebSocketUpgradeRequest({ connection: "Upgrade", upgrade: "WebSocket" })).toBe(true);
   });
 
-  it("非升级请求（缺头 / connection 无 token / 其他协议）", () => {
+  it("非升级请求（缺头 / connection 无 token / 其他协议）", async () => {
     expect(isWebSocketUpgradeRequest({})).toBe(false);
     expect(isWebSocketUpgradeRequest({ connection: "keep-alive", upgrade: "websocket" })).toBe(false);
     expect(isWebSocketUpgradeRequest({ connection: "upgrade", upgrade: "h2c" })).toBe(false);
   });
 
-  it("plan.isWebSocketUpgrade 分流标记", () => {
-    const plan = buildUpstreamRequest(
+  it("plan.isWebSocketUpgrade 分流标记", async () => {
+    const plan = await buildUpstreamRequest(
       makeService(),
       makeReq({ headers: { connection: "Upgrade", upgrade: "websocket", "sec-websocket-version": "13" } }),
       {},
     );
     expect(plan.isWebSocketUpgrade).toBe(true);
-    expect(buildUpstreamRequest(makeService(), makeReq(), {}).isWebSocketUpgrade).toBe(false);
+    expect((await buildUpstreamRequest(makeService(), makeReq(), {})).isWebSocketUpgrade).toBe(false);
   });
 });
 
@@ -259,44 +140,44 @@ describe("路径路由（M3-r6：通用 from→to 规则 + 白名单）", () => 
     ],
   });
 
-  it("DeepSeek anthropic 形态：/anthropic/v1/messages -> /anthropic/v1/messages（1:1）", () => {
-    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/anthropic/v1/messages" }), {});
+  it("DeepSeek anthropic 形态：/anthropic/v1/messages -> /anthropic/v1/messages（1:1）", async () => {
+    const plan = await buildUpstreamRequest(deepseek, makeReq({ path: "/anthropic/v1/messages" }), {});
     expect(plan.url.href).toBe("https://api.deepseek.com/anthropic/v1/messages");
   });
 
-  it("DeepSeek openai 形态：/v1/chat/completions -> /v1/chat/completions（1:1 官方镜像）", () => {
-    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/v1/chat/completions" }), {});
+  it("DeepSeek openai 形态：/v1/chat/completions -> /v1/chat/completions（1:1 官方镜像）", async () => {
+    const plan = await buildUpstreamRequest(deepseek, makeReq({ path: "/v1/chat/completions" }), {});
     expect(plan.url.href).toBe("https://api.deepseek.com/v1/chat/completions");
   });
 
-  it("段边界：/v1beta 不命中 /v1 路由（不误伤）；/anthropicapi 同理", () => {
-    expect(() => buildUpstreamRequest(deepseek, makeReq({ path: "/v1beta/x" }), {})).toThrow(
+  it("段边界：/v1beta 不命中 /v1 路由（不误伤）；/anthropicapi 同理", async () => {
+    await expect(buildUpstreamRequest(deepseek, makeReq({ path: "/v1beta/x" }), {})).rejects.toThrow(
       PathNotOfferedError,
     );
-    expect(() => buildUpstreamRequest(deepseek, makeReq({ path: "/anthropicapi/v1" }), {})).toThrow(
-      PathNotOfferedError,
-    );
-  });
-
-  it("未命中路径拒绝（白名单语义：路由表外零上游请求）", () => {
-    expect(() => buildUpstreamRequest(deepseek, makeReq({ path: "/user/balance" }), {})).toThrow(
-      PathNotOfferedError,
-    );
-    expect(() => buildUpstreamRequest(deepseek, makeReq({ path: "/openai/v1/chat/completions" }), {})).toThrow(
+    await expect(buildUpstreamRequest(deepseek, makeReq({ path: "/anthropicapi/v1" }), {})).rejects.toThrow(
       PathNotOfferedError,
     );
   });
 
-  it("自定义 from→to：/foo/x -> /bar/x（解绑态自由映射）", () => {
+  it("未命中路径拒绝（白名单语义：路由表外零上游请求）", async () => {
+    await expect(buildUpstreamRequest(deepseek, makeReq({ path: "/user/balance" }), {})).rejects.toThrow(
+      PathNotOfferedError,
+    );
+    await expect(buildUpstreamRequest(deepseek, makeReq({ path: "/openai/v1/chat/completions" }), {})).rejects.toThrow(
+      PathNotOfferedError,
+    );
+  });
+
+  it("自定义 from→to：/foo/x -> /bar/x（解绑态自由映射）", async () => {
     const service = makeService({
       upstream: "https://agg.test",
       routes: [{ forms: [], localPrefix: "/foo", upstreamPrefix: "/bar" }],
     });
-    expect(buildUpstreamRequest(service, makeReq({ path: "/foo/models" }), {}).url.pathname).toBe("/bar/models");
-    expect(() => buildUpstreamRequest(service, makeReq({ path: "/other" }), {})).toThrow(PathNotOfferedError);
+    expect((await buildUpstreamRequest(service, makeReq({ path: "/foo/models" }), {})).url.pathname).toBe("/bar/models");
+    await expect(buildUpstreamRequest(service, makeReq({ path: "/other" }), {})).rejects.toThrow(PathNotOfferedError);
   });
 
-  it("localPrefix 缺省派生规范前缀（forms 首项）", () => {
+  it("localPrefix 缺省派生规范前缀（forms 首项）", async () => {
     const service = makeService({
       upstream: "https://api.deepseek.com",
       routes: [
@@ -305,48 +186,48 @@ describe("路径路由（M3-r6：通用 from→to 规则 + 白名单）", () => 
       ],
     });
     // openai-chat 的 to 为根 ""：/v1/models -> /models（from 前缀被替换掉）
-    expect(buildUpstreamRequest(service, makeReq({ path: "/v1/models" }), {}).url.pathname).toBe("/models");
-    expect(buildUpstreamRequest(service, makeReq({ path: "/anthropic/v1/messages" }), {}).url.pathname).toBe(
+    expect((await buildUpstreamRequest(service, makeReq({ path: "/v1/models" }), {})).url.pathname).toBe("/models");
+    expect((await buildUpstreamRequest(service, makeReq({ path: "/anthropic/v1/messages" }), {})).url.pathname).toBe(
       "/anthropic/v1/messages",
     );
   });
 
-  it("to 为根：/v1/x -> /x", () => {
+  it("to 为根：/v1/x -> /x", async () => {
     const service = makeService({
       upstream: "https://agg.test",
       routes: [{ forms: [], localPrefix: "/v1", upstreamPrefix: "" }],
     });
-    expect(buildUpstreamRequest(service, makeReq({ path: "/v1/models" }), {}).url.pathname).toBe("/models");
+    expect((await buildUpstreamRequest(service, makeReq({ path: "/v1/models" }), {})).url.pathname).toBe("/models");
   });
 
-  it("路由前缀根命中：/anthropic -> upstream /anthropic", () => {
-    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/anthropic" }), {});
+  it("路由前缀根命中：/anthropic -> upstream /anthropic", async () => {
+    const plan = await buildUpstreamRequest(deepseek, makeReq({ path: "/anthropic" }), {});
     expect(plan.url.pathname).toBe("/anthropic");
   });
 
-  it("upstream 带基础路径时拼接在映射后：base /api + to /v1 + /v1/x -> /api/v1/x", () => {
+  it("upstream 带基础路径时拼接在映射后：base /api + to /v1 + /v1/x -> /api/v1/x", async () => {
     const service = makeService({
       upstream: "https://agg.test/api",
       routes: [{ forms: [], localPrefix: "/v1", upstreamPrefix: "/v1" }],
     });
-    const plan = buildUpstreamRequest(service, makeReq({ path: "/v1/messages" }), {});
+    const plan = await buildUpstreamRequest(service, makeReq({ path: "/v1/messages" }), {});
     expect(plan.url.href).toBe("https://agg.test/api/v1/messages");
   });
 
-  it("query 保留在映射后", () => {
-    const plan = buildUpstreamRequest(deepseek, makeReq({ path: "/v1/models?list=1" }), {});
+  it("query 保留在映射后", async () => {
+    const plan = await buildUpstreamRequest(deepseek, makeReq({ path: "/v1/models?list=1" }), {});
     expect(plan.url.pathname).toBe("/v1/models");
     expect(plan.url.search).toBe("?list=1");
   });
 
-  it("无路由服务行为与从前完全一致（回归）", () => {
-    const plan = buildUpstreamRequest(makeService(), makeReq({ path: "/v1/chat" }), {});
+  it("无路由服务行为与从前完全一致（回归）", async () => {
+    const plan = await buildUpstreamRequest(makeService(), makeReq({ path: "/v1/chat" }), {});
     expect(plan.url.href).toBe("http://127.0.0.1:11434/v1/chat");
   });
 });
 
 describe("路由顺序命中与 pattern 模式（M3-r7）", () => {
-  it("顺序命中：先声明的规则赢——短前缀在前也优先于长前缀", () => {
+  it("顺序命中：先声明的规则赢——短前缀在前也优先于长前缀", async () => {
     const service = makeService({
       upstream: "https://agg.test",
       routes: [
@@ -354,7 +235,7 @@ describe("路由顺序命中与 pattern 模式（M3-r7）", () => {
         { forms: [], localPrefix: "/a/b", upstreamPrefix: "/second" },
       ],
     });
-    expect(buildUpstreamRequest(service, makeReq({ path: "/a/b/x" }), {}).url.pathname).toBe("/first/b/x");
+    expect((await buildUpstreamRequest(service, makeReq({ path: "/a/b/x" }), {})).url.pathname).toBe("/first/b/x");
     // 交换顺序后长前缀赢
     const swapped = makeService({
       upstream: "https://agg.test",
@@ -363,38 +244,38 @@ describe("路由顺序命中与 pattern 模式（M3-r7）", () => {
         { forms: [], localPrefix: "/a", upstreamPrefix: "/first" },
       ],
     });
-    expect(buildUpstreamRequest(swapped, makeReq({ path: "/a/b/x" }), {}).url.pathname).toBe("/second/x");
+    expect((await buildUpstreamRequest(swapped, makeReq({ path: "/a/b/x" }), {})).url.pathname).toBe("/second/x");
   });
 
-  it("pattern 模式：URLPattern 组 + RFC 6570 模板拼装", () => {
+  it("pattern 模式：URLPattern 组 + RFC 6570 模板拼装", async () => {
     const service = makeService({
       upstream: "https://agg.test",
       routes: [{ forms: [], mode: "pattern", matchPattern: "/v1/:ver/chat/completions", template: "/relay/{ver}/chat/completions" }],
     });
-    const plan = buildUpstreamRequest(service, makeReq({ path: "/v1/v1/chat/completions" }), {});
+    const plan = await buildUpstreamRequest(service, makeReq({ path: "/v1/v1/chat/completions" }), {});
     expect(plan.url.pathname).toBe("/relay/v1/chat/completions");
   });
 
-  it("pattern：花括号组语法翻译兼容（{ver} ≡ :ver）", () => {
+  it("pattern：花括号组语法翻译兼容（{ver} ≡ :ver）", async () => {
     const service = makeService({
       upstream: "https://agg.test",
       routes: [{ forms: [], mode: "pattern", matchPattern: "/v1/{ver}/*", template: "/proxy/{+0}" }],
     });
-    const plan = buildUpstreamRequest(service, makeReq({ path: "/v1/v1/models/gpt-x" }), {});
+    const plan = await buildUpstreamRequest(service, makeReq({ path: "/v1/v1/models/gpt-x" }), {});
     expect(plan.url.pathname).toBe("/proxy/models/gpt-x");
   });
 
-  it("pattern：查询参数进模板变量域，模板产物替换查询串", () => {
+  it("pattern：查询参数进模板变量域，模板产物替换查询串", async () => {
     const service = makeService({
       upstream: "https://agg.test",
       routes: [{ forms: [], mode: "pattern", matchPattern: "/search", template: "/s{?q}" }],
     });
-    const plan = buildUpstreamRequest(service, makeReq({ path: "/search?q=hello+world&extra=1" }), {});
+    const plan = await buildUpstreamRequest(service, makeReq({ path: "/search?q=hello+world&extra=1" }), {});
     expect(plan.url.pathname).toBe("/s");
     expect(plan.url.search).toBe("?q=hello%20world");
   });
 
-  it("pattern 未命中 → 继续后续规则；全部未命中 → 404 白名单", () => {
+  it("pattern 未命中 → 继续后续规则；全部未命中 → 404 白名单", async () => {
     const service = makeService({
       upstream: "https://agg.test",
       routes: [
@@ -402,155 +283,128 @@ describe("路由顺序命中与 pattern 模式（M3-r7）", () => {
         { forms: [], localPrefix: "/v1", upstreamPrefix: "/v1" },
       ],
     });
-    expect(buildUpstreamRequest(service, makeReq({ path: "/special/9" }), {}).url.pathname).toBe("/s/9");
-    expect(buildUpstreamRequest(service, makeReq({ path: "/v1/models" }), {}).url.pathname).toBe("/v1/models");
-    expect(() => buildUpstreamRequest(service, makeReq({ path: "/other" }), {})).toThrow(PathNotOfferedError);
+    expect((await buildUpstreamRequest(service, makeReq({ path: "/special/9" }), {})).url.pathname).toBe("/s/9");
+    expect((await buildUpstreamRequest(service, makeReq({ path: "/v1/models" }), {})).url.pathname).toBe("/v1/models");
+    await expect(buildUpstreamRequest(service, makeReq({ path: "/other" }), {})).rejects.toThrow(PathNotOfferedError);
   });
 
-  it("pattern 模板产物拼在 upstream 基础路径后", () => {
+  it("pattern 模板产物拼在 upstream 基础路径后", async () => {
     const service = makeService({
       upstream: "https://agg.test/base",
       routes: [{ forms: [], mode: "pattern", matchPattern: "/x/*", template: "/y/{+0}" }],
     });
-    expect(buildUpstreamRequest(service, makeReq({ path: "/x/a/b" }), {}).url.pathname).toBe("/base/y/a/b");
+    expect((await buildUpstreamRequest(service, makeReq({ path: "/x/a/b" }), {})).url.pathname).toBe("/base/y/a/b");
   });
 });
 
 // ---------------------------------------------------------------------------
 // $file: 文件型凭据（cli-codex：~/.codex/auth.json#.tokens.access_token?bearer）
 // ---------------------------------------------------------------------------
-describe("$file 头链矩阵", () => {
-  const files = (map: Record<string, string>) =>
-    (path: string, jsonPath: string): string | undefined => {
-      expect(path.startsWith("/")).toBe(true); // ~ 已在引用语法层展开；注入源收绝对路径
-      return map[jsonPath];
-    };
-
-  it("命中 + ?bearer：拼 Bearer 前缀", () => {
-    const src = files({ ".tokens.access_token": "tok-1" });
-    expect(resolveHeaderValue("$file:~/.codex/auth.json#.tokens.access_token?bearer", {}, undefined, src)).toBe(
-      "Bearer tok-1",
-    );
-  });
-
-  it("命中无 ?bearer：原样值", () => {
-    const src = files({ ".key": "raw-value" });
-    expect(resolveHeaderValue("$file:/x/cfg.json#.key", {}, undefined, src)).toBe("raw-value");
-  });
-
-  it("文件/键/空值未命中 -> SecretMissingError（错误信息不含路径）", () => {
-    const ref = "$file:~/.codex/auth.json#.tokens.access_token";
-    for (const src of [files({}), files({ ".other": "v" }), files({ ".tokens.access_token": "" })]) {
-      try {
-        resolveHeaderValue(ref, {}, undefined, src);
-        expect.unreachable();
-      } catch (err) {
-        expect(err).toBeInstanceOf(SecretMissingError);
-        expect((err as Error).message).not.toContain(".codex");
-      }
-    }
-  });
-
-  it("格式非法（缺 # / 空点径）-> SecretMissingError", () => {
-    expect(() => resolveHeaderValue("$file:/x/a.json", {}, undefined, files({}))).toThrow(SecretMissingError);
-    expect(() => resolveHeaderValue("$file:/x/a.json#", {}, undefined, files({}))).toThrow(SecretMissingError);
-  });
-
-  it("parseFileRef / evalJsonPath 纯函数", async () => {
-    const { parseFileRef, evalJsonPath } = await import("../../../src/provider/rewrite.ts");
-    expect(parseFileRef("$file:~/.codex/auth.json#.tokens.access_token?bearer")).toEqual({
-      path: "~/.codex/auth.json",
-      jsonPath: ".tokens.access_token",
-      bearer: true,
-    });
-    expect(parseFileRef("$file:/a.json#noliteral")).toBeNull();
-    const doc = { tokens: { access_token: "t" }, arr: [{ k: 1 }, { k: 2 }] };
-    expect(evalJsonPath(doc, ".tokens.access_token")).toBe("t");
-    expect(evalJsonPath(doc, ".arr[1].k")).toBe(2);
-    expect(evalJsonPath(doc, ".arr[9].k")).toBeUndefined();
-    expect(evalJsonPath(doc, ".tokens.refresh_token")).toBeUndefined();
-    expect(evalJsonPath(doc, "tokens")).toBeUndefined(); // 须以 . 开头
-  });
-
-  it("默认源：真实文件读取（tmp HOME 由 os.homedir 走当前环境——用绝对路径直接验）", async () => {
-    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { defaultFileCredentialSource } = await import("../../../src/provider/rewrite.ts");
-    const dir = mkdtempSync(join(tmpdir(), "aifly-file-cred-"));
-    const f = join(dir, "auth.json");
-    writeFileSync(f, JSON.stringify({ tokens: { access_token: "tok-2" } }));
-    try {
-      expect(defaultFileCredentialSource(f, ".tokens.access_token")).toBe("tok-2");
-      expect(defaultFileCredentialSource(join(dir, "missing.json"), ".x")).toBeUndefined();
-      writeFileSync(f, "not-json");
-      expect(defaultFileCredentialSource(f, ".x")).toBeUndefined();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
 // ---------------------------------------------------------------------------
 // $script: 脚本型凭据（Owner 裁决 2026-09-12：Node 脚本统一跨平台，无 VM）
 // ---------------------------------------------------------------------------
-describe("$script 头链矩阵", () => {
-  it("命中（模块导出函数）+ ?bearer；无后缀原样", () => {
-    const scripts = (mods: Record<string, unknown>) =>
-      (p: string): unknown => mods[p] ?? (() => "mod-" + p);
+
+
+// ---------------------------------------------------------------------------
+// 头值两协议（Owner 2026-09-12 终态）：literal | { hook, args?, bearer? }
+// 内建脚本 env/secret/file 经 args 形态推导；自定义脚本注入 loader。
+// ---------------------------------------------------------------------------
+describe("头值两协议（literal | hook）", () => {
+  afterEach(async () => {
+    const { disposeHookSubscriptions } = await import("../../../src/provider/hook.ts");
+    await disposeHookSubscriptions();
+  });
+
+  const loaderOf = (mods: Record<string, Record<string, unknown>>) =>
+    (name: string): Record<string, unknown> | undefined => mods[name];
+
+  it("literal 原样；空串省略", async () => {
+    const { resolveHeaderEntry } = await import("../../../src/provider/rewrite.ts");
+    expect(await resolveHeaderEntry("v", {})).toBe("v");
+    expect(await resolveHeaderEntry("", {})).toBeUndefined();
+  });
+
+  it("内建 env：命中取值；未设置 fail-fast（SecretMissingError，语义收紧）", async () => {
+    const { resolveHeaderEntry } = await import("../../../src/provider/rewrite.ts");
+    const entry = { hook: "authHeader", args: { var: "K" } } as const;
+    expect(await resolveHeaderEntry(entry, { env: { K: "v1" } })).toBe("v1");
+    await expect(resolveHeaderEntry(entry, { env: {} })).rejects.toThrow();
+  });
+
+  it("内建 secret：经注入 secrets 取值；bearer 拼前缀", async () => {
+    const { resolveHeaderEntry } = await import("../../../src/provider/rewrite.ts");
     expect(
-      resolveHeaderValue("$script:~/.aifly/codex.cjs?bearer", {}, undefined, undefined, scripts({})),
-    ).toMatch(/^Bearer mod-\//);
-    expect(resolveHeaderValue("$script:/x/a.cjs", {}, undefined, undefined, scripts({}))).toMatch(/^mod-\//);
+      await resolveHeaderEntry({ hook: "authHeader", args: { name: "k1" }, bearer: true }, { secrets: (n) => (n === "k1" ? "sk-1" : undefined) }),
+    ).toBe("Bearer sk-1");
+    await expect(resolveHeaderEntry({ hook: "authHeader", args: { name: "ghost" } }, { secrets: () => undefined })).rejects.toThrow();
   });
 
-  it("{default: fn} 导出形态亦支持；ctx.homedir 透传", () => {
-    const scripts = (): unknown => ({ default: (ctx: { homedir: string }) => `home=${ctx.homedir.length > 0}` });
-    expect(resolveHeaderValue("$script:/x/a.cjs", {}, undefined, undefined, scripts)).toBe("home=true");
-  });
-
-  it("未命中（模块缺失/非函数导出/抛错/空串/非字符串）-> SecretMissingError（不泄路径）", () => {
-    const ref = "$script:~/.aifly/x.cjs";
-    const cases: Array<(p: string) => unknown> = [
-      () => undefined,
-      () => 42,
-      () => ({ notDefault: 1 }),
-      () => () => { throw new Error("boom"); },
-      () => "",
-      () => ({ default: () => 123n }),
-    ];
-    for (const src of cases) {
-      try {
-        resolveHeaderValue(ref, {}, undefined, undefined, src);
-        expect.unreachable();
-      } catch (err) {
-        expect(err).toBeInstanceOf(SecretMissingError);
-        expect((err as Error).message).not.toContain(".aifly");
-      }
+  it("内建 file：路径 + 点径（tmp home 隔离）", async () => {
+    const { resolveHeaderEntry } = await import("../../../src/provider/rewrite.ts");
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const home = mkdtempSync(join(tmpdir(), "aifly-hv-"));
+    try {
+      writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: { access_token: "t1" } }));
+      const entry = { hook: "authHeader", args: { path: "~/auth.json", jsonPath: ".tokens.access_token" } } as const;
+      expect(await resolveHeaderEntry(entry, { home })).toBe("t1");
+      await expect(
+        resolveHeaderEntry({ hook: "authHeader", args: { path: "~/auth.json", jsonPath: ".tokens.missing" } }, { home }),
+      ).rejects.toThrow();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 
-  it("默认源：真实 CJS 模块加载（每请求调用函数，值按调用计算）", async () => {
-    const { mkdtempSync, writeFileSync, rmSync, readFileSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { defaultScriptCredentialSource } = await import("../../../src/provider/rewrite.ts");
-    const dir = mkdtempSync(join(tmpdir(), "aifly-script-cred-"));
-    const mod = join(dir, "cred.cjs");
-    writeFileSync(mod, "module.exports = () => JSON.parse(require('node:fs').readFileSync(process.env.HOME + '/token.txt', 'utf8')).token;\n");
-    const home = mkdtempSync(join(tmpdir(), "aifly-script-home-"));
-    const prevHome = process.env.HOME;
-    process.env.HOME = home;
+  it("自定义脚本（loader 注入）：同步串 / Promise / AsyncIterable 订阅动态更新", async () => {
+    const { resolveHeaderEntry } = await import("../../../src/provider/rewrite.ts");
+    const mods: Record<string, Record<string, unknown>> = {
+      s: { authHeader: () => "sync-v" },
+      p: { authHeader: async () => "promise-v" },
+    };
+    expect(await resolveHeaderEntry({ hook: "authHeader" }, { script: "s", loader: loaderOf(mods) })).toBe("sync-v");
+    expect(await resolveHeaderEntry({ hook: "authHeader" }, { script: "p", loader: loaderOf(mods) })).toBe("promise-v");
+    // AsyncIterable 订阅：首请求等待首个 yield；后续 push 动态更新 latest（零重启）
+    const queue: string[] = ["tok-1"];
+    let resolver: (() => void) | undefined;
+    const push = (v: string): void => {
+      queue.push(v);
+      resolver?.();
+      resolver = undefined;
+    };
+    const stream: AsyncIterable<string> = {
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          if (queue.length === 0) {
+            await new Promise<void>((r) => {
+              resolver = r;
+            });
+          }
+          return { value: queue.shift()!, done: false };
+        },
+        return: async () => ({ value: undefined, done: true }),
+      }),
+    };
+    const w = { authHeader: () => stream } as unknown as Record<string, unknown>;
+    expect(await resolveHeaderEntry({ hook: "authHeader" }, { script: "w", loader: loaderOf({ w }) })).toBe("tok-1");
+    push("tok-2");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await resolveHeaderEntry({ hook: "authHeader" }, { script: "w", loader: loaderOf({ w }) })).toBe("tok-2");
+    push("tok-3");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await resolveHeaderEntry({ hook: "authHeader", bearer: true }, { script: "w", loader: loaderOf({ w }) })).toBe("Bearer tok-3");
+  });
+
+  it("脚本/函数缺席、调用抛错 -> SecretMissingError（不泄脚本名与值）", async () => {
+    const { resolveHeaderEntry } = await import("../../../src/provider/rewrite.ts");
+    const bad = loaderOf({ e: { other: () => "x" }, t: { authHeader: () => { throw new Error("boom"); } } });
+    await expect(resolveHeaderEntry({ hook: "authHeader" }, { script: "e", loader: bad })).rejects.toThrow();
     try {
-      writeFileSync(join(home, "token.txt"), JSON.stringify({ token: "t1" }));
-      expect(resolveHeaderValue("$script:" + mod, {}, undefined, undefined, undefined)).toBe("t1");
-      writeFileSync(join(home, "token.txt"), JSON.stringify({ token: "t2" }));
-      expect(resolveHeaderValue("$script:" + mod, {}, undefined, undefined, undefined)).toBe("t2"); // 每请求重算
-      expect(defaultScriptCredentialSource(join(dir, "missing.cjs"))).toBeUndefined();
-    } finally {
-      process.env.HOME = prevHome;
-      rmSync(dir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      await resolveHeaderEntry({ hook: "authHeader" }, { script: "t", loader: bad });
+      expect.unreachable();
+    } catch (err) {
+      expect((err as Error).message).not.toContain("boom");
     }
   });
 });

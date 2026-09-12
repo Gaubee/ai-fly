@@ -222,13 +222,19 @@
     }
   }
 
-  /** 行头 key injected 徽章：$env: / $secret: 任一注入即亮。 */
+  /** 行头 key injected 徽章：hook 协议（对象）注入即亮。 */
   function hasInjectedAuth(service: ServiceConfigView): boolean {
     const authorization = service.rewrite?.headerSet?.["authorization"];
-    return (
-      authorization !== undefined &&
-      (authorization.startsWith("$env:") || authorization.startsWith("$secret:"))
-    );
+    return authorization !== undefined && typeof authorization === "object";
+  }
+
+  /** 头值 humanize：字面量原样；钩子调用 `hook <fn>(k=v)[ bearer]`。 */
+  function humanizeValue(value: string | { hook: string; args?: Record<string, string>; bearer?: boolean }): string {
+    if (typeof value === "string") return value;
+    const args = Object.entries(value.args ?? {})
+      .map(([k, v]) => `${k}=${k === "name" || k === "var" ? v : "***"}`)
+      .join(", ");
+    return `hook ${value.hook}${args !== "" ? ` (${args})` : ""}${value.bearer === true ? " [bearer]" : ""}`;
   }
 
   function toggleExpanded(serviceId: string): void {
@@ -399,7 +405,7 @@
                           {#if service.rewrite.pathPrefixStrip}<span>strip: {service.rewrite.pathPrefixStrip}</span>{/if}
                           {#if service.rewrite.pathPrefixAppend}<span>append: {service.rewrite.pathPrefixAppend}</span>{/if}
                           {#each Object.entries(service.rewrite.headerSet ?? {}) as [name, value] (`${service.serviceId}:${name}`)}
-                            <span>header {name}: {maskSecret(value)}</span>
+                            <span>header {name}: {typeof value === "string" ? maskSecret(value) : humanizeValue(value)}</span>
                           {/each}
                           {#each service.rewrite.headerRemove ?? [] as name (`${service.serviceId}:rm:${name}`)}
                             <span>remove header {name}</span>

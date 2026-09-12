@@ -67,7 +67,19 @@ export const SERVICE_REWRITE_STORE_SCHEMA = z.strictObject({
   hostHeader: z.string().min(1).max(2048).optional(),
   pathPrefixStrip: z.string().min(1).max(2048).optional(),
   pathPrefixAppend: z.string().min(1).max(2048).optional(),
-  headerSet: z.record(z.string().min(1).max(1024), z.string().max(8192)).optional(),
+  headerSet: z
+    .record(
+      z.string().min(1).max(1024),
+      z.union([
+        z.string().max(8192),
+        z.strictObject({
+          hook: z.string().min(1).max(128),
+          args: z.record(z.string().min(1).max(128), z.string().max(2048)).optional(),
+          bearer: z.boolean().optional(),
+        }),
+      ]),
+    )
+    .optional(),
   headerRemove: z.array(z.string().min(1).max(1024)).max(32).optional(),
 });
 
@@ -89,6 +101,8 @@ export const SERVICE_STORE_SCHEMA = z.strictObject({
   match: z.array(SERVICE_MATCH_STORE_SCHEMA).max(64),
   upstream: z.string().min(1).max(2048),
   rewrite: SERVICE_REWRITE_STORE_SCHEMA.optional(),
+  /** 选中的 hooks 脚本名（内建库或 ~/.aifly/hooks/<name>.cjs）。 */
+  hooks: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).optional(),
   routes: z.array(SERVICE_ROUTE_STORE_SCHEMA).max(3).optional(),
   defaultPort: z.number().int().min(1).max(65535),
 });
@@ -141,6 +155,8 @@ export interface ServiceInput {
   defaultPort?: number | undefined;
   rewrite?: ServiceRewrite | undefined;
   routes?: ServiceRoute[] | undefined;
+  /** hooks 脚本名（见 SERVICE_STORE_SCHEMA.hooks）。 */
+  hooks?: string | undefined;
 }
 
 /** verifyKey 结果：有效（含定位）/ 无效 / 已撤销。 */
@@ -341,6 +357,7 @@ export class ProviderStore {
       match: input.match.map((m) => ({ ...m })),
       upstream: upstreamUrl.href,
       rewrite,
+      ...(input.hooks !== undefined ? { hooks: input.hooks } : {}),
       ...(routes !== undefined ? { routes } : {}),
       defaultPort,
     };
@@ -627,7 +644,7 @@ function normalizeRewrite(rewrite: ServiceRewrite): ServiceRewrite {
     out[field] = norm;
   }
   if (rewrite.headerSet !== undefined) {
-    const headerSet: Record<string, string> = {};
+    const headerSet: Record<string, string | { hook: string; args?: Record<string, string> | undefined; bearer?: boolean | undefined }> = {};
     for (const [name, value] of Object.entries(rewrite.headerSet)) {
       const lower = name.toLowerCase();
       if (lower === "") throw new StoreError("invalid", "error: rewrite headerSet name must not be empty");

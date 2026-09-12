@@ -61,13 +61,24 @@ const checkAddInput: AssertEqual<
     name: string;
     upstream: string;
     match: Array<{ type: "exact" | "suffix" | "regex"; value: string }>;
+    hooks?: string | undefined;
     defaultPort?: number | undefined;
     rewrite?:
       | {
           hostHeader?: string | undefined;
           pathPrefixStrip?: string | undefined;
           pathPrefixAppend?: string | undefined;
-          headerSet?: Record<string, string> | undefined;
+          headerSet?:
+            | Record<
+                string,
+                | string
+                | {
+                    hook: string;
+                    args?: Record<string, string> | undefined;
+                    bearer?: boolean | undefined;
+                  }
+              >
+            | undefined;
           headerRemove?: string[] | undefined;
         }
       | undefined;
