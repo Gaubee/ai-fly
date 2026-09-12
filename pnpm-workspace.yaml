@@ -25,5 +25,6 @@ minimumReleaseAgeExclude:
   - '@opentray/windows-x64@0.23.0'
   - opentray@0.23.0
   - jixoai-ui@0.4.0
+  - '@jixo/opendweb-client-sdk@0.4.3'
 onlyBuiltDependencies:
   - esbuild
