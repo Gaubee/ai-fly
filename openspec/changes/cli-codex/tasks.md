@@ -12,5 +12,10 @@
 - [x] 5. service test 智能缺省（唯一/命中路由的 form + localPrefix）
 - [x] 6. 测试：rewrite $file 矩阵 + presets 凭据源断言 + CLI codex 预填/覆盖
       + 端到端伪 token 401 实证；531/531 全绿
-- [ ] 7. 发布：0.4.0-alpha.1（含 $file/codex）→ 实机（有 codex 登录态的机器）
-      验证真 token 200 → 0.4.0 latest
+- [x] 7a. GUI 随包分发：files += dist/app/** + webui/dist + resources/app-icons；
+      resolveRepoRoot 支持安装布局（name=ai-fly 的 package.json 向上探测）；
+      新增 `ai-fly app` 命令（spawn dist/app/main.js）；release.yml 补
+      webui:build。安装冒烟：sandbox prefix 安装 tarball → `ai-fly app` →
+      "ui server listening (webui: .../node_modules/ai-fly/webui/dist)" ✓
+- [ ] 7. 发布：alpha.1（$file/codex）→ alpha.2（+GUI 随包）→ 实机真 token
+      验证（codex 登录态机器）→ 0.4.0 latest

@@ -42,6 +42,11 @@ jobs:
       - name: app icons
         run: pnpm app:icons
 
+      # 托盘 GUI 随包分发（cli-codex 起发布面含 dist/app + webui/dist +
+      # resources/app-icons；opentray 平台原生面经 optionalDependencies 落地）
+      - name: webui build
+        run: pnpm webui:build
+
       - name: typecheck
         run: pnpm typecheck
 

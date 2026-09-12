@@ -95,14 +95,26 @@ export function createFileLog(logFile: string, verbose: boolean): AppLog {
 
 const exists: (path: string) => boolean = (path) => existsSync(path);
 
-/** 从模块目录向上找 pnpm-workspace.yaml 定位仓库根（兜底 process.cwd()）。 */
+/**
+ * 从模块目录向上定位包根：dev 仓库（pnpm-workspace.yaml）优先；否则向上找
+ * name=ai-fly 的 package.json（npm 安装布局 node_modules/ai-fly）；兜底 cwd。
+ */
 export function resolveRepoRoot(
   startDir: string,
   existsFn: (path: string) => boolean = exists,
+  readFn: (path: string) => string = (p) => readFileSync(p, "utf8"),
 ): string {
   let dir = resolve(startDir);
-  for (let hops = 0; hops < 8; hops += 1) {
+  for (let hops = 0; hops < 12; hops += 1) {
     if (existsFn(join(dir, "pnpm-workspace.yaml"))) return dir;
+    const pkg = join(dir, "package.json");
+    if (existsFn(pkg)) {
+      try {
+        if (JSON.parse(readFn(pkg)).name === "ai-fly") return dir;
+      } catch {
+        // 损坏的 package.json——继续向上
+      }
+    }
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;

@@ -58,7 +58,10 @@
   "files": [
     "dist/*.js",
     "dist/*.mjs",
-    "dist/*.d.ts"
+    "dist/*.d.ts",
+    "dist/app/**",
+    "webui/dist",
+    "resources/app-icons"
   ],
   "repository": {
     "type": "git",

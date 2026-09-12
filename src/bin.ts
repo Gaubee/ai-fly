@@ -19,6 +19,7 @@ Daemon:
   ai-fly daemon start [--detach] [--data <dir>] [--relay <url>]... [--proxy <url|env|none>]
   ai-fly daemon stop [--force] | info | restart [--detach] | log [--lines <n>]
   ai-fly serve                 alias of 'daemon start'
+  ai-fly app                   launch the tray GUI (desktop app)
 
 Provider:
   ai-fly service add <name> [--upstream <url> | --preset <id>] [--route <local>=<up>[@forms]]...
@@ -73,6 +74,26 @@ async function dispatch(command: string, rest: string[]): Promise<number> {
 
   return match<string, Promise<number>>(command)
     .with("serve", () => lazy(() => import("./cli/commands/provider/serve.ts"))(rest))
+    // 托盘 GUI：转发 dist/app/main.js（npm 包随附；dev 下 dist/app 由 build 产出）
+    .with("app", async () => {
+      const { join, dirname } = await import("node:path");
+      const { fileURLToPath } = await import("node:url");
+      const { spawn } = await import("node:child_process");
+      const entry = join(dirname(fileURLToPath(import.meta.url)), "app", "main.js");
+      const { existsSync } = await import("node:fs");
+      if (!existsSync(entry)) {
+        process.stderr.write(
+          `error: tray GUI not included in this install (missing ${entry})\n` +
+            "note: rebuild the package with webui + app entries (pnpm app:build)\n",
+        );
+        return 1;
+      }
+      const child = spawn(process.execPath, [entry, ...rest], { stdio: "inherit" });
+      const code = await new Promise<number>((resolve) => {
+        child.once("exit", (c) => resolve(c ?? 0));
+      });
+      return code;
+    })
     .with("daemon", () => lazy(() => import("./cli/commands/provider/daemon.ts"))(rest))
     .with("presets", () => lazy(() => import("./cli/commands/provider/presets.ts"))(rest))
     .with("secret", () => lazy(() => import("./cli/commands/provider/secret.ts"))(rest))
