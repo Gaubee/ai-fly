@@ -107,6 +107,13 @@ export const share = $state({
   limitsDaily: "",
   /** 密钥库选择（undefined = 不注入 authorization；本地运行时可留空）。 */
   secretName: undefined as string | undefined,
+  /** 预设携带的认证三件（generateShare 组装时按 presetToServiceInput 同一
+   *  优先级落进服务输入：显式 secretName > presetAuth > presetKeyEnv；
+   *  全量视觉验收 2026-09-13 实证：此前向导丢掉 codex 预设的 hook 认证，
+   *  建出的服务无 Authorization 头，朋友侧全部 401）。 */
+  presetHooks: undefined as string | undefined,
+  presetAuth: undefined as { hook: string; args?: Record<string, string>; bearer?: boolean } | undefined,
+  presetKeyEnv: undefined as string | undefined,
   // ③ 生成
   ttlMs: TTL_OPTIONS[0]!.ttlMs,
   /** 在途阶段（'' | 'service' | 'group' | 'daemon' | 'share'）。 */
@@ -131,6 +138,9 @@ export function resetShare(): void {
   share.limitsConcurrency = "";
   share.limitsDaily = "";
   share.secretName = undefined;
+  share.presetHooks = undefined;
+  share.presetAuth = undefined;
+  share.presetKeyEnv = undefined;
   share.ttlMs = TTL_OPTIONS[0]!.ttlMs;
   share.busy = "";
   share.error = null;
@@ -145,6 +155,10 @@ export function choosePreset(preset: Preset): void {
   share.port = String(preset.defaultPort);
   share.customUpstream = preset.baseUrl;
   share.customMatch = preset.matchDomains.join(", ");
+  // 预设认证随卡带上（③ 提交时按优先级组装；用户改选密钥则覆盖之）
+  share.presetHooks = preset.hooks;
+  share.presetAuth = preset.authHeader;
+  share.presetKeyEnv = preset.keyEnv;
   // 路由行预填（M3-r6）：预设规则即 from→to 行（默认官方镜像 1:1 绑定态）；
   // forms 标注随行（消费侧 agent 判定），表单不显示
   share.routeRows = (preset.routes ?? []).map((route) => {
@@ -161,6 +175,9 @@ export function choosePreset(preset: Preset): void {
 export function chooseCustom(): void {
   share.mode = "custom";
   share.presetId = "";
+  share.presetHooks = undefined;
+  share.presetAuth = undefined;
+  share.presetKeyEnv = undefined;
   share.name = "";
   share.port = share.customPort;
   share.error = null;
@@ -365,9 +382,19 @@ export async function generateShare(): Promise<void> {
         ...(parsePositiveInt(share.port) !== undefined
           ? { defaultPort: parsePositiveInt(share.port) }
           : {}),
+        // 认证组装（优先级对齐服务端 presetToServiceInput：显式密钥 >
+        // 预设 authHeader hook > 预设 keyEnv > 无）。预设 = 预填的 Custom，
+        // 但认证不是可丢的预填项——codex 等预设的 hook 认证必须随卡入服务。
         ...(share.secretName !== undefined
           ? { hooks: "secret", rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: share.secretName } } } } }
-          : {}),
+          : share.presetAuth !== undefined
+            ? {
+                ...(share.presetHooks !== undefined ? { hooks: share.presetHooks } : {}),
+                rewrite: { headerSet: { authorization: share.presetAuth } },
+              }
+            : share.presetKeyEnv !== undefined
+              ? { hooks: "env", rewrite: { headerSet: { authorization: { hook: "authHeader", args: { var: share.presetKeyEnv } } } } }
+              : {}),
         ...(routes !== undefined ? { routes } : {}),
       }),
     );

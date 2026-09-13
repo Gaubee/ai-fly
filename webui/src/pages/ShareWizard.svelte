@@ -461,6 +461,14 @@
 
         <!-- 密钥选择器（本地运行时/自定义也显示：可选不选）+ 连通测试 -->
         <SecretPicker value={share.secretName} onchange={(name) => (share.secretName = name)} />
+        <!-- 预设 hook 认证提示（全量视觉验收 2026-09-13：codex 预设无需
+             API 密钥——认证由 codex hook 读 ~/.codex/auth.json；不提示的话
+             分享者会误以为服务无认证） -->
+        {#if share.presetAuth !== undefined && share.secretName === undefined}
+          <p class="text-[11px] leading-relaxed text-primary">
+            {t("share.presetHookAuth", { hook: share.presetHooks ?? share.presetAuth.hook })}
+          </p>
+        {/if}
 
         <TestConnection
           upstream={share.customUpstream.trim()}
@@ -506,6 +514,18 @@
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
               <dt class="text-muted-foreground">port</dt>
               <dd class="font-mono">{share.port}</dd>
+            </div>
+            <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
+              <dt class="text-muted-foreground">{t("share.generate.auth")}</dt>
+              <dd class="font-mono">
+                {share.secretName !== undefined
+                  ? `secret:${share.secretName}`
+                  : share.presetAuth !== undefined
+                    ? `${share.presetHooks ?? share.presetAuth.hook} hook`
+                    : share.presetKeyEnv !== undefined
+                      ? `env:${share.presetKeyEnv}`
+                      : t("share.generate.authNone")}
+              </dd>
             </div>
           </dl>
           <!-- 路由映射（M3-r6：分享时可见「from → upstream+to」行清单） -->
