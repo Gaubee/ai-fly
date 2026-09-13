@@ -230,21 +230,21 @@
   <!-- ② 命名与分组（M3-r5：预设 = 预填的 Custom——upstream/match/路由/端口
        全部展开可编辑，两模式同一条组装提交路径） -->
   {:else if share.step === 2}
-    <Card title="name & group" scroll={false}>
+    <Card title={t("share.formTitle")} scroll={false}>
       <div class="p-3">
         <!-- Owner 裁决 2026-09-13 #5：与高级设置编辑服务同一套组件/同一 store -->
         <ServiceForm />
       </div>
       {#snippet foot()}
         <CardFooter label="share wizard actions">
-          <PressButton variant="ghost" onclick={shareBack} class={share.busy !== "" ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
+          <PressButton variant="ghost" onclick={shareBack} class={share.busy !== "" ? "pointer-events-none opacity-50" : undefined}>{t("common.back")}</PressButton>
           <PressButton
             variant="fill"
             onclick={() => {
               namingNext();
             }}
           >
-            continue
+            {t("common.continue")}
           </PressButton>
         </CardFooter>
       {/snippet}
@@ -285,7 +285,7 @@
       </div>
       {#snippet foot()}
         <CardFooter label="share wizard actions">
-          <PressButton variant="ghost" onclick={shareBack} class={share.busy !== "" ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
+          <PressButton variant="ghost" onclick={shareBack} class={share.busy !== "" ? "pointer-events-none opacity-50" : undefined}>{t("common.back")}</PressButton>
           <span class="flex items-center gap-1.5">
             <PressButton
               variant="ghost"
@@ -294,7 +294,7 @@
                 void loadPresets();
               }}
             >
-              share another
+              {t("share.another")}
             </PressButton>
             <PressButton variant="fill" href="#/dashboard" external={false}>{t("share.goDashboard")}</PressButton>
           </span>

@@ -458,7 +458,7 @@
                   {#if !group.limits?.maxConcurrency && !group.limits?.dailyRequests}
                     <Badge variant="outline">{t("adv.groups.unlimited")}</Badge>
                   {/if}
-                  <Badge variant="outline">{activeKeys} active {activeKeys === 1 ? "key" : "keys"}</Badge>
+                  <Badge variant="outline">{t("gkp.activeKeys", { count: activeKeys })}</Badge>
                   <span class="ml-auto flex items-center gap-1.5">
                     {#if groupEdit.open === group.name}
                       <PressButton variant="ghost" onclick={() => (groupEdit.open = "")} class={groupEdit.busy ? "pointer-events-none opacity-50" : undefined}>{t("f.close")}</PressButton>
@@ -514,7 +514,7 @@
                         </label>
                       {:else}
                         <span class="text-[11px] text-muted-foreground">
-                          add services first (the add-service form above).
+                          {t("svc.addServiceFirst")}
                         </span>
                       {/each}
                     </div>
@@ -524,7 +524,7 @@
                     </div>
                     <div class="flex items-center gap-1.5">
                       <PressButton variant="fill" loading={groupEdit.busy} onclick={() => void submitGroupEdit()}>
-                        save changes
+                        {t("svc.saveChanges")}
                       </PressButton>
                     </div>
                     <ErrorAlert error={groupEdit.error} />
@@ -549,7 +549,7 @@
 
         <!-- 服务增/改表单（Owner 裁决 2026-09-13 #5：与分享向导②同一套
              ServiceForm 组件/stores，编辑改为 Dialog） -->
-        <Dialog bind:open={serviceForm.open} title={serviceForm.editingName !== "" ? `edit service - ${serviceForm.editingName}` : "add service"}>
+        <Dialog bind:open={serviceForm.open} title={serviceForm.editingName !== "" ? t("svc.editTitle", { name: serviceForm.editingName }) : t("svc.addTitle")}>
           <div class="p-4">
             <ServiceForm />
           </div>
@@ -557,7 +557,7 @@
             <CardFooter label="service form actions">
               <PressButton variant="ghost" onclick={() => (serviceForm.open = false)} class={serviceForm.busy ? "pointer-events-none opacity-50" : undefined}>{t("common.cancel")}</PressButton>
               <PressButton variant="fill" loading={serviceForm.busy} onclick={() => void submit()}>
-                {serviceForm.editingName !== "" ? "save changes" : "add service"}
+                {serviceForm.editingName !== "" ? t("svc.saveChanges") : t("svc.addTitle")}
               </PressButton>
             </CardFooter>
           {/snippet}
@@ -566,7 +566,7 @@
         <ErrorAlert error={groupRemove.error} />
 
         {#if groupForm.open}
-          <Card title="add group" scroll={false}>
+          <Card title={t("adv.groups.add")} scroll={false}>
             <div class="flex flex-col gap-3 p-3">
               <Input
                 label={t("f.groupName")}
@@ -730,7 +730,7 @@
     {#if hooksPanel.busy && hooksPanel.scripts.length === 0}
       <Skeleton class="h-10" />
     {:else if hooksPanel.scripts.length === 0}
-      <Card scroll={false}><p class="p-4 text-xs text-muted-foreground">no hook scripts</p></Card>
+      <Card scroll={false}><p class="p-4 text-xs text-muted-foreground">{t("svc.noHookScripts")}</p></Card>
     {:else}
       <div class="flex flex-col gap-2">
         {#each hooksPanel.scripts as script (script.name)}
@@ -849,7 +849,7 @@
 <Dialog bind:open={hookAdd.open} title={t("adv.hooks.add")}>
   <div class="flex flex-col gap-3 p-4">
     <label class="flex flex-col gap-1">
-      <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">name</span>
+      <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">{t("hookdlg.name")}</span>
       <input
         class="border border-border bg-background px-2 py-1.5 font-mono text-xs"
         placeholder="my-hook"
@@ -857,7 +857,7 @@
       />
     </label>
     <label class="flex flex-col gap-1">
-      <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">script (CJS)</span>
+      <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">{t("hookdlg.script")}</span>
       <textarea
         class="min-h-40 border border-border bg-background px-2 py-1.5 font-mono text-xs"
         placeholder={'module.exports.authHeader = ({ homedir, args, secrets }) => {\n  return "Bearer ...";\n};'}
@@ -865,14 +865,14 @@
       ></textarea>
     </label>
     <p class="text-[11px] text-muted-foreground">
-      installed to ~/.aifly/hooks/&lt;name&gt;.cjs - exported function names become the hook inventory.
+      {t("hookdlg.hint")}
     </p>
     <ErrorAlert error={hookAdd.error} />
   </div>
   {#snippet footer()}
     <CardFooter label="hook add">
       <PressButton variant="ghost" onclick={() => (hookAdd.open = false)}>{t("common.cancel")}</PressButton>
-      <PressButton variant="fill" loading={hookAdd.busy} onclick={() => void submitHookAdd()}>install</PressButton>
+      <PressButton variant="fill" loading={hookAdd.busy} onclick={() => void submitHookAdd()}>{t("hookdlg.install")}</PressButton>
     </CardFooter>
   {/snippet}
 </Dialog>

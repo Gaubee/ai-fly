@@ -82,7 +82,7 @@
   }
 </script>
 
-<Dialog bind:open title="secrets">
+<Dialog bind:open title={t("secretdlg.title")}>
   <div class="flex flex-col gap-3">
     <p class="text-[11px] leading-relaxed text-muted-foreground">
       values live in this machine's provider secret store and are never shown
@@ -104,7 +104,7 @@
           <div class="flex flex-wrap items-center gap-2 border border-border/70 px-2.5 py-1.5">
             <span class="min-w-0 truncate font-mono text-xs">{secretName}</span>
             <span class="ml-auto flex items-center gap-1.5">
-              <PressButton variant="ghost" onclick={() => startEdit(secretName)}>edit</PressButton>
+              <PressButton variant="ghost" onclick={() => startEdit(secretName)}>{t("common.edit")}</PressButton>
               {#if confirmName === secretName}
                 <PressButton
                   variant="tonal"
@@ -173,7 +173,7 @@
 
   {#snippet footer()}
     <CardFooter label="secrets dialog actions">
-      <PressButton variant="fill" onclick={() => (open = false)}>done</PressButton>
+      <PressButton variant="fill" onclick={() => (open = false)}>{t("common.done")}</PressButton>
     </CardFooter>
   {/snippet}
 </Dialog>

@@ -72,7 +72,7 @@
 </script>
 
 <div class="flex flex-col gap-1">
-  <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">keys</span>
+  <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">{t("gkp.keysHeader")}</span>
   {#each keys as key (key.keyId)}
     <div class="flex flex-wrap items-center gap-2 pl-1">
       <span class="font-mono text-[11px]">{key.name ?? "(unnamed)"}</span>
@@ -99,7 +99,7 @@
       {/if}
     </div>
   {:else}
-    <span class="pl-1 text-[11px] text-muted-foreground">no keys</span>
+    <span class="pl-1 text-[11px] text-muted-foreground">{t("gkp.noKeys")}</span>
   {/each}
   <div class="flex items-center gap-1.5 pl-1">
     <input
@@ -120,7 +120,7 @@
         void issueKey();
         keyName = "";
       }}
-    >+ key</PressButton>
+    >{t("gkp.addKey")}</PressButton>
   </div>
 </div>
 

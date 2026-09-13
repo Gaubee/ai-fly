@@ -72,7 +72,7 @@
     <option value={MANAGE}>{t("grouppicker.manage")}</option>
   </NativeSelect>
   <p class="text-[11px] leading-relaxed text-muted-foreground">
-    groups scope what each shared key can reach - create or edit them in the manager.
+    {t("grouppicker.note")}
   </p>
 </div>
 

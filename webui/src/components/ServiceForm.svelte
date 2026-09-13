@@ -72,7 +72,7 @@
   <!-- PATH ROUTES（#3：bind = 隐藏第二个输入；↑↓ 纵向排列） -->
   <div class="flex flex-col gap-3">
     <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-      path routes
+      {t("f.routes.label")}
     </span>
     {#each serviceForm.routeRows as row, index (row.id)}
       <div class="flex flex-col gap-1.5 border border-border/70 p-2.5">
@@ -132,7 +132,7 @@
             </div>
             <label class="flex shrink-0 cursor-pointer select-none items-center gap-1.5 text-[11px] text-muted-foreground">
               <Toggle checked={row.bound} onchange={(event) => toggleRouteBound(row, event.currentTarget.checked)} />
-              bind
+              {t("f.routes.bind")}
             </label>
             {#if !row.bound}
               <div class="min-w-32 flex-1">

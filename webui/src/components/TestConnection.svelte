@@ -13,6 +13,7 @@
   import Skeleton from "$lib/ui/skeleton";
   import { toRpcError, type RpcClient } from "$lib/rpc-client";
   import { call } from "../stores/rpc.svelte.ts";
+import { t } from "$lib/i18n.svelte.ts";
   import type { ApiForm } from "$shared/rpc-contract.ts";
 
   interface Props {
@@ -140,7 +141,7 @@
 
 <div class="flex flex-col gap-1.5">
   <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-    connectivity
+    {t("tc.connectivity")}
   </span>
   <div class="flex flex-wrap items-center gap-2">
     <PressButton
@@ -148,7 +149,7 @@
       loading={busy}
       class={upstream.trim() === "" ? "pointer-events-none opacity-50" : undefined}
       onclick={() => void runTest()}
-    >test</PressButton>
+    >{t("common.test")}</PressButton>
     {#if modelsLoading}
       <Skeleton class="h-8 w-44" />
     {:else if modelsError === null && modelOptions.length > 0}

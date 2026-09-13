@@ -219,7 +219,7 @@
                 >edit</button>
                 {#if confirmName === group.name}
                   <PressButton variant="tonal" class="jx-pair-destructive" loading={busy} onclick={() => void removeGroup(group.name)}>
-                    confirm remove
+                    {t("groupsdlg.confirmRemove")}
                   </PressButton>
                   <PressButton variant="ghost" onclick={() => (confirmName = null)}>{t("common.cancel")}</PressButton>
                 {:else}
