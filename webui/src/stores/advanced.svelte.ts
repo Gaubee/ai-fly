@@ -581,44 +581,47 @@ export async function removeHookScript(name: string): Promise<void> {
 // 服务级分享（Owner 视觉验收：服务卡要能看到分享链接）
 // ---------------------------------------------------------------------------
 
-export const serviceShare = $state({
-  open: false,
-  service: "",
-  /** 候选组（包含该服务的组）。 */
-  groups: [] as string[],
-  group: "",
-  link: "",
-  keyId: "",
+/**
+ * Group-with-key 分享（Owner 裁决 2026-09-13：分享主体 = 分组 + 其中一枚
+ * key；分享动作在 key 行，复制产物 = 完整 aifly1. 链接（含 key 原文 +
+ * 现铸 invite）。服务级分享删除，不做向下兼容。链接按 key 现铸并缓存。
+ */
+export const groupLink = $state({
   busy: false,
   error: null as RpcError | null,
+  /** 已铸链接（keyId → aifly1. 链接；同 key 重复复制复用缓存）。 */
+  links: {} as Record<string, string>,
 });
 
-export function openServiceShare(serviceName: string): void {
-  const groups = app.groups.filter((g) => g.serviceIds.includes(serviceName)).map((g) => g.name);
-  serviceShare.open = true;
-  serviceShare.service = serviceName;
-  serviceShare.groups = groups;
-  serviceShare.group = groups[0] ?? "";
-  serviceShare.link = "";
-  serviceShare.keyId = "";
-  serviceShare.error =
-    groups.length === 0
-      ? { code: "INVALID_INPUT", message: "add this service to a group first (groups tab)" }
-      : null;
-}
+/** 各组 key 区的 TTL 选择草稿（缺省 30 天——管理面复制的链接应长寿）。 */
+export const groupLinkTtl = $state({ drafts: {} as Record<string, number> });
 
-export async function submitServiceShare(): Promise<void> {
-  if (serviceShare.busy || serviceShare.group === "") return;
-  serviceShare.busy = true;
-  serviceShare.error = null;
+export async function copyGroupKeyLink(group: string, keyId: string, ttlMs: number): Promise<void> {
+  if (groupLink.busy) return;
+  groupLink.busy = true;
+  groupLink.error = null;
   try {
-    const result = await call((c) => c.provider.share.create({ group: serviceShare.group }));
-    serviceShare.link = result.link;
-    serviceShare.keyId = result.keyId;
+    if (groupLink.links[keyId] === undefined) {
+      // share.create 依赖运行态 fabric（幂等启动）
+      await call((c) => c.provider.daemon.start({}));
+      const result = await call((c) => c.provider.share.create({ group, ttlMs, keyId }));
+      groupLink.links = { ...groupLink.links, [keyId]: result.link };
+    }
+    const link = groupLink.links[keyId]!;
+    try {
+      await navigator.clipboard.writeText(link);
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = link;
+      document.body.append(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
   } catch (error) {
-    serviceShare.error = toRpcError(error);
-    toastRpcError(serviceShare.error);
+    groupLink.error = toRpcError(error);
+    toastRpcError(groupLink.error);
   } finally {
-    serviceShare.busy = false;
+    groupLink.busy = false;
   }
 }

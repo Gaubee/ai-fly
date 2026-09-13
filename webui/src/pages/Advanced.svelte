@@ -23,6 +23,7 @@
   import Tabs, { TabsList, TabsTrigger, TabsContent } from "$lib/ui/tabs";
   import Dialog from "$lib/ui/dialog";
   import { toRpcError } from "$lib/rpc-client";
+  import { TTL_OPTIONS } from "../stores/share-wizard.svelte.ts";
   import type { ServiceConfigView } from "$shared/rpc-contract.ts";
   import { slide } from "svelte/transition";
   import ErrorAlert from "../components/ErrorAlert.svelte";
@@ -48,9 +49,9 @@
     removeHookScript,
     hookView,
     openHookView,
-    serviceShare,
-    openServiceShare,
-    submitServiceShare,
+    groupLink,
+    copyGroupKeyLink,
+    groupLinkTtl,
     openServiceAdd,
     openServiceEdit,
     closeServiceForm,
@@ -81,6 +82,16 @@
   let expanded = $state(new Set<string>());
   /** 组内新增 key 的名字草稿（组名 → key-name；空 = "default"）。 */
   let keyNameDrafts = $state<Record<string, string>>({});
+  /** 组 keys 区的链接 TTL 草稿（select 字符串值 → 提交时转数值）。 */
+  let ttlDrafts = $state<Record<string, string>>({});
+  $effect(() => {
+    const next: Record<string, number> = {};
+    for (const [name, value] of Object.entries(ttlDrafts)) {
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isFinite(parsed)) next[name] = parsed;
+    }
+    groupLinkTtl.drafts = next;
+  });
   /** 服务表单 hooks 脚本选择的显示值（NativeSelect bind 用；联动走 store）。 */
   let hookScriptSel = $state("");
   $effect(() => {
@@ -304,20 +315,6 @@
     return map;
   });
 
-  /** key 原文随时复制（Owner 2026-09-13 #5）。 */
-  async function copyText(text: string): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const area = document.createElement("textarea");
-      area.value = text;
-      document.body.append(area);
-      area.select();
-      document.execCommand("copy");
-      area.remove();
-    }
-  }
-
   /** hooks 脚本选择联动（Owner #3 双控件）：换脚本时，hook 型认证指向新脚本
    *  （新脚本不导出 authHeader 则回落无）。 */
   function selectHooksScript(script: string): void {
@@ -412,7 +409,6 @@
                 variant="ghost"
                 onclick={() => (serviceTestOpen = serviceTestOpen === service.serviceId ? null : service.serviceId)}
               >{t("common.test")}</PressButton>
-              <PressButton variant="ghost" onclick={() => openServiceShare(service.name)}>{t("adv.services.share")}</PressButton>
               <PressButton variant="ghost" onclick={() => openServiceEdit(service)}>{t("common.edit")}</PressButton>
               {#if serviceRemove.confirm === service.name}
                 <PressButton
@@ -557,7 +553,13 @@
                 <!-- 组内 keys（Owner 2026-09-13 #4/#5：归组显示；key 名；
                      原文随时可复制（旧记录无原文则标注）；新增带 key-name） -->
                 <div class="mt-1.5 flex flex-col gap-1 border-t border-border pt-1.5">
-                  <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">keys</span>
+                  <span class="flex items-center justify-between gap-2">
+                    <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">keys</span>
+                    <Select
+                      options={TTL_OPTIONS.map((o) => ({ value: String(o.ttlMs), label: o.label }))}
+                      bind:value={ttlDrafts[group.name]}
+                    />
+                  </span>
                   {#each app.keys.filter((k) => k.group === group.name && k.revokedAt === undefined) as key (key.keyId)}
                     <div class="flex flex-wrap items-center gap-2 pl-1">
                       <span class="font-mono text-[11px]">{key.name ?? "(unnamed)"}</span>
@@ -566,8 +568,13 @@
                         <PressButton
                           variant="ghost"
                           class="h-5 px-1.5 text-[10px]"
-                          onclick={() => void copyText(key.key ?? "")}
-                        >{t("common.copy")}</PressButton>
+                          loading={groupLink.busy}
+                          onclick={() =>
+                            void copyGroupKeyLink(group.name, key.keyId, groupLinkTtl.drafts[group.name] ?? 30 * 86_400_000)}
+                        >{t("share.groupview.copyLink")}</PressButton>
+                        {#if groupLink.links[key.keyId] !== undefined}
+                          <span class="text-[10px] text-primary">{t("share.groupview.linkReady")}</span>
+                        {/if}
                       {:else}
                         <span class="text-[10px] text-muted-foreground">{t("adv.keys.legacy")}</span>
                       {/if}
@@ -726,7 +733,6 @@
                   <option value={script.name}>{script.name} ({script.fns.join(", ")})</option>
                 {/each}
               </NativeSelect>
-              <p class="text-[11px] leading-relaxed text-muted-foreground">{t("f.hookscript.note")}</p>
               <!-- 认证头取值（#3 双控件）：hook 条目只在上方激活了导出
                    authHeader 的脚本时出现；keep 哨兵回显透传 CLI/预配置 -->
               <AuthSourcePicker
@@ -910,9 +916,6 @@
       <p class="text-xs leading-relaxed text-muted-foreground">
         hook scripts: builtin library + ~/.aifly/hooks (user overrides builtin);
         exported function names are the hook inventory (authHeader = HTTP auth header hook).
-        <!-- 子代理 E2E（2026-09-13）P2：补"怎么用到服务上"的方向指引 -->
-        <br />
-        {t("adv.hooks.useHint")}
       </p>
       <PressButton
         variant="outline"
@@ -1042,48 +1045,6 @@
 <RelayPickerDialog bind:open={relayDialogOpen} />
 
 
-<!-- 服务分享（Owner 视觉验收 2026-09-12：服务卡可见分享链接） -->
-<Dialog bind:open={serviceShare.open} title="{t('adv.services.share')}: {serviceShare.service}">
-  <div class="flex flex-col gap-3 p-4">
-    {#if serviceShare.link !== ""}
-      <Alert variant="tonal" class="jx-hue-warning" assertive title={t("adv.share.secretWarning")}>
-        {t("adv.share.secretBody")}
-      </Alert>
-      <CopyField value={serviceShare.link} label="aifly1. link" />
-      <p class="text-[11px] text-muted-foreground">
-        key id <code class="font-mono">{serviceShare.keyId}</code>
-      </p>
-    {:else}
-      {#if serviceShare.groups.length > 1}
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">{t("f.group")}</span>
-          <div class="w-56">
-            <Select
-              options={serviceShare.groups.map((g) => ({ value: g, label: g }))}
-              bind:value={serviceShare.group}
-            />
-          </div>
-        </div>
-      {/if}
-      <ErrorAlert error={serviceShare.error} />
-    {/if}
-  </div>
-  {#snippet footer()}
-    <CardFooter label="service share">
-      {#if serviceShare.link !== ""}
-        <PressButton variant="fill" onclick={() => (serviceShare.open = false)}>{t("adv.keys.done")}</PressButton>
-      {:else}
-        <PressButton variant="ghost" onclick={() => (serviceShare.open = false)}>{t("common.cancel")}</PressButton>
-        <PressButton
-          variant="fill"
-          loading={serviceShare.busy}
-          class={serviceShare.group === "" ? "pointer-events-none opacity-50" : undefined}
-          onclick={() => void submitServiceShare()}
-        >{t("adv.services.share")}</PressButton>
-      {/if}
-    </CardFooter>
-  {/snippet}
-</Dialog>
 
 <!-- hooks 脚本安装 -->
 <Dialog bind:open={hookAdd.open} title={t("adv.hooks.add")}>

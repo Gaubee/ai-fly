@@ -329,24 +329,29 @@
   {:else if share.step === 2}
     <Card title="name & group" scroll={false}>
       <div class="flex flex-col gap-3 p-3">
-        <Input
-          label={t("share.name.label")}
-          placeholder={share.mode === "preset" ? share.name : t("share.name.ph")}
-          autocapitalize="none"
-          autocorrect="off"
-          spellcheck={false}
-          bind:value={share.name}
-        />
-
-        <!-- 分组选择器（M3-r3 ①）：manage groups… 弹窗承载新建/编辑/删除，
-             替换原先的「下拉 + NEW GROUP NAME 输入」临时体验 -->
-        <GroupPicker value={share.groupName || undefined} onchange={(name) => (share.groupName = name ?? "")} />
+        <!-- Owner 2026-09-13 #1/#2：服务名与分组合一行；未选分组时服务名
+             disabled（命名唯一性与端口冲突判定以分组为前提）；分组选择
+             不再门控 route paths——两者独立 -->
+        <div class="grid gap-3 sm:grid-cols-2">
+          <Input
+            label={t("share.name.label")}
+            placeholder={share.mode === "preset" ? share.name : t("share.name.ph")}
+            disabled={share.groupName === ""}
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck={false}
+            bind:value={share.name}
+          />
+          <!-- 分组选择器（M3-r3 ①）：manage groups… 弹窗承载新建/编辑/删除 -->
+          <GroupPicker value={share.groupName || undefined} onchange={(name) => (share.groupName = name ?? "")} />
+        </div>
         {#if share.groupName !== ""}
           <p class="text-[11px] text-muted-foreground">
             {t("share.group.note")}
             <code class="font-mono">{share.groupName}</code>
             {t("share.group.note2")}
           </p>
+        {/if}
 
         <Input
           label={t("f.upstreamUrl")}
@@ -421,21 +426,24 @@
                       spellcheck={false}
                     />
                   </div>
+                  <!-- Owner 2026-09-13 #3：bind 勾选 = 1:1，隐藏第二个
+                       input（to 隐含等于 from），不再镜像填充 -->
                   <label class="flex shrink-0 cursor-pointer select-none items-center gap-1.5 text-[11px] text-muted-foreground">
                     <Toggle checked={row.bound} onchange={(event) => toggleRouteBound(row, event.currentTarget.checked)} />
                     bind
                   </label>
-                  <div class="min-w-32 flex-1">
-                    <Input
-                      placeholder="/ (root)"
-                      value={row.to}
-                      disabled={row.bound}
-                      onchange={(event) => onRowTo(row.id, event)}
-                      autocapitalize="none"
-                      autocorrect="off"
-                      spellcheck={false}
-                    />
-                  </div>
+                  {#if !row.bound}
+                    <div class="min-w-32 flex-1">
+                      <Input
+                        placeholder="/ (root)"
+                        value={row.to}
+                        onchange={(event) => onRowTo(row.id, event)}
+                        autocapitalize="none"
+                        autocorrect="off"
+                        spellcheck={false}
+                      />
+                    </div>
+                  {/if}
                 {/if}
                 {#if share.routeRows.length > 1}
                   <PressButton
@@ -468,9 +476,26 @@
             {t("share.routes.note")}
           </p>
         </div>
-        <Separator />
 
-        {/if}
+
+        <!-- hooks 脚本选择（Owner #3 双控件）：先激活脚本，认证头 select 才出条目 -->
+        <NativeSelect
+          label={t("f.hookscript.label")}
+          bind:value={hookScriptSel}
+          onchange={(event) => selectWizardHooksScript(event.currentTarget.value)}
+        >
+          <option value="">{t("f.hookscript.none")}</option>
+          {#each hooksPanel.scripts as script (script.name)}
+            <option value={script.name}>{script.name} ({script.fns.join(", ")})</option>
+          {/each}
+        </NativeSelect>
+        <!-- 认证头取值（#3）：预设携带 → 预选（codex 型 hook 条目 / env keep
+             哨兵），② 显式改选即覆盖（含改"无"）+ 连通测试 -->
+        <AuthSourcePicker
+          value={share.auth}
+          onchange={(sel) => (share.auth = sel)}
+          hooksScript={share.hooksScript}
+        />
 
         <!-- {t('share.advanced')}（M3-acceptance ③：ghost accordion，默认折叠——
              default consumer port + match domains；路由已按 Owner 裁决
@@ -505,34 +530,20 @@
           </AccordionItem>
         </Accordion>
 
-        <!-- hooks 脚本选择（Owner #3 双控件）：先激活脚本，认证头 select 才出条目 -->
-        <NativeSelect
-          aria-label={t("f.hookscript.label")}
-          bind:value={hookScriptSel}
-          onchange={(event) => selectWizardHooksScript(event.currentTarget.value)}
-        >
-          <option value="">{t("f.hookscript.none")}</option>
-          {#each hooksPanel.scripts as script (script.name)}
-            <option value={script.name}>{script.name} ({script.fns.join(", ")})</option>
-          {/each}
-        </NativeSelect>
-        <!-- 认证头取值（#3）：预设携带 → 预选（codex 型 hook 条目 / env keep
-             哨兵），② 显式改选即覆盖（含改"无"）+ 连通测试 -->
-        <AuthSourcePicker
-          value={share.auth}
-          onchange={(sel) => (share.auth = sel)}
-          hooksScript={share.hooksScript}
-        />
-
-        <TestConnection
+      </div>
+      {#snippet foot()}
+        <CardFooter label="share wizard actions">
+          {#snippet start()}
+            <!-- Owner 2026-09-13 #5：连通测试入 CardFooter inline-start 座 -->
+            <div class="max-w-[26rem]">
+                      <TestConnection
           upstream={share.customUpstream.trim()}
           apiForm={selectedPreset?.apiForm}
           secretName={share.auth.kind === "secret" ? share.auth.name : undefined}
           presetId={share.mode === "preset" ? share.presetId : undefined}
         />
-      </div>
-      {#snippet foot()}
-        <CardFooter label="share wizard actions">
+            </div>
+          {/snippet}
           <PressButton variant="ghost" onclick={shareBack} class={share.busy !== "" ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
           <PressButton
             variant="fill"
@@ -584,21 +595,18 @@
             <div class="flex flex-wrap items-center gap-2 border border-border/70 px-2.5 py-1.5">
               <span class="font-mono text-xs">{key.name ?? "(unnamed)"}</span>
               <code class="font-mono text-[10px] text-muted-foreground">{key.keyId.slice(0, 8)}</code>
+              <!-- Owner 裁决 2026-09-13：分享主体 = Group with key——key 行
+                   复制产物是完整 aifly1. 链接（原 key 复制按钮删除） -->
               {#if key.key !== undefined}
                 <PressButton
                   variant="ghost"
                   class="h-5 px-1.5 text-[10px]"
-                  onclick={() => void copyText(key.key ?? "")}
-                >{t("common.copy")} key</PressButton>
+                  loading={share.busy === "share"}
+                  onclick={() => void copyKeyLink(key.keyId)}
+                >{t("share.groupview.copyLink")}</PressButton>
               {:else}
                 <span class="text-[10px] text-muted-foreground">{t("adv.keys.legacy")}</span>
               {/if}
-              <PressButton
-                variant="ghost"
-                class="h-5 px-1.5 text-[10px]"
-                loading={share.busy === "share"}
-                onclick={() => void copyKeyLink(key.keyId)}
-              >{t("share.groupview.copyLink")}</PressButton>
               {#if share.links[key.keyId] !== undefined}
                 <span class="text-[10px] text-primary">{t("share.groupview.linkReady")}</span>
               {/if}

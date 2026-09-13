@@ -10,6 +10,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import NativeSelect from "$lib/ui/native-select";
+  import Toggle from "$lib/ui/toggle";
   import SecretsDialog from "./SecretsDialog.svelte";
   import { secrets, refreshSecrets } from "../stores/secrets.svelte.ts";
   import { hooksPanel, loadHooks } from "../stores/advanced.svelte.ts";
@@ -139,27 +140,17 @@
       <code class="font-mono">&#9679;</code>
     </p>
   {:else if value.kind === "hook"}
-    <div class="flex flex-col gap-1">
-      <p class="text-[11px] font-mono text-muted-foreground">
-        authorization ← {value.script}.authHeader()
-      </p>
-      <label class="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-        <input
-          type="checkbox"
-          class="size-3.5 accent-[var(--primary)]"
-          checked={value.bearer}
-          onchange={(event) => {
-            if (value.kind !== "hook") return;
-            onchange?.({ ...value, bearer: event.currentTarget.checked });
-          }}
-        />
-        {t("f.authpicker.bearer")}
-      </label>
-      <p class="text-[11px] leading-relaxed text-muted-foreground">
-        {t("f.authpicker.hookDetail", { script: value.script })}
-      </p>
-      <p class="text-[11px] leading-relaxed text-muted-foreground">{t("f.authpicker.hookManage")}</p>
-    </div>
+    <!-- Owner 2026-09-13 #7/#8：Bearer 前缀用 Toggle；绑定详情等解释文字删除 -->
+    <label class="flex items-center gap-2 text-[11px] text-muted-foreground">
+      <Toggle
+        checked={value.bearer}
+        onchange={(event) => {
+          if (value.kind !== "hook") return;
+          onchange?.({ ...value, bearer: event.currentTarget.checked });
+        }}
+      />
+      {t("f.authpicker.bearer")}
+    </label>
   {:else if value.kind === "keep"}
     <p class="text-[11px] leading-relaxed text-muted-foreground">{t("f.authpicker.keepNote")}</p>
   {/if}
