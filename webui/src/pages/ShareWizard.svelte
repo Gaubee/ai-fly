@@ -18,19 +18,14 @@
   import Alert from "$lib/ui/alert";
   import Skeleton from "$lib/ui/skeleton";
   import Separator from "$lib/ui/separator";
-  import Accordion, { AccordionItem } from "$lib/ui/accordion";
-  import Toggle from "$lib/ui/toggle";
-  import NativeSelect from "$lib/ui/native-select";
   import { slide } from "svelte/transition";
   import StepHeader from "../components/StepHeader.svelte";
   import { t } from "$lib/i18n.svelte.ts";
   import { authSelSummary } from "$lib/auth-source.ts";
   import ErrorAlert from "../components/ErrorAlert.svelte";
   import CopyField from "../components/CopyField.svelte";
-  import AuthSourcePicker from "../components/AuthSourcePicker.svelte";
-  import GroupPicker from "../components/GroupPicker.svelte";
   import GroupKeysPanel from "../components/GroupKeysPanel.svelte";
-  import TestConnection from "../components/TestConnection.svelte";
+  import ServiceForm from "../components/ServiceForm.svelte";
   import {
     app,
     loadPresets,
@@ -38,7 +33,7 @@
     isLocalPreset,
     refresh,
   } from "../stores/app.svelte.ts";
-  import { hooksPanel, loadHooks } from "../stores/advanced.svelte.ts";
+  import { serviceForm } from "../stores/service-form.svelte.ts";
   import {
     share,
     resetShare,
@@ -47,30 +42,9 @@
     shareBack,
     namingNext,
     enterGroupView,
-    TTL_OPTIONS,
-    updateRouteFrom,
-    toggleRouteBound,
-    addRouteRow,
-    removeRouteRow,
-    moveRouteRow,
-    setRouteMode,
-    normalizeRoutePrefix,
-    toPrefixFromInput,
   } from "../stores/share-wizard.svelte.ts";
   import { presetLogoUrl, type Preset } from "$shared/rpc-contract.ts";
 
-  /** hooks 脚本选择联动（Owner #3 双控件；同高级页 selectHooksScript）。 */
-  let hookScriptSel = $state("");
-  $effect(() => {
-    hookScriptSel = share.hooksScript;
-  });
-  function selectWizardHooksScript(script: string): void {
-    share.hooksScript = script;
-    if (share.auth.kind === "hook") {
-      const exportsAuth = hooksPanel.scripts.some((s) => s.name === script && s.fns.includes("authHeader"));
-      share.auth = exportsAuth ? { ...share.auth, script } : { kind: "none" };
-    }
-  }
 
   /** ③ group 视图：进入即落服务/分组/daemon/保底 key（幂等重进）。 */
   $effect(() => {
@@ -80,7 +54,6 @@
   /** key 原文/链接复制。 */
 
   onMount(() => {
-    void loadHooks();
     // 首次进入拉预设；重新进入（reset 后）复用已拉取的清单
     if (presets.curated.length === 0 && !presets.loading) void loadPresets();
     refresh("groups"); // ② 的分组提示需要既有组
@@ -93,33 +66,6 @@
       return localDiff !== 0 ? localDiff : a.label.localeCompare(b.label);
     }),
   );
-  /** 路由行映射预览（M3-r6）：from/* → upstream + to/*（from 有效才显示；
-      to 根显示 upstream 本身 + /*）。 */
-  function routeRowPreview(row: { from: string; to: string }): string | null {
-    const from = normalizeRoutePrefix(row.from);
-    if (from === "" || from === "/") return null;
-    const to = toPrefixFromInput(row.to);
-    const base = share.customUpstream.trim().replace(/\/+$/, "");
-    return `${base}${to}/*`;
-  }
-
-  /** Input change 事件适配（行内受控值）。 */
-  function onRowFrom(rowId: number, event: Event & { currentTarget: EventTarget & HTMLInputElement }): void {
-    const row = share.routeRows.find((r) => r.id === rowId);
-    if (row !== undefined) updateRouteFrom(row, event.currentTarget.value);
-  }
-  function onRowTo(rowId: number, event: Event & { currentTarget: EventTarget & HTMLInputElement }): void {
-    const row = share.routeRows.find((r) => r.id === rowId);
-    if (row !== undefined) row.to = event.currentTarget.value;
-  }
-  function onRowField(rowId: number, field: "match" | "template", event: Event & { currentTarget: EventTarget & HTMLInputElement }): void {
-    const row = share.routeRows.find((r) => r.id === rowId);
-    if (row !== undefined) row[field] = event.currentTarget.value;
-  }
-  function onRowMode(rowId: number, event: Event & { currentTarget: EventTarget & HTMLSelectElement }): void {
-    const row = share.routeRows.find((r) => r.id === rowId);
-    if (row !== undefined) setRouteMode(row, event.currentTarget.value === "pattern" ? "pattern" : "prefix");
-  }
 
   /** 长尾展开（默认收起——20/80 法则：精选直达，长尾按需）。 */
   let showLongTail = $state(false);
@@ -149,28 +95,6 @@
     failedLogos = new Set([...failedLogos, presetId]);
   }
 
-  // 分组选择/新建已收敛进 GroupPicker + GroupsDialog（M3-r3 ①）；此处仅留 TTL 桥接
-  let ttlSel = $state(String(share.ttlMs));
-  $effect(() => {
-    if (String(share.ttlMs) !== ttlSel) ttlSel = String(share.ttlMs);
-  });
-  $effect(() => {
-    const found = TTL_OPTIONS.find((option) => String(option.ttlMs) === ttlSel);
-    if (found !== undefined && found.ttlMs !== share.ttlMs) share.ttlMs = found.ttlMs;
-  });
-
-  /** 当前选中预设对象（②/③ 的提示用；含 models.dev 长尾——连通测试需要 baseUrl/apiForm）。 */
-  const selectedPreset = $derived(
-    share.mode === "preset"
-      ? presets.curated.find((p) => p.id === share.presetId) ??
-          presets.modelsDev.find((p) => p.id === share.presetId) ??
-          null
-      : null,
-  );
-
-  function presetCard(preset: Preset): void {
-    choosePreset(preset);
-  }
 </script>
 
 {#snippet presetIcon(preset: Preset)}
@@ -221,7 +145,7 @@
           <button
             type="button"
             class="flex min-h-24 flex-col gap-1.5 border border-border bg-card p-3.5 text-left shadow-2xs transition-colors hover:border-primary/50"
-            onclick={() => presetCard(preset)}
+            onclick={() => choosePreset(preset)}
           >
             <span class="flex flex-wrap items-center gap-1.5">
               {@render presetIcon(preset)}
@@ -285,7 +209,7 @@
               <button
                 type="button"
                 class="flex flex-col gap-1 border border-border/70 bg-card p-3 text-left transition-colors hover:border-primary/50"
-                onclick={() => presetCard(preset)}
+                onclick={() => choosePreset(preset)}
               >
                 <span class="flex flex-wrap items-center gap-1.5">
                   {@render presetIcon(preset)}
@@ -307,215 +231,9 @@
        全部展开可编辑，两模式同一条组装提交路径） -->
   {:else if share.step === 2}
     <Card title="name & group" scroll={false}>
-      <div class="flex flex-col gap-3 p-3">
-        <!-- Owner 2026-09-13 #1/#2：服务名与分组合一行；未选分组时服务名
-             disabled（命名唯一性与端口冲突判定以分组为前提）；分组选择
-             不再门控 route paths——两者独立 -->
-        <div class="grid gap-3 sm:grid-cols-2">
-          <!-- Owner 2026-09-13 #2：分组排服务名前（先定组；未选组时服务名 disabled） -->
-          <GroupPicker value={share.groupName || undefined} onchange={(name) => (share.groupName = name ?? "")} />
-          <Input
-            label={t("share.name.label")}
-            placeholder={share.mode === "preset" ? share.name : t("share.name.ph")}
-            disabled={share.groupName === ""}
-            autocapitalize="none"
-            autocorrect="off"
-            spellcheck={false}
-            bind:value={share.name}
-          />
-        </div>
-        {#if share.groupName !== ""}
-          <p class="text-[11px] text-muted-foreground">
-            {t("share.group.note")}
-            <code class="font-mono">{share.groupName}</code>
-            {t("share.group.note2")}
-          </p>
-        {/if}
-
-        <Input
-          label={t("f.upstreamUrl")}
-          placeholder="https://api.example.com"
-          autocapitalize="none"
-          autocorrect="off"
-          spellcheck={false}
-          bind:value={share.customUpstream}
-        />
-
-        <!-- path routes（M3-r6 定形，Owner 裁决：客观提供路径路由功能，不做任何
-             配置限制）：行 = from → to 通用转发规则，默认绑定（1:1，只编辑一个
-             input），解绑自由编辑两侧；预设行预填官方镜像（如 /v1 → /v1）。
-             路由表即白名单——未声明的路径本地 404，不透传。 -->
-        <div class="flex flex-col gap-3">
-          <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-            path routes
-          </span>
-          {#each share.routeRows as row, index (row.id)}
-            <div class="flex flex-col gap-1.5 border border-border/70 p-2.5">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="flex flex-col shrink-0 items-center gap-0.5">
-                  <PressButton
-                    variant="ghost"
-                    ariaLabel={t("share.routes.moveUp")}
-                    class={index === 0 ? "px-1.5 pointer-events-none opacity-40" : "px-1.5"}
-                    onclick={() => moveRouteRow(row.id, -1)}
-                  >↑</PressButton>
-                  <PressButton
-                    variant="ghost"
-                    ariaLabel={t("share.routes.moveDown")}
-                    class={index === share.routeRows.length - 1 ? "px-1.5 pointer-events-none opacity-40" : "px-1.5"}
-                    onclick={() => moveRouteRow(row.id, 1)}
-                  >↓</PressButton>
-                </span>
-                <div class="w-28 shrink-0">
-                  <NativeSelect aria-label={t("share.routes.mode")} value={row.mode} onchange={(event) => onRowMode(row.id, event)}>
-                    <option value="prefix">{t("share.routes.prefix")}</option>
-                    <option value="pattern">{t("share.routes.pattern")}</option>
-                  </NativeSelect>
-                </div>
-                {#if row.mode === "pattern"}
-                  <div class="min-w-32 flex-1">
-                    <Input
-                      placeholder="/v1/:ver/chat/completions"
-                      value={row.match}
-                      onchange={(event) => onRowField(row.id, "match", event)}
-                      autocapitalize="none"
-                      autocorrect="off"
-                      spellcheck={false}
-                    />
-                  </div>
-                  <span class="shrink-0 text-[11px] text-muted-foreground">⇒</span>
-                  <div class="min-w-32 flex-1">
-                    <Input
-                      placeholder={"/api/{ver}/completions"}
-                      value={row.template}
-                      onchange={(event) => onRowField(row.id, "template", event)}
-                      autocapitalize="none"
-                      autocorrect="off"
-                      spellcheck={false}
-                    />
-                  </div>
-                {:else}
-                  <div class="min-w-32 flex-1">
-                    <Input
-                      placeholder="/v1"
-                      value={row.from}
-                      onchange={(event) => onRowFrom(row.id, event)}
-                      autocapitalize="none"
-                      autocorrect="off"
-                      spellcheck={false}
-                    />
-                  </div>
-                  <!-- Owner 2026-09-13 #3：bind 勾选 = 1:1，隐藏第二个
-                       input（to 隐含等于 from），不再镜像填充 -->
-                  <label class="flex shrink-0 cursor-pointer select-none items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <Toggle checked={row.bound} onchange={(event) => toggleRouteBound(row, event.currentTarget.checked)} />
-                    bind
-                  </label>
-                  {#if !row.bound}
-                    <div class="min-w-32 flex-1">
-                      <Input
-                        placeholder="/ (root)"
-                        value={row.to}
-                        onchange={(event) => onRowTo(row.id, event)}
-                        autocapitalize="none"
-                        autocorrect="off"
-                        spellcheck={false}
-                      />
-                    </div>
-                  {/if}
-                {/if}
-                {#if share.routeRows.length > 1}
-                  <PressButton
-                    variant="ghost"
-                    ariaLabel={t("share.routes.remove")}
-                    class="shrink-0 px-2"
-                    onclick={() => removeRouteRow(row.id)}
-                  >x</PressButton>
-                {/if}
-              </div>
-              {#if row.mode === "pattern"}
-                {#if row.match.trim() !== "" && row.template.trim() !== ""}
-                  <p class="break-all pl-1 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                    match {row.match.trim()} ⇒ {row.template.trim()}
-                  </p>
-                {/if}
-              {:else if routeRowPreview(row) !== null}
-                <p class="break-all pl-1 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                  {normalizeRoutePrefix(row.from)}/* → {routeRowPreview(row)}
-                </p>
-              {/if}
-            </div>
-          {/each}
-          <PressButton
-            variant="ghost"
-            class={share.routeRows.length >= 4 ? "pointer-events-none opacity-50" : undefined}
-            onclick={() => addRouteRow()}
-          >{t("share.routes.add")}</PressButton>
-          <p class="text-[11px] leading-relaxed text-muted-foreground">
-            {t("share.routes.note")}
-          </p>
-        </div>
-
-
-        <!-- hooks 脚本选择（Owner #3 双控件）：先激活脚本，认证头 select 才出条目 -->
-        <NativeSelect
-          label={t("f.hookscript.label")}
-          bind:value={hookScriptSel}
-          onchange={(event) => selectWizardHooksScript(event.currentTarget.value)}
-        >
-          <option value="">{t("f.hookscript.none")}</option>
-          {#each hooksPanel.scripts as script (script.name)}
-            <option value={script.name}>{script.name} ({script.fns.join(", ")})</option>
-          {/each}
-        </NativeSelect>
-        <!-- 认证头取值（#3）：预设携带 → 预选（codex 型 hook 条目 / env keep
-             哨兵），② 显式改选即覆盖（含改"无"）+ 连通测试 -->
-        <AuthSourcePicker
-          value={share.auth}
-          onchange={(sel) => (share.auth = sel)}
-          hooksScript={share.hooksScript}
-        />
-
-        <TestConnection
-          upstream={share.customUpstream.trim()}
-          apiForm={selectedPreset?.apiForm}
-          secretName={share.auth.kind === "secret" ? share.auth.name : undefined}
-          presetId={share.mode === "preset" ? share.presetId : undefined}
-        />
-
-        <!-- {t('share.advanced')}（M3-acceptance ③：ghost accordion，默认折叠——
-             default consumer port + match domains；路由已按 Owner 裁决
-             提升主面板） -->
-        <Accordion ghost>
-          <AccordionItem>
-            {#snippet summary()}{t('share.advanced')}{/snippet}
-            <div class="flex flex-col gap-3">
-              <!-- 分组限额已归口 GroupsDialog（M3-r3 ①）；此处端口/match -->
-              <div class="flex flex-col gap-1.5">
-                <Input label={t("share.port.label")} bind:value={share.port} />
-                <p class="text-[11px] leading-relaxed text-muted-foreground">
-                  {t("share.port.note")}
-                </p>
-              </div>
-              <!-- match（M3-r5 两模式通用，预设预填官方域名）；留空 =
-                   提交时用 upstream host -->
-              <div class="flex flex-col gap-1.5">
-                <Input
-                  label={t("share.match.label")}
-                  placeholder="auto: api.example.com"
-                  autocapitalize="none"
-                  autocorrect="off"
-                  spellcheck={false}
-                  bind:value={share.customMatch}
-                />
-                <p class="text-[11px] leading-relaxed text-muted-foreground">
-                  {t("share.match.note")}
-                </p>
-              </div>
-            </div>
-          </AccordionItem>
-        </Accordion>
-
+      <div class="p-3">
+        <!-- Owner 裁决 2026-09-13 #5：与高级设置编辑服务同一套组件/同一 store -->
+        <ServiceForm />
       </div>
       {#snippet foot()}
         <CardFooter label="share wizard actions">
@@ -537,12 +255,12 @@
        key 原文 / 为该 key 现铸分享链接 / 新增 key（组内无 key 自动
        "default"）；取代旧"生成分享链接"单结果面板 -->
   {:else}
-    <Card title="{t('share.groupview.title')}: {share.groupName}" scroll={false}>
+    <Card title="{t('share.groupview.title')}: {serviceForm.groupName}" scroll={false}>
       <div class="flex flex-col gap-3 p-3">
         <dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
           <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
             <dt class="text-muted-foreground">{t("common.service")}</dt>
-            <dd class="font-mono">{share.name}</dd>
+            <dd class="font-mono">{serviceForm.name}</dd>
           </div>
           <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
             <dt class="text-muted-foreground">{t("share.step1")}</dt>
@@ -550,17 +268,17 @@
           </div>
           <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
             <dt class="text-muted-foreground">port</dt>
-            <dd class="font-mono">{share.port}</dd>
+            <dd class="font-mono">{serviceForm.port}</dd>
           </div>
           <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
             <dt class="text-muted-foreground">{t("share.generate.auth")}</dt>
-            <dd class="font-mono">{authSelSummary(share.auth)}</dd>
+            <dd class="font-mono">{authSelSummary(serviceForm.auth)}</dd>
           </div>
         </dl>
 
         <!-- 组内 keys（Owner #4：与高级页同一 GroupKeysPanel/同一数据源；
              分享（TTL→生成→复制）收敛进面板内 Dialog） -->
-        <GroupKeysPanel group={share.groupName} />
+        <GroupKeysPanel group={serviceForm.groupName} />
         <Alert variant="tonal" title={t("share.credential.title")}>
           {t("share.credential.body")}
         </Alert>
@@ -586,4 +304,3 @@
     <ErrorAlert error={share.error} />
   {/if}
 </div>
-/div>

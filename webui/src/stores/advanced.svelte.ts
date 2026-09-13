@@ -7,8 +7,8 @@ import type { ServiceConfigView } from "$shared/rpc-contract.ts";
 import { call } from "./rpc.svelte.ts";
 import { toastRpcError, toastSuccess } from "./toast.svelte.ts";
 import { app, refresh } from "./app.svelte.ts";
-import { parsePositiveInt } from "./share-wizard.svelte.ts";
-import { authInput, authSelFromService, hooksField, hooksScriptFromService, type AuthSel, type HeaderValue } from "$lib/auth-source.ts";
+import { parsePositiveInt } from "./service-form.svelte.ts";
+
 
 /** services.add 的输入类型（契约推导，保持单源）。 */
 type ServiceAddInput = Parameters<RpcClient["provider"]["services"]["add"]>[0];
@@ -23,133 +23,11 @@ export function maskSecret(value: string): string {
 // 服务：增 / 删 / 改（remove+add）
 // ---------------------------------------------------------------------------
 
-export const serviceForm = $state({
-  open: false,
-  /** 编辑中的原服务名（空 = 新建）。 */
-  editingName: "",
-  name: "",
-  upstream: "",
-  port: "",
-  /** 认证头取值（PM 方案 B：单一来源选择；keep 哨兵回显透传 CLI/预配置，
-   *  编辑不再静默丢认证）。 */
-  auth: { kind: "none" } as AuthSel,
-  /** 服务激活的 hooks 脚本（Owner 裁决 2026-09-13 #3 双控件：先在此选
-   *  脚本，认证头 select 才出现对应条目；"" = 未激活）。 */
-  hooksScript: "",
-  /** 编辑时的表单外字段透传（全量走查 2026-09-13：remove+add 重建会丢
-   *  表单没覆盖的字段——routes 与 headerSet 的非 authorization 头原样带回）。 */
-  passthrough: null as { routes?: ServiceAddInput["routes"]; headerRest?: Record<string, HeaderValue> } | null,
-  match: [{ type: "suffix", value: "" }] as Array<{ type: string; value: string }>,
-  busy: false,
-  error: null as RpcError | null,
-});
 
-export function openServiceAdd(): void {
-  serviceForm.open = true;
-  serviceForm.editingName = "";
-  serviceForm.name = "";
-  serviceForm.upstream = "";
-  serviceForm.port = "";
-  serviceForm.auth = { kind: "none" };
-  serviceForm.hooksScript = "";
-  serviceForm.passthrough = null;
-  void loadHooks();
-  serviceForm.match = [{ type: "suffix", value: "" }];
-  serviceForm.error = null;
-}
 
-export function openServiceEdit(service: ServiceConfigView): void {
-  serviceForm.open = true;
-  serviceForm.editingName = service.name;
-  serviceForm.name = service.name;
-  serviceForm.upstream = service.upstream;
-  serviceForm.port = String(service.defaultPort);
-  serviceForm.auth = authSelFromService(service);
-  serviceForm.hooksScript = hooksScriptFromService(service);
-  const { authorization, ...headerRest } = (service.rewrite?.headerSet ?? {}) as Record<string, HeaderValue>;
-  serviceForm.passthrough = {
-    ...(service.routes !== undefined && service.routes.length > 0 ? { routes: service.routes } : {}),
-    ...(Object.keys(headerRest).length > 0 ? { headerRest } : {}),
-  };
-  void loadHooks();
-  serviceForm.match = service.match.map((rule) => ({ type: rule.type, value: rule.value }));
-  serviceForm.error = null;
-}
 
-export function closeServiceForm(): void {
-  if (serviceForm.busy) return;
-  serviceForm.open = false;
-  serviceForm.error = null;
-}
 
-/** 表单 → services.add 输入；本地校验失败返回错误消息。 */
-function serviceInput(): { ok: true; input: ServiceAddInput } | { ok: false; message: string } {
-  const name = serviceForm.name.trim();
-  const upstream = serviceForm.upstream.trim();
-  const match = serviceForm.match
-    .map((rule) => ({ type: rule.type as "exact" | "suffix" | "regex", value: rule.value.trim() }))
-    .filter((rule) => rule.value !== "");
-  const port = parsePositiveInt(serviceForm.port);
-  if (name === "") return { ok: false, message: "service name is required" };
-  if (!/^https?:\/\//.test(upstream)) return { ok: false, message: "upstream must be an http(s) URL" };
-  if (match.length === 0) return { ok: false, message: "at least one match rule is required" };
-  if (serviceForm.port.trim() !== "" && port === undefined) {
-    return { ok: false, message: "port must be a positive integer" };
-  }
-  // 认证头取值统一组装（none 清除 / secret / hook / keep 透传）+ hooks
-  // 脚本字段（双控件：脚本选择优先，secret 认证补 "secret"）；编辑时与
-  // 表单外字段合并——headerSet 其他头保留，authorization 由选择器决定
-  const authParts = authInput(serviceForm.auth);
-  const headerSet: Record<string, HeaderValue> = { ...(serviceForm.passthrough?.headerRest ?? {}) };
-  if (authParts.authorization !== undefined) {
-    headerSet["authorization"] = authParts.authorization;
-  }
-  const hooks = hooksField(serviceForm.hooksScript, serviceForm.auth);
-  return {
-    ok: true,
-    input: {
-      name,
-      upstream,
-      match,
-      ...(port !== undefined ? { defaultPort: port } : {}),
-      ...(hooks !== undefined ? { hooks } : {}),
-      ...(serviceForm.passthrough?.routes !== undefined ? { routes: serviceForm.passthrough.routes } : {}),
-      ...(Object.keys(headerSet).length > 0 ? { rewrite: { headerSet } } : {}),
-    },
-  };
-}
 
-/** 提交服务表单（新建 add；编辑 = remove 旧名 + add 新配置）。 */
-export async function submitService(): Promise<void> {
-  if (serviceForm.busy) return;
-  const parsed = serviceInput();
-  if (!parsed.ok) {
-    serviceForm.error = { code: "INVALID_INPUT", message: parsed.message };
-    return;
-  }
-  serviceForm.busy = true;
-  serviceForm.error = null;
-  try {
-    // 编辑 = remove + add 重建（契约无 update）。不限改名——同名编辑也必须
-    // 先 remove，否则 add 撞 CONFLICT（全量走查 2026-09-13 实证：旧条件
-    // `editingName !== name` 让同名保存必失败，编辑路径从未真正可用）。
-    if (serviceForm.editingName !== "") {
-      await call((c) => c.provider.services.remove({ name: serviceForm.editingName }));
-    }
-    await call((c) => c.provider.services.add(parsed.input));
-    serviceForm.open = false;
-    toastSuccess(
-      serviceForm.editingName !== "" ? "Service updated" : "Service added",
-      parsed.input.name,
-    );
-    refresh("services", "provider", "groups");
-  } catch (error) {
-    serviceForm.error = toRpcError(error);
-    toastRpcError(serviceForm.error);
-  } finally {
-    serviceForm.busy = false;
-  }
-}
 
 export const serviceRemove = $state({
   confirm: "",

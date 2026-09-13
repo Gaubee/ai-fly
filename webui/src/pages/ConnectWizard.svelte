@@ -6,7 +6,7 @@
      真实 AI 请求走完整 wire 链路；结果面板展示状态/时延/回复正文）。
      状态机在 stores/connect-wizard。 -->
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import Card, { CardFooter } from "$lib/ui/card";
   import Badge from "$lib/ui/badge";
   import PressButton from "$lib/ui/press-button";
@@ -36,6 +36,20 @@
     setTestService,
     dialGuidance,
   } from "../stores/connect-wizard.svelte.ts";
+
+  /** Owner 2026-09-13：进②自动导入并启动（去掉"导入并启动"多余一步；
+   *  出错不自动重试——修好链接后返回①再进才会重启导入）。 */
+  let step2AutoStarted = $state(false);
+  $effect(() => {
+    if (connectW.step !== 2) {
+      step2AutoStarted = false;
+      return;
+    }
+    if (!step2AutoStarted && connectW.applied === null && !connectW.applyBusy && connectW.applyError === null) {
+      step2AutoStarted = true;
+      untrack(() => void applyImport());
+    }
+  });
 
   onMount(() =>
     // 网关启动后引擎可能自动错开端口：consumer-* 通知到达即对账向导端口表
@@ -166,22 +180,14 @@
     <Card title={t("connect.ports.title")} scroll={false}>
       <div class="flex flex-col gap-3 p-3">
         {#if connectW.applied === null}
-          {#if connectW.applyBusy}
-            <div class="flex flex-col gap-2">
-              <p class="text-xs text-muted-foreground">
-                redeeming the link and starting the gateway... this dials the provider and can
-                take a moment.
-              </p>
-              <Skeleton class="h-5 w-2/3" />
-              <Skeleton class="h-24" />
-            </div>
-          {:else}
-            <p class="text-xs leading-relaxed text-muted-foreground">
-              importing <code class="font-mono">{connectW.preview?.alias ?? "provider"}</code>
-              adds its services to your keyring and starts the local gateway automatically -
-              no extra run step.
+          <!-- 合并状态（Owner 2026-09-13 #3）：导入即开始，无需按钮 -->
+          <div class="flex flex-col gap-2">
+            <p class="text-xs text-muted-foreground">
+              {t("connect.ports.autoImporting", { provider: connectW.preview?.alias ?? "provider" })}
             </p>
-          {/if}
+            <Skeleton class="h-5 w-2/3" />
+            <Skeleton class="h-24" />
+          </div>
           {#if applyGuidance !== null}
             <Alert variant="tonal" class="jx-hue-info" title="cannot reach the provider">
               {applyGuidance}
@@ -259,11 +265,7 @@
       {#snippet foot()}
         <CardFooter label="connect wizard actions">
           <PressButton variant="ghost" onclick={connectBack} class={connectW.applyBusy ? "pointer-events-none opacity-50" : undefined}>{t("common.back")}</PressButton>
-          {#if connectW.applied === null}
-            <PressButton variant="fill" loading={connectW.applyBusy} onclick={() => void applyImport()}>
-              {t("connect.ports.importStart")}
-            </PressButton>
-          {:else}
+          {#if connectW.applied !== null}
             <PressButton variant="fill" onclick={portsNext}>{t("common.continue")}</PressButton>
           {/if}
         </CardFooter>

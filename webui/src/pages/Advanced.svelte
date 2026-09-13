@@ -29,6 +29,8 @@
   import CopyField from "../components/CopyField.svelte";
   import AuthSourcePicker from "../components/AuthSourcePicker.svelte";
   import GroupKeysPanel from "../components/GroupKeysPanel.svelte";
+  import ServiceForm from "../components/ServiceForm.svelte";
+  import { serviceForm, openAdd, openEdit, submit } from "../stores/service-form.svelte.ts";
   import ServiceTestCard from "../components/ServiceTestCard.svelte";
   import type { ServiceRouteView as ServiceTestCardRoutes, RouteTestOutput } from "../stores/connect-wizard.svelte.ts";
   import type { RouteForm } from "$shared/rpc-contract.ts";
@@ -41,7 +43,6 @@
   import { setSecret, removeSecret } from "../stores/secrets.svelte.ts";
   import {
     maskSecret,
-    serviceForm,
     hooksPanel,
     loadHooks,
     hookAdd,
@@ -49,10 +50,6 @@
     removeHookScript,
     hookView,
     openHookView,
-    openServiceAdd,
-    openServiceEdit,
-    closeServiceForm,
-    submitService,
     serviceRemove,
     removeService,
     groupForm,
@@ -73,36 +70,6 @@
   let tab = $state("services");
   /** 服务行展开集合（detail：upstream/match 全集/rewrite；$env 值显示 ●）。 */
   let expanded = $state(new Set<string>());
-  /** 服务表单 hooks 脚本选择的显示值（NativeSelect bind 用；联动走 store）。 */
-  let hookScriptSel = $state("");
-  $effect(() => {
-    hookScriptSel = serviceForm.hooksScript;
-  });
-
-  onMount(() => {
-    refresh("services", "groups", "keys", "settings");
-  });
-
-  /** settings 到达后初始化 relay 编辑框（一次）。 */
-  let relayInited = false;
-  $effect(() => {
-    if (!relayInited && app.settings !== null) {
-      relayInited = true;
-      initRelayForm();
-    }
-  });
-
-  // hooks 面板按需加载（Owner 视觉验收 2026-09-13 #5：模板里调
-  // loadHooks() 会把 Promise 渲染成 "[object Promise]"——加载是副作用，
-  // 归 $effect；untrack 隔离 loadHooks 内部读的 busy/loaded（否则
-  // busy 翻转会把本效果卷进重跑）。增删后的强刷由 store 自身负责）
-  $effect(() => {
-    if (tab === "hooks") untrack(() => void loadHooks());
-  });
-
-  // ── 密钥库区（M3 6.1）：页面内联卡（非 dialog）──────────────────────
-  // 共享 store 只持名称名单（AuthSourcePicker/密钥库区用）；本区另持带时间戳的行
-  // （契约回 name/createdAt/updatedAt/bearerPrefix，值不跨 RPC 亦不回显）。
   interface SecretRow {
     name: string;
     createdAt: number;
@@ -296,15 +263,6 @@
     return map;
   });
 
-  /** hooks 脚本选择联动（Owner #3 双控件）：换脚本时，hook 型认证指向新脚本
-   *  （新脚本不导出 authHeader 则回落无）。 */
-  function selectHooksScript(script: string): void {
-    serviceForm.hooksScript = script;
-    if (serviceForm.auth.kind === "hook") {
-      const exportsAuth = hooksPanel.scripts.some((s) => s.name === script && s.fns.includes("authHeader"));
-      serviceForm.auth = exportsAuth ? { ...serviceForm.auth, script } : { kind: "none" };
-    }
-  }
 
   /** 主题偏好同步：Advanced 里的切换同时落引擎设置（点击后读 localStorage）。 */
   function syncThemeToSettings(): void {
@@ -357,7 +315,7 @@
           </p>
           <span class="flex flex-none items-center gap-1.5">
             <PressButton variant="ghost" onclick={openGroupAdd}>{t("adv.groups.add")}</PressButton>
-            <PressButton variant="outline" onclick={openServiceAdd}>{t("adv.services.add")}</PressButton>
+            <PressButton variant="outline" onclick={openAdd}>{t("adv.services.add")}</PressButton>
           </span>
         </div>
 
@@ -390,7 +348,7 @@
                 variant="ghost"
                 onclick={() => (serviceTestOpen = serviceTestOpen === service.serviceId ? null : service.serviceId)}
               >{t("common.test")}</PressButton>
-              <PressButton variant="ghost" onclick={() => openServiceEdit(service)}>{t("common.edit")}</PressButton>
+              <PressButton variant="ghost" onclick={() => openEdit(service)}>{t("common.edit")}</PressButton>
               {#if serviceRemove.confirm === service.name}
                 <PressButton
                   variant="tonal"
@@ -589,100 +547,21 @@
 
         <ErrorAlert error={serviceRemove.error} />
 
-        <!-- 服务增/改表单 -->
-        {#if serviceForm.open}
-          <Card title={serviceForm.editingName !== "" ? `edit service - ${serviceForm.editingName}` : "add service"} scroll={false}>
-            <div class="flex flex-col gap-3 p-3">
-              <div class="grid gap-3 sm:grid-cols-2">
-                <Input
-                  label={t("f.name")}
-                  autocapitalize="none"
-                  autocorrect="off"
-                  spellcheck={false}
-                  bind:value={serviceForm.name}
-                />
-                <Input label={t("f.port")} placeholder="default 8080" bind:value={serviceForm.port} />
-              </div>
-              <Input label={t("f.upstreamUrl")} placeholder="https://api.example.com/v1" autocapitalize="none" autocorrect="off" spellcheck={false} bind:value={serviceForm.upstream} />
-              <div class="flex flex-col gap-1.5">
-                <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">{t("f.matchRules")}</span>
-                {#each serviceForm.match as rule, i (i)}
-                  <div class="flex items-center gap-2">
-                    <div class="w-28">
-                      <!-- Select 只有 bind:value（无 onchange prop）——直写表单状态 -->
-                      <Select
-                        options={[
-                          { value: "suffix", label: "suffix" },
-                          { value: "exact", label: "exact" },
-                          { value: "regex", label: "regex" },
-                        ]}
-                        bind:value={rule.type}
-                      />
-                    </div>
-                    <input
-                      class="min-w-0 flex-1 border border-border bg-transparent px-2.5 py-1.5 font-mono text-xs focus:border-primary focus:outline-none"
-                      placeholder="api.example.com"
-                      autocapitalize="none"
-                      autocorrect="off"
-                      spellcheck={false}
-                      bind:value={serviceForm.match[i]!.value}
-                    />
-                    <PressButton
-                      variant="ghost"
-                      ariaLabel="remove match rule"
-                      class={serviceForm.match.length <= 1 ? "pointer-events-none opacity-50" : undefined}
-                      onclick={() => (serviceForm.match = serviceForm.match.filter((_, index) => index !== i))}
-                    >x</PressButton>
-                  </div>
-                {/each}
-                <PressButton
-                  variant="ghost"
-                  class="self-start"
-                  onclick={() => (serviceForm.match = [...serviceForm.match, { type: "suffix", value: "" }])}
-                >+ add rule</PressButton>
-              </div>
-              <!-- hooks 脚本选择（Owner 裁决 2026-09-13 #3 双控件）：先在此为
-                   服务激活脚本，下方"认证头"select 才出现对应条目 -->
-              <NativeSelect
-                label={t("f.hookscript.label")}
-                bind:value={hookScriptSel}
-                onchange={(event) => selectHooksScript(event.currentTarget.value)}
-              >
-                <option value="">{t("f.hookscript.none")}</option>
-                {#each hooksPanel.scripts as script (script.name)}
-                  <option value={script.name}>{script.name} ({script.fns.join(", ")})</option>
-                {/each}
-              </NativeSelect>
-              <!-- 认证头取值（#3 双控件）：hook 条目只在上方激活了导出
-                   authHeader 的脚本时出现；keep 哨兵回显透传 CLI/预配置 -->
-              <AuthSourcePicker
-                value={serviceForm.auth}
-                onchange={(sel) => (serviceForm.auth = sel)}
-                hooksScript={serviceForm.hooksScript}
-              />
-              <!-- 连通测试（M3 6.3）：自定义服务不传 apiForm（服务端缺省）/
-                   presetId（无模型下拉），密钥取表单当前选择 -->
-              <TestConnection
-                upstream={serviceForm.upstream}
-                secretName={serviceForm.auth.kind === "secret" ? serviceForm.auth.name : undefined}
-              />
-              {#if serviceForm.editingName !== ""}
-                <p class="text-[11px] text-muted-foreground">
-                  editing re-creates the service (remove + add) - group membership is preserved by name.
-                </p>
-              {/if}
-            </div>
-            {#snippet foot()}
-              <CardFooter label="service form actions">
-                <PressButton variant="ghost" onclick={closeServiceForm} class={serviceForm.busy ? "pointer-events-none opacity-50" : undefined}>{t("common.cancel")}</PressButton>
-                <PressButton variant="fill" loading={serviceForm.busy} onclick={() => void submitService()}>
-                  {serviceForm.editingName !== "" ? "save changes" : "add service"}
-                </PressButton>
-              </CardFooter>
-            {/snippet}
-          </Card>
-          <ErrorAlert error={serviceForm.error} />
-        {/if}
+        <!-- 服务增/改表单（Owner 裁决 2026-09-13 #5：与分享向导②同一套
+             ServiceForm 组件/stores，编辑改为 Dialog） -->
+        <Dialog bind:open={serviceForm.open} title={serviceForm.editingName !== "" ? `edit service - ${serviceForm.editingName}` : "add service"}>
+          <div class="p-4">
+            <ServiceForm />
+          </div>
+          {#snippet footer()}
+            <CardFooter label="service form actions">
+              <PressButton variant="ghost" onclick={() => (serviceForm.open = false)} class={serviceForm.busy ? "pointer-events-none opacity-50" : undefined}>{t("common.cancel")}</PressButton>
+              <PressButton variant="fill" loading={serviceForm.busy} onclick={() => void submit()}>
+                {serviceForm.editingName !== "" ? "save changes" : "add service"}
+              </PressButton>
+            </CardFooter>
+          {/snippet}
+        </Dialog>
 
         <ErrorAlert error={groupRemove.error} />
 

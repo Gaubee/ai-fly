@@ -17,7 +17,7 @@
   import ErrorAlert from "./ErrorAlert.svelte";
   import { app } from "../stores/app.svelte.ts";
   import { keyIssue, issueKey, keyRevoke, revokeKey } from "../stores/advanced.svelte.ts";
-  import { TTL_OPTIONS } from "../stores/share-wizard.svelte.ts";
+  import { TTL_OPTIONS } from "../stores/service-form.svelte.ts";
   import { toRpcError, type RpcError } from "$lib/rpc-client";
   import { call } from "../stores/rpc.svelte.ts";
   import { t } from "$lib/i18n.svelte.ts";
@@ -76,12 +76,12 @@
   {#each keys as key (key.keyId)}
     <div class="flex flex-wrap items-center gap-2 pl-1">
       <span class="font-mono text-[11px]">{key.name ?? "(unnamed)"}</span>
-      <code class="font-mono text-[10px] text-muted-foreground">{key.keyId.slice(0, 8)}</code>
+      <code class="font-mono text-[10px] text-muted-foreground">{key.keyId}</code>
       {#if key.key !== undefined}
         <PressButton
           variant="ghost"
           class="h-5 px-1.5 text-[10px]"
-          onclick={() => openShare(key.keyId, key.name ?? key.keyId.slice(0, 8))}
+          onclick={() => openShare(key.keyId, key.name ?? key.keyId)}
         >{t("gkp.share")}</PressButton>
       {:else}
         <span class="text-[10px] text-muted-foreground">{t("adv.keys.legacy")}</span>
@@ -143,7 +143,7 @@
       </Alert>
       <CopyField value={link} label="aifly1." />
       <p class="text-[11px] text-muted-foreground">
-        key <code class="font-mono">{shareKeyLabel}</code> · <code class="font-mono">{shareKeyId.slice(0, 8)}</code>
+        key <code class="font-mono">{shareKeyLabel}</code> · <code class="font-mono">{shareKeyId}</code>
       </p>
     {/if}
   </div>
