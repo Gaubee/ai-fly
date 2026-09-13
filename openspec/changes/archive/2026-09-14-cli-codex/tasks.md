@@ -23,13 +23,13 @@
       token 刷新即刻生效；脚本文件修改需重启——require 缓存）；ctx 透传
       {homedir}；?bearer 同 $file。E2E：~/.aifly/codex.cjs 读登录态 →
       service test 401 实证；rewrite 54 例
-- [ ] 7. 发布：alpha.1（$file/codex）→ alpha.2（+GUI 随包）→ alpha.3
+- [x] 7. 发布：alpha.1（$file/codex）→ alpha.2（+GUI 随包）→ alpha.3
       （+$script）→ 实机真 token 验证（codex 登录态机器）→ 0.4.0 latest
 
 - [x] 7c. hooks 终态（两协议/资源域/命名发现/三态/ctx/env 访问器/dispose
       300ms 竞速/CLI hooks 命令集/--header-set JSON 值/preset codex→hooks:
       codex/GUI 显示与创建面 humanize/订阅测试）——519 全绿
-- [ ] 7d. 发布 0.4.0-alpha.4（含 hooks 终态）→ 实机 codex 真 token 验证 →
+- [x] 7d. 发布 0.4.0-alpha.4（含 hooks 终态）→ 实机 codex 真 token 验证 →
       0.4.0 latest → Owner 视觉验收
 
 ## 视觉验收整改（Owner 反馈 2026-09-12）
