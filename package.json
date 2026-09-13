@@ -60,6 +60,7 @@
     "dist/*.mjs",
     "dist/*.d.ts",
     "dist/app/**",
+    "hooks",
     "webui/dist",
     "resources/app-icons"
   ],

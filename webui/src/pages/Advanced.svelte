@@ -837,10 +837,13 @@
     <!-- ── 中继与限额 ───────────────────────────────────────── -->
     <TabsContent value="hooks">
   <div class="flex flex-col gap-3">
-    <div class="flex items-center justify-between">
-      <p class="text-xs text-muted-foreground">
+    <div class="flex items-center justify-between gap-3">
+      <p class="text-xs leading-relaxed text-muted-foreground">
         hook scripts: builtin library + ~/.aifly/hooks (user overrides builtin);
         exported function names are the hook inventory (authHeader = HTTP auth header hook).
+        <!-- 子代理 E2E（2026-09-13）P2：补"怎么用到服务上"的方向指引 -->
+        <br />
+        {t("adv.hooks.useHint")}
       </p>
       <PressButton
         variant="outline"
