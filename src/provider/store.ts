@@ -122,9 +122,18 @@ export const KEY_STORE_SCHEMA = z.strictObject({
   keyId: z.string().min(1).max(128),
   group: z.string().min(1).max(256),
   hash: z.string().regex(/^[0-9a-f]{64}$/, "key hash must be 64 hex chars"),
+  /** key 名（Owner 裁决 2026-09-13：签发时必填，GUI 分组视图按名展示；
+   *  旧记录无此字段——迁移容忍，GUI 显示为未命名）。 */
+  name: z.string().min(1).max(128).optional(),
+  /** key 原文（Owner 裁决 2026-09-13：可随时复制取代仅签发时可见——本机
+   *  个人工具与密钥库明文同一威胁模型；旧记录只存哈希，无法补录）。 */
+  key: z.string().min(8).max(256).optional(),
   createdAt: z.number().int().min(0),
   revokedAt: z.number().int().min(0).optional(),
 });
+
+/** key 名规则（同 SECRET_NAME_SCHEMA 词汇：小写开头，点横杠下划线）。 */
+export const KEY_NAME_SCHEMA = /^[a-z0-9][a-z0-9._-]*$/;
 
 export const STORE_FILE_SCHEMA = z.strictObject({
   revision: z.number().int().min(0),
@@ -487,10 +496,14 @@ export class ProviderStore {
     return this.data.keys.map((k) => ({ ...k }));
   }
 
-  /** 签发：原文仅本次返回，存储只落哈希。 */
-  issueKey(groupName: string): { keyId: string; key: string; createdAt: number } {
+  /** 签发：name 缺省 "default"；原文随记录落库（Owner 2026-09-13：随时
+   *  可复制）。name 是展示标签非身份（keyId 唯一），同组可重名。 */
+  issueKey(groupName: string, name = "default"): { keyId: string; key: string; createdAt: number } {
     if (this.getGroup(groupName) === undefined) {
       throw new StoreError("not-found", `error: group '${groupName}' not found`);
+    }
+    if (!KEY_NAME_SCHEMA.test(name)) {
+      throw new StoreError("invalid", "error: key name must match /^[a-z0-9][a-z0-9._-]*$/");
     }
     let keyId: string;
     do {
@@ -498,9 +511,16 @@ export class ProviderStore {
     } while (this.data.keys.some((k) => k.keyId === keyId));
     const key = KEY_MATERIAL_PREFIX + randomZ32(KEY_MATERIAL_BYTES);
     const createdAt = Date.now();
-    this.data.keys.push({ keyId, group: groupName, hash: hashKeyMaterial(key), createdAt });
+    this.data.keys.push({ keyId, group: groupName, hash: hashKeyMaterial(key), name, key, createdAt });
     this.save();
     return { keyId, key, createdAt };
+  }
+
+  /** key 原文取回（旧记录只存哈希 → undefined；撤销/不存在 → undefined）。 */
+  getKeyMaterial(keyId: string): string | undefined {
+    const found = this.data.keys.find((k) => k.keyId === keyId);
+    if (found === undefined || found.revokedAt !== undefined) return undefined;
+    return found.key;
   }
 
   /** 撤销（幂等：已撤销为 no-op）。 */

@@ -4,9 +4,10 @@
 // - 邀请令牌签发（fabric.invite；由 CLI/serve 层调用后传入）；
 // - 兑换与导入（consumer 侧）；
 // - 网络请求（decode/preview 离线完成，无任何 IO）。
-// 前置检查：分组存在且非空（无服务则链接无意义）；密钥有效（密钥哈希不可逆，故每次
-// share 签发新钥——复用旧钥在提供方侧无法再现原文，见任务报告裁决）；relay 未配置时
-// 警告并附稳定入口部署指引。链接即凭证：payload 含密钥原文。
+// 前置检查：分组存在且非空（无服务则链接无意义）。key 语义（Owner 裁决
+// 2026-09-13，修订旧"每次现签、旧钥不可再现"）：key 原文随库存储——可
+// 指定 keyId 复用既有 key 现铸 invite 重发，或签发新钥（keyName）。
+// relay 未配置时警告并附稳定入口部署指引。链接即凭证：payload 含密钥原文。
 
 import { z } from "zod";
 import { SERVICE_ENTRY_SCHEMA } from "../wire/frames.ts";
@@ -120,6 +121,10 @@ export interface ShareBuildInput {
   endpointId: string;
   alias?: string | undefined;
   relayUrls?: readonly string[] | undefined;
+  /** 复用既有 key（Owner 裁决 2026-09-13：key 原文随库可复制——分享链接
+   *  可为任一已存 key 现铸 invite 重发；缺省签发新钥，名 keyName/default）。 */
+  keyId?: string | undefined;
+  keyName?: string | undefined;
 }
 
 export interface ShareBuildResult {
@@ -130,8 +135,8 @@ export interface ShareBuildResult {
 }
 
 /**
- * 构造分享链接：前置检查（组存在且非空）-> 签发新钥（每次 share 一枚；旧钥不可再现）
- * -> 组内服务脱敏视图 -> payload + link + 警告。
+ * 构造分享链接：前置检查（组存在且非空）-> key（复用 keyId 指定的已存
+ * 原文；缺省签发新钥）-> 组内服务脱敏视图 -> payload + link + 警告。
  */
 export function buildShareLink(input: ShareBuildInput): ShareBuildResult {
   const group = input.store.getGroup(input.group);
@@ -142,14 +147,30 @@ export function buildShareLink(input: ShareBuildInput): ShareBuildResult {
   if (services.length === 0) {
     throw new StoreError("invalid", `error: group '${input.group}' has no services; a share link would be meaningless`);
   }
-  const issued = input.store.issueKey(input.group);
+  let key: string;
+  let keyId: string;
+  if (input.keyId !== undefined) {
+    const material = input.store.getKeyMaterial(input.keyId);
+    if (material === undefined) {
+      throw new StoreError(
+        "invalid",
+        `error: key '${input.keyId}' cannot be shared (missing, revoked, or raw material not stored)`,
+      );
+    }
+    key = material;
+    keyId = input.keyId;
+  } else {
+    const issued = input.store.issueKey(input.group, input.keyName);
+    key = issued.key;
+    keyId = issued.keyId;
+  }
   const serviceEntries: ServiceEntry[] = services.map(buildServiceEntry);
   const relayUrls = input.relayUrls === undefined ? [] : [...input.relayUrls];
   const payload: ShareLinkPayload = {
     v: 1,
     invite: input.invite,
-    key: issued.key,
-    keyId: issued.keyId,
+    key,
+    keyId,
     provider: {
       alias: input.alias ?? input.store.alias ?? "provider",
       endpointId: input.endpointId,
@@ -164,5 +185,5 @@ export function buildShareLink(input: ShareBuildInput): ShareBuildResult {
       "WARNING: no relay is configured; consumers may be unable to reach you. " + STABLE_ENTRY_HINT,
     );
   }
-  return { payload, link: encodeShareLink(payload), warnings, keyId: issued.keyId };
+  return { payload, link: encodeShareLink(payload), warnings, keyId };
 }

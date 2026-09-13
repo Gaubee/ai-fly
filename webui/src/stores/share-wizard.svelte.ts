@@ -13,9 +13,9 @@
 import { toRpcError, type RpcError } from "$lib/rpc-client";
 import { ROUTE_LOCAL_PREFIX, type Preset, type RouteForm } from "$shared/rpc-contract.ts";
 import { call } from "./rpc.svelte.ts";
-import { toastRpcError, toastSuccess } from "./toast.svelte.ts";
+import { toastRpcError } from "./toast.svelte.ts";
 import { refresh } from "./app.svelte.ts";
-import { authInput, authSelFromPreset, authSelSummary, type AuthSel } from "$lib/auth-source.ts";
+import { authInput, authSelFromPreset, authSelSummary, hooksField, hooksScriptFromPreset, type AuthSel } from "$lib/auth-source.ts";
 
 /**
  * 路径规范化（M3-r6，Owner 裁决：不做任何配置限制——net-fly 通用转发规则
@@ -112,12 +112,16 @@ export const share = $state({
    *  （此前两代缺陷一并终结：alpha.6 前向导丢 codex 预设 hook 认证→
    *  朋友侧全 401；alpha.7 修复后"无"又关不掉预设注入。） */
   auth: { kind: "none" } as AuthSel,
-  // ③ 生成
+  /** 服务激活的 hooks 脚本（Owner #3：先激活脚本，认证头 select 才出条目）。 */
+  hooksScript: "",
+  // ③ group 视图（Owner 2026-09-13 #6：复制已有 key / 新增 key（无则自动
+  // "default"）/ 每 key 现铸分享链接；取代旧"生成分享链接"单结果面板）
   ttlMs: TTL_OPTIONS[0]!.ttlMs,
-  /** 在途阶段（'' | 'service' | 'group' | 'daemon' | 'share'）。 */
+  /** 在途阶段（'' | 'service' | 'group' | 'daemon' | 'key'）。 */
   busy: "",
   error: null as RpcError | null,
-  result: null as { link: string; keyId: string; warnings: string[] } | null,
+  /** 链接现铸缓存（keyId → link；复制时逐 key 调 share.create）。 */
+  links: {} as Record<string, string>,
 });
 
 /** 重置向导（进入页面/完成后重新开始）。 */
@@ -136,10 +140,11 @@ export function resetShare(): void {
   share.limitsConcurrency = "";
   share.limitsDaily = "";
   share.auth = { kind: "none" };
+  share.hooksScript = "";
   share.ttlMs = TTL_OPTIONS[0]!.ttlMs;
   share.busy = "";
   share.error = null;
-  share.result = null;
+  share.links = {};
 }
 
 /** ① 选择预设 → 展开预填 ②（M3-r5：预设 = 预填的 Custom，一切可改）并前进。 */
@@ -153,6 +158,7 @@ export function choosePreset(preset: Preset): void {
   // 预设认证预选（PM 方案 B）：presetAuth 型 → hook 条目；keyEnv 型 →
   // env keep 哨兵；② 里显式改选（含改"无"）即覆盖
   share.auth = authSelFromPreset(preset);
+  share.hooksScript = hooksScriptFromPreset(preset);
   // 路由行预填（M3-r6）：预设规则即 from→to 行（默认官方镜像 1:1 绑定态）；
   // forms 标注随行（消费侧 agent 判定），表单不显示
   share.routeRows = (preset.routes ?? []).map((route) => {
@@ -170,6 +176,7 @@ export function chooseCustom(): void {
   share.mode = "custom";
   share.presetId = "";
   share.auth = { kind: "none" };
+  share.hooksScript = "";
   share.name = "";
   share.port = share.customPort;
   share.error = null;
@@ -210,9 +217,9 @@ export function removeRouteRow(id: number): void {
   if (share.routeRows.length === 0) share.routeRows = [makeRouteRow()];
 }
 
-/** 回退（成功后不可回：结果视图隐藏按钮）。 */
+/** 回退（③ group 视图允许回②改配置——重进③幂等：服务已存在则跳过）。 */
 export function shareBack(): void {
-  if (share.result !== null || share.step <= 1) return;
+  if (share.step <= 1) return;
   share.step = (share.step - 1) as 1 | 2;
   share.error = null;
 }
@@ -348,39 +355,43 @@ async function ensureGroupWithService(serviceName: string): Promise<void> {
 }
 
 /**
- * ③ 生成分享（四段：服务 → 分组 → daemon（share.create 依赖运行态 fabric）
- * → share.create）。任一段失败就地内联渲染 + toast。
+ * ③ 进入 group 视图（Owner 裁决 2026-09-13 #6）：服务 → 分组 → daemon →
+ * 保底 key（组内无活跃 key 则自动签发 "default"）。不在此铸造链接——
+ * 链接按 key 现铸（mintShareLink）。重进 ③ 幂等：服务已存在则跳过 add。
  */
-export async function generateShare(): Promise<void> {
-  if (share.busy !== "" || share.result !== null) return;
+export async function enterGroupView(): Promise<void> {
+  if (share.busy !== "" || share.step !== 3) return;
   share.error = null;
   try {
     share.busy = "service";
-    // M3-r5：预设 = 预填的 Custom——两模式走同一条本地组装提交路径
-    // （applyAsService 保留给 CLI；向导不再依赖服务端展开）。
-    // match：手填 suffix（多域名）；留空 → upstream hostname 单条 exact
     const match = customMatchRules();
     if (match === null) {
       share.error = { code: "INVALID_INPUT", message: "name, https upstream and match domain are required" };
       return;
     }
-    // routes：行模型 from→to（全空 = undefined 不带，legacy 透传）
     const routes = routeRowsInput();
-    const added = await call((c) =>
-      c.provider.services.add({
-        name: share.name.trim(),
-        upstream: share.customUpstream.trim(),
-        match,
-        ...(parsePositiveInt(share.port) !== undefined
-          ? { defaultPort: parsePositiveInt(share.port) }
-          : {}),
-        // 认证头取值统一组装（与高级页同一 authInput：none/secret/hook/keep；
-        //  "无"就是真的无——预设注入只在未被显式覆盖时经 keep 哨兵成立）
-        ...authInput(share.auth),
-        ...(routes !== undefined ? { routes } : {}),
-      }),
-    );
-    const serviceName = added.service.name;
+    const authParts = authInput(share.auth);
+    const hooks = hooksField(share.hooksScript, share.auth);
+    let serviceName = share.name.trim();
+    const { services } = await call((c) => c.provider.services.list({}));
+    if (!services.some((s) => s.name === serviceName)) {
+      const added = await call((c) =>
+        c.provider.services.add({
+          name: serviceName,
+          upstream: share.customUpstream.trim(),
+          match,
+          ...(parsePositiveInt(share.port) !== undefined
+            ? { defaultPort: parsePositiveInt(share.port) }
+            : {}),
+          ...(hooks !== undefined ? { hooks } : {}),
+          ...(authParts.authorization !== undefined
+            ? { rewrite: { headerSet: { authorization: authParts.authorization } } }
+            : {}),
+          ...(routes !== undefined ? { routes } : {}),
+        }),
+      );
+      serviceName = added.service.name;
+    }
 
     share.busy = "group";
     await ensureGroupWithService(serviceName);
@@ -388,16 +399,53 @@ export async function generateShare(): Promise<void> {
     share.busy = "daemon";
     await call((c) => c.provider.daemon.start({}));
 
-    share.busy = "share";
-    const result = await call((c) =>
-      c.provider.share.create({ group: share.groupName, ttlMs: share.ttlMs }),
-    );
-    share.result = { link: result.link, keyId: result.keyId, warnings: result.warnings };
-    toastSuccess("Share link created", "Copy it to your friend - the link itself is the credential.");
+    share.busy = "key";
+    const { keys } = await call((c) => c.provider.keys.list({}));
+    if (!keys.some((k) => k.group === share.groupName && k.revokedAt === undefined)) {
+      await call((c) => c.provider.keys.issue({ group: share.groupName, name: "default" }));
+    }
     refresh("provider", "groups", "services", "keys");
   } catch (error) {
     share.error = toRpcError(error);
     toastRpcError(share.error);
+  } finally {
+    share.busy = "";
+  }
+}
+
+/** ③ 新增 key（带 key-name；Owner #5/#6）。 */
+export async function addGroupKey(name: string): Promise<void> {
+  if (share.busy !== "") return;
+  share.error = null;
+  share.busy = "key";
+  try {
+    await call((c) =>
+      c.provider.keys.issue({ group: share.groupName, name: name.trim() || "default" }),
+    );
+    refresh("keys");
+  } catch (error) {
+    share.error = toRpcError(error);
+    toastRpcError(share.error);
+  } finally {
+    share.busy = "";
+  }
+}
+
+/** ③ 为指定 key 现铸分享链接（invite 每次新铸；key 原文复用）。 */
+export async function mintShareLink(keyId: string): Promise<string | null> {
+  if (share.busy !== "") return null;
+  share.error = null;
+  share.busy = "share";
+  try {
+    const result = await call((c) =>
+      c.provider.share.create({ group: share.groupName, ttlMs: share.ttlMs, keyId }),
+    );
+    share.links = { ...share.links, [keyId]: result.link };
+    return result.link;
+  } catch (error) {
+    share.error = toRpcError(error);
+    toastRpcError(share.error);
+    return null;
   } finally {
     share.busy = "";
   }

@@ -22,6 +22,8 @@ const SPEC = {
   ttl: { type: "string" },
   relay: { type: "multi" },
   "allow-relayless": { type: "boolean" },
+  "key-id": { type: "string" },
+  "key-name": { type: "string" },
 } as const;
 
 export async function run(argv: string[], ctx: { homedir?: string } = {}): Promise<number> {
@@ -56,6 +58,8 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
       invite,
       endpointId: fabric.endpointId,
       relayUrls: relayStatus.urls,
+      keyId: str(options["key-id"]),
+      keyName: str(options["key-name"]),
     });
 
     process.stdout.write(

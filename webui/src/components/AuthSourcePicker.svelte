@@ -1,11 +1,11 @@
 <!--
-  认证头取值选择器（Owner 裁决 2026-09-13 + PM 方案 B）：一个 NativeSelect
-  承载"这个服务的请求带什么认证头"——无 / 密钥族 / hook 脚本族（导出
-  authHeader 的用户与 codex 型内置脚本）/ 管理密钥…；keep 哨兵仅在回显
-  CLI/预配置时出现（透传不改写）。选中 hook 条目 → 附属区显示绑定详情
-  `authorization ← script.authHeader()` + Bearer 前缀开关 + hooks 页签
-  指路。互斥由单选结构保证（密钥与 hook 不可能同时生效）。状态模型与
-  组装规则见 $lib/auth-source.ts（高级页与分享向导 ② 共用）。
+  认证头取值选择器（Owner 裁决 2026-09-13 #3 双控件模型 + PM 方案 B 骨架）：
+  「认证头」select 承载 无 / 密钥族 / 管理密钥…/ keep 哨兵（回显透传 CLI/
+  预配置）。hook 条目只在表单先激活了 hooks 脚本（hooksScript prop）且该
+  脚本导出 authHeader 时出现——"先为 service 配置使用 hook 脚本，选中了
+  codex，才能在 select 中看到对应选项"（Owner 原话）。选中 hook 条目 →
+  详情行 authorization ← script.authHeader() + Bearer 前缀开关。互斥由
+  单选结构保证。状态模型见 $lib/auth-source.ts。
 -->
 <script lang="ts">
   import { onMount } from "svelte";
@@ -13,15 +13,17 @@
   import SecretsDialog from "./SecretsDialog.svelte";
   import { secrets, refreshSecrets } from "../stores/secrets.svelte.ts";
   import { hooksPanel, loadHooks } from "../stores/advanced.svelte.ts";
-  import { hookAuthOptions, type AuthSel } from "$lib/auth-source.ts";
+  import type { AuthSel } from "$lib/auth-source.ts";
   import { t } from "$lib/i18n.svelte.ts";
 
   interface Props {
     /** 当前选中来源（none/secret/hook/keep，见 auth-source.ts）。 */
     value: AuthSel;
     onchange?: (sel: AuthSel) => void;
+    /** 表单激活的 hooks 脚本名（"" = 未激活——认证头不出现 hook 条目）。 */
+    hooksScript?: string;
   }
-  let { value, onchange }: Props = $props();
+  let { value, onchange, hooksScript = "" }: Props = $props();
 
   const NONE = "";
   const KEEP = "__keep__";
@@ -29,10 +31,14 @@
 
   let dialogOpen = $state(false);
   let selected = $state<string>(NONE);
-  /** keep 态选单被改后放弃 keep 的原文（改选即丢弃，不提供回滚）。 */
   let missingScript = $state<string | null>(null);
 
-  const hookOptions = $derived(hookAuthOptions(hooksPanel.scripts));
+  /** 激活脚本导出 authHeader 才有认证条目（Owner #3 联动）。 */
+  const activeHookEntry = $derived(
+    hooksScript !== "" && hooksPanel.scripts.some((s) => s.name === hooksScript && s.fns.includes("authHeader"))
+      ? hooksScript
+      : null,
+  );
 
   function encode(sel: AuthSel): string {
     switch (sel.kind) {
@@ -47,20 +53,20 @@
     }
   }
 
-  // 外部 value → 显示值（表单打开/向导预选/重置）
+  // 外部 value → 显示值（表单打开/向导预选/重置/hook 联动切换）
   $effect(() => {
     selected = encode(value);
     if (value.kind !== "none") missingScript = null;
   });
 
-  // 守卫：选中物在名单里被删 → 回落无（名单加载后判定，避免首轮误清）。
-  // hook 脚本丢失额外置 missingScript 显示说明（比密钥删除更隐蔽）。
+  // 守卫：选中物被删 → 回落无（名单加载后判定）；hook 脚本被禁用/删除 →
+  // 激活联动消失时同样回落（缺失提示由 missingScript 承载）。
   $effect(() => {
     if (secrets.loaded && value.kind === "secret" && !secrets.names.includes(value.name)) {
       missingScript = null;
       onchange?.({ kind: "none" });
     }
-    if (hooksPanel.loaded && value.kind === "hook" && !hookOptions.some((o) => o.script === value.script)) {
+    if (hooksPanel.loaded && value.kind === "hook" && activeHookEntry !== value.script) {
       missingScript = value.script;
       onchange?.({ kind: "none" });
     }
@@ -99,7 +105,6 @@
       return;
     }
     if (next.startsWith("hook:")) {
-      // 手选默认加 Bearer 前缀（密钥族/上游惯例；改选后可在详情行关闭）
       onchange?.({ kind: "hook", script: next.slice("hook:".length), bearer: true });
     }
   }
@@ -115,11 +120,9 @@
         {/each}
       </optgroup>
     {/if}
-    {#if hookOptions.length > 0}
+    {#if activeHookEntry !== null}
       <optgroup label={t("f.authpicker.group.hooks")}>
-        {#each hookOptions as { script } (script)}
-          <option value={`hook:${script}`}>{script} (authHeader)</option>
-        {/each}
+        <option value={`hook:${activeHookEntry}`}>{activeHookEntry} (authHeader)</option>
       </optgroup>
     {/if}
     {#if value.kind === "keep"}

@@ -9,7 +9,7 @@
      （链接 + 一键复制 + 链接即凭证警示 +
      TTL + 密钥已存本机密钥面板提示）。状态机在 stores/share-wizard。 -->
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import Card, { CardFooter } from "$lib/ui/card";
   import Badge from "$lib/ui/badge";
   import PressButton from "$lib/ui/press-button";
@@ -37,6 +37,7 @@
     isLocalPreset,
     refresh,
   } from "../stores/app.svelte.ts";
+  import { hooksPanel, loadHooks } from "../stores/advanced.svelte.ts";
   import {
     share,
     resetShare,
@@ -44,7 +45,9 @@
     chooseCustom,
     shareBack,
     namingNext,
-    generateShare,
+    enterGroupView,
+    addGroupKey,
+    mintShareLink,
     TTL_OPTIONS,
     updateRouteFrom,
     toggleRouteBound,
@@ -57,7 +60,48 @@
   } from "../stores/share-wizard.svelte.ts";
   import { presetLogoUrl, type Preset } from "$shared/rpc-contract.ts";
 
+  /** hooks 脚本选择联动（Owner #3 双控件；同高级页 selectHooksScript）。 */
+  let hookScriptSel = $state("");
+  $effect(() => {
+    hookScriptSel = share.hooksScript;
+  });
+  function selectWizardHooksScript(script: string): void {
+    share.hooksScript = script;
+    if (share.auth.kind === "hook") {
+      const exportsAuth = hooksPanel.scripts.some((s) => s.name === script && s.fns.includes("authHeader"));
+      share.auth = exportsAuth ? { ...share.auth, script } : { kind: "none" };
+    }
+  }
+
+  /** ③ group 视图：进入即落服务/分组/daemon/保底 key（幂等重进）。 */
+  $effect(() => {
+    if (share.step === 3) untrack(() => void enterGroupView());
+  });
+
+  /** ③ 新增 key 的名字草稿。 */
+  let wizardKeyDraft = $state("");
+
+  /** key 原文/链接复制。 */
+  async function copyText(text: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = text;
+      document.body.append(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
+  }
+
+  async function copyKeyLink(keyId: string): Promise<void> {
+    const link = share.links[keyId] ?? (await mintShareLink(keyId));
+    if (link !== null) await copyText(link);
+  }
+
   onMount(() => {
+    void loadHooks();
     // 首次进入拉预设；重新进入（reset 后）复用已拉取的清单
     if (presets.curated.length === 0 && !presets.loading) void loadPresets();
     refresh("groups"); // ② 的分组提示需要既有组
@@ -173,7 +217,7 @@
     <h1 class="font-nav text-base uppercase tracking-[0.1em]">{t("share.title")}</h1>
     <StepHeader
       step={share.step}
-      locked={share.result !== null}
+      locked={share.step === 3}
       titles={[t("share.step1"), t("share.step2"), t("share.step3")]}
     />
   </header>
@@ -286,6 +330,25 @@
     <Card title="name & group" scroll={false}>
       <div class="flex flex-col gap-3 p-3">
         <Input
+          label={t("share.name.label")}
+          placeholder={share.mode === "preset" ? share.name : t("share.name.ph")}
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck={false}
+          bind:value={share.name}
+        />
+
+        <!-- 分组选择器（M3-r3 ①）：manage groups… 弹窗承载新建/编辑/删除，
+             替换原先的「下拉 + NEW GROUP NAME 输入」临时体验 -->
+        <GroupPicker value={share.groupName || undefined} onchange={(name) => (share.groupName = name ?? "")} />
+        {#if share.groupName !== ""}
+          <p class="text-[11px] text-muted-foreground">
+            {t("share.group.note")}
+            <code class="font-mono">{share.groupName}</code>
+            {t("share.group.note2")}
+          </p>
+
+        <Input
           label={t("f.upstreamUrl")}
           placeholder="https://api.example.com"
           autocapitalize="none"
@@ -305,7 +368,7 @@
           {#each share.routeRows as row, index (row.id)}
             <div class="flex flex-col gap-1.5 border border-border/70 p-2.5">
               <div class="flex flex-wrap items-center gap-2">
-                <span class="flex shrink-0 items-center gap-0.5">
+                <span class="flex flex-col shrink-0 items-center gap-0.5">
                   <PressButton
                     variant="ghost"
                     ariaLabel={t("share.routes.moveUp")}
@@ -407,24 +470,6 @@
         </div>
         <Separator />
 
-        <Input
-          label={t("share.name.label")}
-          placeholder={share.mode === "preset" ? share.name : t("share.name.ph")}
-          autocapitalize="none"
-          autocorrect="off"
-          spellcheck={false}
-          bind:value={share.name}
-        />
-
-        <!-- 分组选择器（M3-r3 ①）：manage groups… 弹窗承载新建/编辑/删除，
-             替换原先的「下拉 + NEW GROUP NAME 输入」临时体验 -->
-        <GroupPicker value={share.groupName || undefined} onchange={(name) => (share.groupName = name ?? "")} />
-        {#if share.groupName !== ""}
-          <p class="text-[11px] text-muted-foreground">
-            {t("share.group.note")}
-            <code class="font-mono">{share.groupName}</code>
-            {t("share.group.note2")}
-          </p>
         {/if}
 
         <!-- {t('share.advanced')}（M3-acceptance ③：ghost accordion，默认折叠——
@@ -460,9 +505,24 @@
           </AccordionItem>
         </Accordion>
 
-        <!-- 认证头取值（PM 方案 B）：预设携带 → 预选（codex 型 hook 条目 /
-             env keep 哨兵），② 显式改选即覆盖（含改"无"）+ 连通测试 -->
-        <AuthSourcePicker value={share.auth} onchange={(sel) => (share.auth = sel)} />
+        <!-- hooks 脚本选择（Owner #3 双控件）：先激活脚本，认证头 select 才出条目 -->
+        <NativeSelect
+          aria-label={t("f.hookscript.label")}
+          bind:value={hookScriptSel}
+          onchange={(event) => selectWizardHooksScript(event.currentTarget.value)}
+        >
+          <option value="">{t("f.hookscript.none")}</option>
+          {#each hooksPanel.scripts as script (script.name)}
+            <option value={script.name}>{script.name} ({script.fns.join(", ")})</option>
+          {/each}
+        </NativeSelect>
+        <!-- 认证头取值（#3）：预设携带 → 预选（codex 型 hook 条目 / env keep
+             哨兵），② 显式改选即覆盖（含改"无"）+ 连通测试 -->
+        <AuthSourcePicker
+          value={share.auth}
+          onchange={(sel) => (share.auth = sel)}
+          hooksScript={share.hooksScript}
+        />
 
         <TestConnection
           upstream={share.customUpstream.trim()}
@@ -487,106 +547,104 @@
     </Card>
     <ErrorAlert error={share.error} />
 
-  <!-- ③ 生成分享 -->
+  <!-- ③ group 视图（Owner 裁决 2026-09-13 #6）：组内 key 清单——复制
+       key 原文 / 为该 key 现铸分享链接 / 新增 key（组内无 key 自动
+       "default"）；取代旧"生成分享链接"单结果面板 -->
   {:else}
-    {#if share.result === null}
-      <Card title={t("share.generate.title")} scroll={false}>
-        <div class="flex flex-col gap-3 p-3">
-          <dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-            <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
-              <dt class="text-muted-foreground">{t("common.service")}</dt>
-              <dd class="font-mono">{share.name}</dd>
-            </div>
-            <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
-              <dt class="text-muted-foreground">group</dt>
-              <dd class="font-mono">{share.groupName}</dd>
-            </div>
-            <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
-              <dt class="text-muted-foreground">{t("share.step1")}</dt>
-              <dd class="font-mono">{share.mode === "preset" ? share.presetId : "custom"}</dd>
-            </div>
-            <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
-              <dt class="text-muted-foreground">port</dt>
-              <dd class="font-mono">{share.port}</dd>
-            </div>
-            <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
-              <dt class="text-muted-foreground">{t("share.generate.auth")}</dt>
-              <dd class="font-mono">{authSelSummary(share.auth)}</dd>
-            </div>
-          </dl>
-          <!-- 路由映射（M3-r6：分享时可见「from → upstream+to」行清单） -->
-          {#if share.routeRows.some((row) => routeRowPreview(row) !== null)}
-            <div class="flex flex-col gap-1 border border-border/70 p-3">
-              <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-                path routes
-              </span>
-              {#each share.routeRows as row (row.id)}
-                {#if routeRowPreview(row) !== null}
-                  <p class="break-all font-mono text-[11px] text-muted-foreground">
-                    {normalizeRoutePrefix(row.from)}/* → {routeRowPreview(row)}
-                  </p>
-                {/if}
-              {/each}
-              <p class="text-[11px] leading-relaxed text-muted-foreground">
-                {t("share.generate.routesNote")}
-              </p>
-            </div>
-          {/if}
-          {#if share.auth.kind === "secret"}
-            <p class="text-[11px] leading-relaxed text-muted-foreground">
-              {t("share.generate.secret")}
-              (<code class="font-mono">{share.auth.name}</code>) - consumers only ever see
-              <code class="font-mono">&#9679;</code>.
-            </p>
-          {/if}
-          <div class="max-w-56">
-            <Select
-              label={t("share.ttl.label")}
-              options={TTL_OPTIONS.map((option) => ({ value: String(option.ttlMs), label: option.label }))}
-              bind:value={ttlSel}
-            />
+    <Card title="{t('share.groupview.title')}: {share.groupName}" scroll={false}>
+      <div class="flex flex-col gap-3 p-3">
+        <dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+          <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
+            <dt class="text-muted-foreground">{t("common.service")}</dt>
+            <dd class="font-mono">{share.name}</dd>
           </div>
-          <Alert variant="tonal" title={t("share.credential.title")}>
-            {t("share.credential.body")}
-          </Alert>
-        </div>
-        {#snippet foot()}
-          <CardFooter label="share wizard actions">
-            <PressButton variant="ghost" onclick={shareBack} class={share.busy !== "" ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
-            <PressButton
-              variant="fill"
-              loading={share.busy !== ""}
-              onclick={() => void generateShare()}
-            >
-              {share.busy === "service" || share.busy === "group"
-                ? t("share.busy.service")
-                : share.busy === "daemon"
-                  ? t("share.busy.daemon")
-                  : share.busy === "share"
-                    ? t("share.busy.share")
-                    : t("share.busy.generate")}
-            </PressButton>
-          </CardFooter>
-        {/snippet}
-      </Card>
-      <ErrorAlert error={share.error} />
-    {:else}
-      <Card title="share link created" scroll={false}>
-        <div class="flex flex-col gap-3 p-3" transition:slide={{ duration: 180 }}>
-          <CopyField value={share.result.link} label="aifly1." />
-          <p class="text-[11px] text-muted-foreground">
-            key id <code class="font-mono">{share.result.keyId}</code> - one key was issued for
-            the <code class="font-mono">{share.groupName}</code> group and embedded in the link.
-          </p>
-          {#each share.result.warnings as warning (warning)}
-            <Alert variant="tonal" class="jx-hue-warning" title="warning">{warning}</Alert>
+          <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
+            <dt class="text-muted-foreground">{t("share.step1")}</dt>
+            <dd class="font-mono">{share.mode === "preset" ? share.presetId : "custom"}</dd>
+          </div>
+          <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
+            <dt class="text-muted-foreground">port</dt>
+            <dd class="font-mono">{share.port}</dd>
+          </div>
+          <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
+            <dt class="text-muted-foreground">{t("share.generate.auth")}</dt>
+            <dd class="font-mono">{authSelSummary(share.auth)}</dd>
+          </div>
+        </dl>
+
+        <!-- keys：一行一 key（名 + 复制原文 + 现铸链接复制） -->
+        <div class="flex flex-col gap-1.5">
+          <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
+            {t("share.groupview.keys")}
+          </span>
+          {#if share.busy !== "" && share.busy !== "share"}
+            <p class="text-[11px] text-muted-foreground">{t("share.busy." + (share.busy === "key" ? "share" : share.busy))}</p>
+          {/if}
+          {#each app.keys.filter((k) => k.group === share.groupName && k.revokedAt === undefined) as key (key.keyId)}
+            <div class="flex flex-wrap items-center gap-2 border border-border/70 px-2.5 py-1.5">
+              <span class="font-mono text-xs">{key.name ?? "(unnamed)"}</span>
+              <code class="font-mono text-[10px] text-muted-foreground">{key.keyId.slice(0, 8)}</code>
+              {#if key.key !== undefined}
+                <PressButton
+                  variant="ghost"
+                  class="h-5 px-1.5 text-[10px]"
+                  onclick={() => void copyText(key.key ?? "")}
+                >{t("common.copy")} key</PressButton>
+              {:else}
+                <span class="text-[10px] text-muted-foreground">{t("adv.keys.legacy")}</span>
+              {/if}
+              <PressButton
+                variant="ghost"
+                class="h-5 px-1.5 text-[10px]"
+                loading={share.busy === "share"}
+                onclick={() => void copyKeyLink(key.keyId)}
+              >{t("share.groupview.copyLink")}</PressButton>
+              {#if share.links[key.keyId] !== undefined}
+                <span class="text-[10px] text-primary">{t("share.groupview.linkReady")}</span>
+              {/if}
+            </div>
+          {:else}
+            {#if share.busy === ""}
+              <p class="text-[11px] text-muted-foreground">{t("share.groupview.noKeys")}</p>
+            {/if}
           {/each}
-          <Alert variant="tonal" title={t("share.credential.title")}>
-            it expires after the chosen TTL. anyone holding it can use the service until then.
-          </Alert>
+          <!-- 新增 key（Owner #5：带 key-name） -->
+          <div class="flex items-center gap-1.5">
+            <input
+              class="w-32 border border-border bg-transparent px-2 py-1 font-mono text-[11px] focus:border-primary focus:outline-none"
+              placeholder="key-name"
+              autocapitalize="none"
+              autocorrect="off"
+              spellcheck={false}
+              bind:value={wizardKeyDraft}
+            />
+            <PressButton
+              variant="ghost"
+              class="h-5 px-1.5 text-[10px]"
+              loading={share.busy === "key"}
+              onclick={() => {
+                void addGroupKey(wizardKeyDraft);
+                wizardKeyDraft = "";
+              }}
+            >{t("share.groupview.addKey")}</PressButton>
+          </div>
         </div>
-        {#snippet foot()}
-          <CardFooter label="share wizard actions">
+
+        <div class="max-w-56">
+          <Select
+            label={t("share.ttl.label")}
+            options={TTL_OPTIONS.map((option) => ({ value: String(option.ttlMs), label: option.label }))}
+            bind:value={ttlSel}
+          />
+        </div>
+        <Alert variant="tonal" title={t("share.credential.title")}>
+          {t("share.credential.body")}
+        </Alert>
+      </div>
+      {#snippet foot()}
+        <CardFooter label="share wizard actions">
+          <PressButton variant="ghost" onclick={shareBack} class={share.busy !== "" ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
+          <span class="flex items-center gap-1.5">
             <PressButton
               variant="ghost"
               onclick={() => {
@@ -597,9 +655,11 @@
               share another
             </PressButton>
             <PressButton variant="fill" href="#/dashboard" external={false}>{t("share.goDashboard")}</PressButton>
-          </CardFooter>
-        {/snippet}
-      </Card>
-    {/if}
+          </span>
+        </CardFooter>
+      {/snippet}
+    </Card>
+    <ErrorAlert error={share.error} />
   {/if}
 </div>
+/div>

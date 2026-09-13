@@ -14,6 +14,7 @@
   import PressButton from "$lib/ui/press-button";
   import Input from "$lib/ui/input";
   import Select from "$lib/ui/select";
+  import NativeSelect from "$lib/ui/native-select";
   import Alert from "$lib/ui/alert";
   import Skeleton from "$lib/ui/skeleton";
   import Separator from "$lib/ui/separator";
@@ -78,8 +79,13 @@
   let tab = $state("services");
   /** 服务行展开集合（detail：upstream/match 全集/rewrite；$env 值显示 ●）。 */
   let expanded = $state(new Set<string>());
-  /** 密钥 dialog 的 open（result 驱动开、× / esc 关闭写回并清 result）。 */
-  let keyDialogOpen = $state(false);
+  /** 组内新增 key 的名字草稿（组名 → key-name；空 = "default"）。 */
+  let keyNameDrafts = $state<Record<string, string>>({});
+  /** 服务表单 hooks 脚本选择的显示值（NativeSelect bind 用；联动走 store）。 */
+  let hookScriptSel = $state("");
+  $effect(() => {
+    hookScriptSel = serviceForm.hooksScript;
+  });
 
   onMount(() => {
     refresh("services", "groups", "keys", "settings");
@@ -92,14 +98,6 @@
       relayInited = true;
       initRelayForm();
     }
-  });
-
-  // 密钥 dialog 开合同步：result 出现 → open；dialog 自身关闭 → 清 result
-  $effect(() => {
-    keyDialogOpen = keyIssue.result !== null;
-  });
-  $effect(() => {
-    if (!keyDialogOpen && keyIssue.result !== null) keyIssue.result = null;
   });
 
   // hooks 面板按需加载（Owner 视觉验收 2026-09-13 #5：模板里调
@@ -277,6 +275,23 @@
     return map;
   });
 
+  /** 统一服务视图（Owner 2026-09-13 #4）：分组 → 组内服务；未入组服务单列。 */
+  const servicesOfGroup = $derived.by(() => {
+    const map = new Map<string, typeof app.services>();
+    for (const group of app.groups) {
+      map.set(
+        group.name,
+        group.serviceIds
+          .map((id) => app.services.find((s) => s.serviceId === id))
+          .filter((s): s is (typeof app.services)[number] => s !== undefined),
+      );
+    }
+    return map;
+  });
+  const ungroupedServices = $derived(
+    app.services.filter((s) => !app.groups.some((g) => g.serviceIds.includes(s.serviceId))),
+  );
+
   const keyGroupOptions = $derived(app.groups.map((group) => ({ value: group.name, label: group.name })));
 
   /** 分组 → 未撤销密钥数（行卡片摘要，M3-acceptance ②）。 */
@@ -288,6 +303,30 @@
     }
     return map;
   });
+
+  /** key 原文随时复制（Owner 2026-09-13 #5）。 */
+  async function copyText(text: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const area = document.createElement("textarea");
+      area.value = text;
+      document.body.append(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
+  }
+
+  /** hooks 脚本选择联动（Owner #3 双控件）：换脚本时，hook 型认证指向新脚本
+   *  （新脚本不导出 authHeader 则回落无）。 */
+  function selectHooksScript(script: string): void {
+    serviceForm.hooksScript = script;
+    if (serviceForm.auth.kind === "hook") {
+      const exportsAuth = hooksPanel.scripts.some((s) => s.name === script && s.fns.includes("authHeader"));
+      serviceForm.auth = exportsAuth ? { ...serviceForm.auth, script } : { kind: "none" };
+    }
+  }
 
   /** 主题偏好同步：Advanced 里的切换同时落引擎设置（点击后读 localStorage）。 */
   function syncThemeToSettings(): void {
@@ -325,7 +364,6 @@
   <Tabs bind:value={tab}>
     <TabsList>
       <TabsTrigger value="services">{t("adv.tab.services")}</TabsTrigger>
-      <TabsTrigger value="groups">{t("adv.tab.groups")}</TabsTrigger>
       <TabsTrigger value="secrets">{t("adv.tab.secrets")}</TabsTrigger>
       <TabsTrigger value="hooks">{t("adv.tab.hooks")}</TabsTrigger>
       <TabsTrigger value="relay">{t("adv.tab.relay")}</TabsTrigger>
@@ -335,137 +373,293 @@
     <!-- ── 服务 ─────────────────────────────────────────────── -->
     <TabsContent value="services">
       <div class="flex flex-col gap-3">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between gap-3">
           <p class="text-xs text-muted-foreground">
             {t("adv.services.hint")}
           </p>
-          <PressButton variant="outline" onclick={openServiceAdd}>{t("adv.services.add")}</PressButton>
+          <span class="flex flex-none items-center gap-1.5">
+            <PressButton variant="ghost" onclick={openGroupAdd}>{t("adv.groups.add")}</PressButton>
+            <PressButton variant="outline" onclick={openServiceAdd}>{t("adv.services.add")}</PressButton>
+          </span>
         </div>
 
-        {#if app.busy.services && app.services.length === 0}
+        <!-- 服务行 snippet（统一服务视图 #4：组内/未分组共用） -->
+        {#snippet serviceRow(service: ServiceConfigView)}
+        {@const open = expanded.has(service.serviceId)}
+        <div class="border border-border bg-card shadow-2xs" transition:slide={{ duration: 150 }}>
+          <div class="flex flex-wrap items-center gap-2 px-3 py-2.5">
+            <button
+              type="button"
+              class="flex min-w-0 flex-1 items-center gap-2 text-left"
+              aria-expanded={open}
+              onclick={() => toggleExpanded(service.serviceId)}
+            >
+              <span
+                class="font-mono text-[10px] text-muted-foreground transition-transform {open ? 'rotate-90' : ''}"
+                aria-hidden="true"
+              >&#9656;</span>
+              <span class="truncate font-mono text-xs">{service.name}</span>
+              <Badge variant="outline">:{service.defaultPort}</Badge>
+              {#each groupsOfService.get(service.name) ?? [] as groupName (groupName)}
+                <Badge variant="tonal">{groupName}</Badge>
+              {/each}
+              {#if hasInjectedAuth(service)}
+                <Badge variant="tonal" class="jx-hue-info">{t("adv.services.keyInjected")}</Badge>
+              {/if}
+            </button>
+            <span class="flex items-center gap-1.5">
+              <PressButton
+                variant="ghost"
+                onclick={() => (serviceTestOpen = serviceTestOpen === service.serviceId ? null : service.serviceId)}
+              >{t("common.test")}</PressButton>
+              <PressButton variant="ghost" onclick={() => openServiceShare(service.name)}>{t("adv.services.share")}</PressButton>
+              <PressButton variant="ghost" onclick={() => openServiceEdit(service)}>{t("common.edit")}</PressButton>
+              {#if serviceRemove.confirm === service.name}
+                <PressButton
+                  variant="tonal"
+                  class="jx-pair-destructive"
+                  loading={serviceRemove.busy === service.name}
+                  onclick={() => void removeService(service.name)}
+                >{t("common.confirmRemove")}</PressButton>
+                <PressButton variant="ghost" onclick={() => (serviceRemove.confirm = "")}>{t("common.cancel")}</PressButton>
+              {:else}
+                <PressButton
+                  variant="ghost"
+                  onclick={() => (serviceRemove.confirm = service.name)}
+                >{t("common.remove")}</PressButton>
+              {/if}
+            </span>
+          </div>
+          {#if open}
+            <!-- detail 展开：upstream / match 全集 / rewrite（$env:/$secret: 注入值掩码） -->
+            <dl class="grid gap-x-6 gap-y-1.5 border-t border-border px-3 py-2.5 text-xs" transition:slide={{ duration: 150 }}>
+              <div class="flex gap-2">
+                <dt class="w-20 flex-none text-muted-foreground">{t("adv.services.upstream")}</dt>
+                <dd class="min-w-0 break-all font-mono">{service.upstream}</dd>
+              </div>
+              <div class="flex gap-2">
+                <dt class="w-20 flex-none text-muted-foreground">match ({service.match.length})</dt>
+                <dd class="flex min-w-0 flex-col gap-0.5 font-mono">
+                  {#each service.match as rule, i (`${service.serviceId}:${i}`)}
+                    <span class="break-all">{rule.type}: {rule.value}</span>
+                  {/each}
+                </dd>
+              </div>
+              {#if service.rewrite}
+                <div class="flex gap-2">
+                  <dt class="w-20 flex-none text-muted-foreground">{t("adv.services.rewrite")}</dt>
+                  <dd class="flex min-w-0 flex-col gap-0.5 font-mono">
+                    {#if service.rewrite.hostHeader}<span>host: {service.rewrite.hostHeader}</span>{/if}
+                    {#if service.rewrite.pathPrefixStrip}<span>strip: {service.rewrite.pathPrefixStrip}</span>{/if}
+                    {#if service.rewrite.pathPrefixAppend}<span>append: {service.rewrite.pathPrefixAppend}</span>{/if}
+                    {#each Object.entries(service.rewrite.headerSet ?? {}) as [name, value] (`${service.serviceId}:${name}`)}
+                      <span>header {name}: {typeof value === "string" ? maskSecret(value) : humanizeValue(value as string | { hook: string; args?: Record<string, string>; bearer?: boolean })}</span>
+                    {/each}
+                    {#each service.rewrite.headerRemove ?? [] as name (`${service.serviceId}:rm:${name}`)}
+                      <span>remove header {name}</span>
+                    {/each}
+                    {#if !service.rewrite.hostHeader && !service.rewrite.pathPrefixStrip && !service.rewrite.pathPrefixAppend && Object.keys(service.rewrite.headerSet ?? {}).length === 0 && (service.rewrite.headerRemove ?? []).length === 0}
+                      <span class="text-muted-foreground">{t("adv.services.noRewrite")}</span>
+                    {/if}
+                  </dd>
+                </div>
+              {:else}
+                <div class="flex gap-2">
+                  <dt class="w-20 flex-none text-muted-foreground">{t("adv.services.rewrite")}</dt>
+                  <dd class="font-mono text-muted-foreground">{t("adv.services.none")}</dd>
+                </div>
+              {/if}
+              <div class="flex gap-2">
+                <dt class="w-20 flex-none text-muted-foreground">id</dt>
+                <dd class="min-w-0 break-all font-mono text-muted-foreground">{service.serviceId}</dd>
+              </div>
+            </dl>
+          {/if}
+          {#if serviceTestOpen === service.serviceId}
+            <!-- 行内按标准路由测试（Owner 裁决 2026-09-11：与 connect ③ 同形；
+                 provider 直打 upstream——路由命中 + rewrite 注入，request.url
+                 = 改写后的上游 URL） -->
+            <div class="border-t border-border px-3 py-2.5" transition:slide={{ duration: 150 }}>
+              {#key service.serviceId}
+                <ServiceTestCard
+                  routes={(service.routes ?? []) as ServiceTestCardRoutes[]}
+                  upstream={service.upstream}
+                  busy={serviceTestBusy === service.serviceId}
+                  result={serviceTestResults[service.serviceId] ?? null}
+                  onsend={(payload) => void runServiceTest(service.name, payload)}
+                />
+              {/key}
+            </div>
+          {/if}
+        </div>
+        {/snippet}
+
+        {#if app.busy.services && app.services.length === 0 && app.groups.length === 0}
           <div class="flex flex-col gap-2">
             <Skeleton class="h-10" />
             <Skeleton class="h-10" />
           </div>
-        {:else if app.services.length === 0}
+        {:else if app.services.length === 0 && app.groups.length === 0}
           <Card scroll={false}>
             <p class="p-4 text-xs text-muted-foreground">
               {t("adv.services.empty")}
             </p>
           </Card>
         {:else}
-          <div class="flex flex-col gap-2">
-            {#each app.services as service (service.serviceId)}
-              {@const open = expanded.has(service.serviceId)}
-              <div class="border border-border bg-card shadow-2xs" transition:slide={{ duration: 150 }}>
-                <div class="flex flex-wrap items-center gap-2 px-3 py-2.5">
-                  <button
-                    type="button"
-                    class="flex min-w-0 flex-1 items-center gap-2 text-left"
-                    aria-expanded={open}
-                    onclick={() => toggleExpanded(service.serviceId)}
-                  >
-                    <span
-                      class="font-mono text-[10px] text-muted-foreground transition-transform {open ? 'rotate-90' : ''}"
-                      aria-hidden="true"
-                    >&#9656;</span>
-                    <span class="truncate font-mono text-xs">{service.name}</span>
-                    <Badge variant="outline">:{service.defaultPort}</Badge>
-                    {#each groupsOfService.get(service.name) ?? [] as groupName (groupName)}
-                      <Badge variant="tonal">{groupName}</Badge>
-                    {/each}
-                    {#if hasInjectedAuth(service)}
-                      <Badge variant="tonal" class="jx-hue-info">{t("adv.services.keyInjected")}</Badge>
-                    {/if}
-                  </button>
-                  <span class="flex items-center gap-1.5">
-                    <PressButton
-                      variant="ghost"
-                      onclick={() => (serviceTestOpen = serviceTestOpen === service.serviceId ? null : service.serviceId)}
-                    >{t("common.test")}</PressButton>
-                    <PressButton variant="ghost" onclick={() => openServiceShare(service.name)}>{t("adv.services.share")}</PressButton>
-                    <PressButton variant="ghost" onclick={() => openServiceEdit(service)}>{t("common.edit")}</PressButton>
-                    {#if serviceRemove.confirm === service.name}
-                      <PressButton
-                        variant="tonal"
-                        class="jx-pair-destructive"
-                        loading={serviceRemove.busy === service.name}
-                        onclick={() => void removeService(service.name)}
-                      >{t("common.confirmRemove")}</PressButton>
-                      <PressButton variant="ghost" onclick={() => (serviceRemove.confirm = "")}>{t("common.cancel")}</PressButton>
+          <!-- 统一服务视图（Owner 裁决 2026-09-13 #4）：分组 → 组内服务 → 组 keys -->
+          <div class="flex flex-col gap-3">
+            {#each app.groups as group (group.name)}
+              {@const groupServiceNames = group.serviceIds.map((id) => serviceNamesById.get(id) ?? id)}
+              {@const activeKeys = activeKeysByGroup.get(group.name) ?? 0}
+              <div class="border border-border bg-card px-3 py-2.5 shadow-2xs">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="font-mono text-xs">{group.name}</span>
+                  {#if group.limits?.maxConcurrency}
+                    <Badge variant="tonal" class="jx-hue-info">max {group.limits.maxConcurrency} concurrent</Badge>
+                  {/if}
+                  {#if group.limits?.dailyRequests}
+                    <Badge variant="tonal" class="jx-hue-info">{group.limits.dailyRequests}/day</Badge>
+                  {/if}
+                  {#if !group.limits?.maxConcurrency && !group.limits?.dailyRequests}
+                    <Badge variant="outline">{t("adv.groups.unlimited")}</Badge>
+                  {/if}
+                  <Badge variant="outline">{activeKeys} active {activeKeys === 1 ? "key" : "keys"}</Badge>
+                  <span class="ml-auto flex items-center gap-1.5">
+                    {#if groupEdit.open === group.name}
+                      <PressButton variant="ghost" onclick={() => (groupEdit.open = "")} class={groupEdit.busy ? "pointer-events-none opacity-50" : undefined}>{t("f.close")}</PressButton>
                     {:else}
                       <PressButton
                         variant="ghost"
-                        onclick={() => (serviceRemove.confirm = service.name)}
-                      >{t("common.remove")}</PressButton>
+                        onclick={() => openGroupEdit(group.name, groupServiceNames, group.limits)}
+                      >{t("common.edit")}</PressButton>
+                    {/if}
+                    {#if groupRemove.confirm === group.name}
+                      <PressButton
+                        variant="tonal"
+                        class="jx-pair-destructive"
+                        loading={groupRemove.busy === group.name}
+                        onclick={() => void removeGroup(group.name)}
+                      >{t("common.confirmRemove")}</PressButton>
+                      <PressButton variant="ghost" onclick={() => (groupRemove.confirm = "")}>{t("common.cancel")}</PressButton>
+                    {:else}
+                      <PressButton variant="ghost" onclick={() => (groupRemove.confirm = group.name)}>{t("common.remove")}</PressButton>
                     {/if}
                   </span>
                 </div>
-                {#if open}
-                  <!-- detail 展开：upstream / match 全集 / rewrite（$env:/$secret: 注入值掩码） -->
-                  <dl class="grid gap-x-6 gap-y-1.5 border-t border-border px-3 py-2.5 text-xs" transition:slide={{ duration: 150 }}>
-                    <div class="flex gap-2">
-                      <dt class="w-20 flex-none text-muted-foreground">{t("adv.services.upstream")}</dt>
-                      <dd class="min-w-0 break-all font-mono">{service.upstream}</dd>
+                <!-- 组内服务（统一视图 #4：完整服务行，非 chips） -->
+                <div class="mt-2 flex flex-col gap-2">
+                  {#each servicesOfGroup.get(group.name) ?? [] as service (service.serviceId)}
+                    {@render serviceRow(service)}
+                  {:else}
+                    <p class="text-[11px] text-muted-foreground">{t("f.noServices")}</p>
+                  {/each}
+                </div>
+                <!-- 组内 keys（Owner 2026-09-13 #4/#5：归组显示；key 名；
+                     原文随时可复制（旧记录无原文则标注）；新增带 key-name） -->
+                <div class="mt-1.5 flex flex-col gap-1 border-t border-border pt-1.5">
+                  <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">keys</span>
+                  {#each app.keys.filter((k) => k.group === group.name && k.revokedAt === undefined) as key (key.keyId)}
+                    <div class="flex flex-wrap items-center gap-2 pl-1">
+                      <span class="font-mono text-[11px]">{key.name ?? "(unnamed)"}</span>
+                      <code class="font-mono text-[10px] text-muted-foreground">{key.keyId.slice(0, 8)}</code>
+                      {#if key.key !== undefined}
+                        <PressButton
+                          variant="ghost"
+                          class="h-5 px-1.5 text-[10px]"
+                          onclick={() => void copyText(key.key ?? "")}
+                        >{t("common.copy")}</PressButton>
+                      {:else}
+                        <span class="text-[10px] text-muted-foreground">{t("adv.keys.legacy")}</span>
+                      {/if}
+                      {#if keyRevoke.confirm === key.keyId}
+                        <PressButton
+                          variant="tonal"
+                          class="jx-pair-destructive"
+                          loading={keyRevoke.busy === key.keyId}
+                          onclick={() => void revokeKey(key.keyId)}
+                        >{t("adv.keys.confirmRevoke")}</PressButton>
+                        <PressButton variant="ghost" onclick={() => (keyRevoke.confirm = "")}>{t("common.cancel")}</PressButton>
+                      {:else}
+                        <PressButton variant="ghost" class="h-5 px-1.5 text-[10px]" onclick={() => (keyRevoke.confirm = key.keyId)}>{t("common.remove")}</PressButton>
+                      {/if}
                     </div>
-                    <div class="flex gap-2">
-                      <dt class="w-20 flex-none text-muted-foreground">match ({service.match.length})</dt>
-                      <dd class="flex min-w-0 flex-col gap-0.5 font-mono">
-                        {#each service.match as rule, i (`${service.serviceId}:${i}`)}
-                          <span class="break-all">{rule.type}: {rule.value}</span>
-                        {/each}
-                      </dd>
+                  {:else}
+                    <span class="pl-1 text-[11px] text-muted-foreground">no keys</span>
+                  {/each}
+                  <div class="flex items-center gap-1.5 pl-1">
+                    <input
+                      class="w-28 border border-border bg-transparent px-2 py-1 font-mono text-[11px] focus:border-primary focus:outline-none"
+                      placeholder="key-name"
+                      autocapitalize="none"
+                      autocorrect="off"
+                      spellcheck={false}
+                      bind:value={keyNameDrafts[group.name]}
+                    />
+                    <PressButton
+                      variant="ghost"
+                      class="h-5 px-1.5 text-[10px]"
+                      onclick={() => {
+                        keyIssue.group = group.name;
+                        keyIssue.name = (keyNameDrafts[group.name] ?? "").trim() || "default";
+                        void issueKey();
+                      }}
+                    >+ key</PressButton>
+                  </div>
+                </div>
+                {#if groupEdit.open === group.name}
+                  <!-- 行内编辑：成员勾选 + 限额（保存走 setServices + setLimits，
+                       空限额 = 清除为无限） -->
+                  <div class="mt-2 flex flex-col gap-2 border-t border-border pt-2.5" transition:slide={{ duration: 150 }}>
+                    <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">{t("adv.groups.members")}</span>
+                    <div class="flex flex-wrap gap-x-5 gap-y-1.5">
+                      {#each app.services.map((service) => service.name) as name (name)}
+                        <label class="flex items-center gap-1.5 text-xs">
+                          <input
+                            type="checkbox"
+                            class="size-3.5 accent-[var(--primary)]"
+                            checked={groupEdit.draft.includes(name)}
+                            onchange={(event) => {
+                              const target = event.currentTarget;
+                              groupEdit.draft = target.checked
+                                ? [...groupEdit.draft, name]
+                                : groupEdit.draft.filter((item) => item !== name);
+                            }}
+                          />
+                          {name}
+                        </label>
+                      {:else}
+                        <span class="text-[11px] text-muted-foreground">
+                          add services first (the add-service form above).
+                        </span>
+                      {/each}
                     </div>
-                    {#if service.rewrite}
-                      <div class="flex gap-2">
-                        <dt class="w-20 flex-none text-muted-foreground">{t("adv.services.rewrite")}</dt>
-                        <dd class="flex min-w-0 flex-col gap-0.5 font-mono">
-                          {#if service.rewrite.hostHeader}<span>host: {service.rewrite.hostHeader}</span>{/if}
-                          {#if service.rewrite.pathPrefixStrip}<span>strip: {service.rewrite.pathPrefixStrip}</span>{/if}
-                          {#if service.rewrite.pathPrefixAppend}<span>append: {service.rewrite.pathPrefixAppend}</span>{/if}
-                          {#each Object.entries(service.rewrite.headerSet ?? {}) as [name, value] (`${service.serviceId}:${name}`)}
-                            <span>header {name}: {typeof value === "string" ? maskSecret(value) : humanizeValue(value)}</span>
-                          {/each}
-                          {#each service.rewrite.headerRemove ?? [] as name (`${service.serviceId}:rm:${name}`)}
-                            <span>remove header {name}</span>
-                          {/each}
-                          {#if !service.rewrite.hostHeader && !service.rewrite.pathPrefixStrip && !service.rewrite.pathPrefixAppend && Object.keys(service.rewrite.headerSet ?? {}).length === 0 && (service.rewrite.headerRemove ?? []).length === 0}
-                            <span class="text-muted-foreground">{t("adv.services.noRewrite")}</span>
-                          {/if}
-                        </dd>
-                      </div>
-                    {:else}
-                      <div class="flex gap-2">
-                        <dt class="w-20 flex-none text-muted-foreground">{t("adv.services.rewrite")}</dt>
-                        <dd class="font-mono text-muted-foreground">{t("adv.services.none")}</dd>
-                      </div>
-                    {/if}
-                    <div class="flex gap-2">
-                      <dt class="w-20 flex-none text-muted-foreground">id</dt>
-                      <dd class="min-w-0 break-all font-mono text-muted-foreground">{service.serviceId}</dd>
+                    <div class="grid gap-3 sm:grid-cols-2">
+                      <Input label={t("f.maxConcurrency")} placeholder="unlimited" bind:value={groupEdit.limitsConcurrency} />
+                      <Input label={t("f.dailyRequests")} placeholder="unlimited" bind:value={groupEdit.limitsDaily} />
                     </div>
-                  </dl>
-                {/if}
-                {#if serviceTestOpen === service.serviceId}
-                  <!-- 行内按标准路由测试（Owner 裁决 2026-09-11：与 connect ③ 同形；
-                       provider 直打 upstream——路由命中 + rewrite 注入，request.url
-                       = 改写后的上游 URL） -->
-                  <div class="border-t border-border px-3 py-2.5" transition:slide={{ duration: 150 }}>
-                    {#key service.serviceId}
-                      <ServiceTestCard
-                        routes={(service.routes ?? []) as ServiceTestCardRoutes[]}
-                        upstream={service.upstream}
-                        busy={serviceTestBusy === service.serviceId}
-                        result={serviceTestResults[service.serviceId] ?? null}
-                        onsend={(payload) => void runServiceTest(service.name, payload)}
-                      />
-                    {/key}
+                    <div class="flex items-center gap-1.5">
+                      <PressButton variant="fill" loading={groupEdit.busy} onclick={() => void submitGroupEdit()}>
+                        save changes
+                      </PressButton>
+                    </div>
+                    <ErrorAlert error={groupEdit.error} />
                   </div>
                 {/if}
               </div>
             {/each}
+            {#if ungroupedServices.length > 0}
+              <div class="border border-dashed border-border px-3 py-2.5">
+                <p class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">{t("adv.services.ungrouped")}</p>
+                <div class="mt-2 flex flex-col gap-2">
+                  {#each ungroupedServices as service (service.serviceId)}
+                    {@render serviceRow(service)}
+                  {/each}
+                </div>
+              </div>
+            {/if}
           </div>
         {/if}
+
         <ErrorAlert error={serviceRemove.error} />
 
         <!-- 服务增/改表单 -->
@@ -520,10 +714,26 @@
                   onclick={() => (serviceForm.match = [...serviceForm.match, { type: "suffix", value: "" }])}
                 >+ add rule</PressButton>
               </div>
-              <!-- 认证头取值（Owner 裁决 2026-09-13 + PM 方案 B）：单一选择器
-                   承载 无/密钥族/hook 脚本族（authHeader() 返回值显式绑定），
-                   keep 哨兵回显透传 CLI/预配置；旧 hooks 下拉是假控制已移除 -->
-              <AuthSourcePicker value={serviceForm.auth} onchange={(sel) => (serviceForm.auth = sel)} />
+              <!-- hooks 脚本选择（Owner 裁决 2026-09-13 #3 双控件）：先在此为
+                   服务激活脚本，下方"认证头"select 才出现对应条目 -->
+              <NativeSelect
+                label={t("f.hookscript.label")}
+                bind:value={hookScriptSel}
+                onchange={(event) => selectHooksScript(event.currentTarget.value)}
+              >
+                <option value="">{t("f.hookscript.none")}</option>
+                {#each hooksPanel.scripts as script (script.name)}
+                  <option value={script.name}>{script.name} ({script.fns.join(", ")})</option>
+                {/each}
+              </NativeSelect>
+              <p class="text-[11px] leading-relaxed text-muted-foreground">{t("f.hookscript.note")}</p>
+              <!-- 认证头取值（#3 双控件）：hook 条目只在上方激活了导出
+                   authHeader 的脚本时出现；keep 哨兵回显透传 CLI/预配置 -->
+              <AuthSourcePicker
+                value={serviceForm.auth}
+                onchange={(sel) => (serviceForm.auth = sel)}
+                hooksScript={serviceForm.hooksScript}
+              />
               <!-- 连通测试（M3 6.3）：自定义服务不传 apiForm（服务端缺省）/
                    presetId（无模型下拉），密钥取表单当前选择 -->
               <TestConnection
@@ -547,146 +757,7 @@
           </Card>
           <ErrorAlert error={serviceForm.error} />
         {/if}
-      </div>
-    </TabsContent>
 
-    <!-- ── 分组与限额（M3-acceptance ②：行卡片 = 名称 + 服务 chips + 限额
-         摘要 + active keys；edit 内联改成员与限额；remove 二次确认）── -->
-    <TabsContent value="groups">
-      <div class="flex flex-col gap-3">
-        <div class="flex items-center justify-between">
-          <p class="text-xs text-muted-foreground">
-            members and limits can be replaced any time; a group with active keys
-            must have them revoked before removal.
-          </p>
-          <PressButton variant="outline" onclick={openGroupAdd}>{t("adv.groups.add")}</PressButton>
-        </div>
-
-        {#if app.groups.length === 0 && !app.busy.groups}
-          <Card scroll={false}>
-            <p class="p-4 text-xs text-muted-foreground">{t("adv.groups.empty")}</p>
-          </Card>
-        {:else}
-          <div class="flex flex-col gap-2">
-            {#each app.groups as group (group.name)}
-              {@const groupServiceNames = group.serviceIds.map((id) => serviceNamesById.get(id) ?? id)}
-              {@const activeKeys = activeKeysByGroup.get(group.name) ?? 0}
-              <div class="border border-border bg-card px-3 py-2.5 shadow-2xs" transition:slide={{ duration: 150 }}>
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="font-mono text-xs">{group.name}</span>
-                  {#if group.limits?.maxConcurrency}
-                    <Badge variant="tonal" class="jx-hue-info">max {group.limits.maxConcurrency} concurrent</Badge>
-                  {/if}
-                  {#if group.limits?.dailyRequests}
-                    <Badge variant="tonal" class="jx-hue-info">{group.limits.dailyRequests}/day</Badge>
-                  {/if}
-                  {#if !group.limits?.maxConcurrency && !group.limits?.dailyRequests}
-                    <Badge variant="outline">{t("adv.groups.unlimited")}</Badge>
-                  {/if}
-                  <Badge variant="outline">{activeKeys} active {activeKeys === 1 ? "key" : "keys"}</Badge>
-                  <span class="ml-auto flex items-center gap-1.5">
-                    {#if groupEdit.open === group.name}
-                      <PressButton variant="ghost" onclick={() => (groupEdit.open = "")} class={groupEdit.busy ? "pointer-events-none opacity-50" : undefined}>{t("f.close")}</PressButton>
-                    {:else}
-                      <PressButton
-                        variant="ghost"
-                        onclick={() => openGroupEdit(group.name, groupServiceNames, group.limits)}
-                      >{t("common.edit")}</PressButton>
-                    {/if}
-                    {#if groupRemove.confirm === group.name}
-                      <PressButton
-                        variant="tonal"
-                        class="jx-pair-destructive"
-                        loading={groupRemove.busy === group.name}
-                        onclick={() => void removeGroup(group.name)}
-                      >{t("common.confirmRemove")}</PressButton>
-                      <PressButton variant="ghost" onclick={() => (groupRemove.confirm = "")}>{t("common.cancel")}</PressButton>
-                    {:else}
-                      <PressButton variant="ghost" onclick={() => (groupRemove.confirm = group.name)}>{t("common.remove")}</PressButton>
-                    {/if}
-                  </span>
-                </div>
-                <div class="mt-1.5 flex flex-wrap gap-1.5">
-                  {#each groupServiceNames as name (name)}
-                    <Badge variant="outline">{name}</Badge>
-                  {:else}
-                    <span class="text-[11px] text-muted-foreground">{t("f.noServices")}</span>
-                  {/each}
-                </div>
-                <!-- 组内 keys（Owner 视觉验收 2026-09-13 #3/#4：keys 归组管理；
-                     revoked 不再显示；一行一 key 的 list-item 布局，非内联 chips） -->
-                <div class="mt-1.5 flex flex-col gap-1 border-t border-border pt-1.5">
-                  <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">keys</span>
-                  {#each app.keys.filter((k) => k.group === group.name && k.revokedAt === undefined) as key (key.keyId)}
-                    <div class="flex items-center gap-2 pl-1">
-                      <code class="font-mono text-[11px]">{key.keyId.slice(0, 8)}</code>
-                      {#if keyRevoke.confirm === key.keyId}
-                        <PressButton
-                          variant="tonal"
-                          class="jx-pair-destructive"
-                          loading={keyRevoke.busy === key.keyId}
-                          onclick={() => void revokeKey(key.keyId)}
-                        >{t("adv.keys.confirmRevoke")}</PressButton>
-                        <PressButton variant="ghost" onclick={() => (keyRevoke.confirm = "")}>{t("common.cancel")}</PressButton>
-                      {:else}
-                        <PressButton variant="ghost" class="h-5 px-1.5 text-[10px]" onclick={() => (keyRevoke.confirm = key.keyId)}>{t("common.remove")}</PressButton>
-                      {/if}
-                    </div>
-                  {:else}
-                    <span class="pl-1 text-[11px] text-muted-foreground">no keys</span>
-                  {/each}
-                  <PressButton
-                    variant="ghost"
-                    class="h-5 self-start px-1.5 text-[10px]"
-                    onclick={() => {
-                      keyIssue.group = group.name;
-                      void issueKey();
-                    }}
-                  >+ key</PressButton>
-                </div>
-                {#if groupEdit.open === group.name}
-                  <!-- 行内编辑：名称只读（行头）；成员勾选 + 限额（保存走
-                       setServices + setLimits，空限额 = 清除为无限） -->
-                  <div class="mt-2 flex flex-col gap-2 border-t border-border pt-2.5" transition:slide={{ duration: 150 }}>
-                    <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">{t("adv.groups.members")}</span>
-                    <div class="flex flex-wrap gap-x-5 gap-y-1.5">
-                      {#each app.services.map((service) => service.name) as name (name)}
-                        <label class="flex items-center gap-1.5 text-xs">
-                          <input
-                            type="checkbox"
-                            class="size-3.5 accent-[var(--primary)]"
-                            checked={groupEdit.draft.includes(name)}
-                            onchange={(event) => {
-                              const target = event.currentTarget;
-                              groupEdit.draft = target.checked
-                                ? [...groupEdit.draft, name]
-                                : groupEdit.draft.filter((item) => item !== name);
-                            }}
-                          />
-                          {name}
-                        </label>
-                      {:else}
-                        <span class="text-[11px] text-muted-foreground">
-                          add services first (services tab or the share wizard).
-                        </span>
-                      {/each}
-                    </div>
-                    <div class="grid gap-3 sm:grid-cols-2">
-                      <Input label={t("f.maxConcurrency")} placeholder="unlimited" bind:value={groupEdit.limitsConcurrency} />
-                      <Input label={t("f.dailyRequests")} placeholder="unlimited" bind:value={groupEdit.limitsDaily} />
-                    </div>
-                    <div class="flex items-center gap-1.5">
-                      <PressButton variant="fill" loading={groupEdit.busy} onclick={() => void submitGroupEdit()}>
-                        save changes
-                      </PressButton>
-                    </div>
-                    <ErrorAlert error={groupEdit.error} />
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        {/if}
         <ErrorAlert error={groupRemove.error} />
 
         {#if groupForm.open}
@@ -737,8 +808,6 @@
       </div>
     </TabsContent>
 
-    <!-- ── 密钥 ─────────────────────────────────────────────── -->
-        <!-- ── 密钥库（provider 侧上游密钥，M3 6.1/6.2）─────────── -->
     <TabsContent value="secrets">
       <div class="flex flex-col gap-3">
         <Card title="secrets" scroll={false}>
@@ -967,27 +1036,8 @@
   </Tabs>
 </div>
 
-<!-- 密钥一次性原文 dialog（open 由 result 驱动；× / esc 关闭写回 open → 清 result） -->
-<Dialog bind:open={keyDialogOpen} title={t("adv.keys.dialogTitle")}>
-  {#if keyIssue.result !== null}
-    <div class="flex flex-col gap-3 p-4">
-      <Alert variant="tonal" class="jx-hue-warning" assertive title={t("adv.keys.dialogWarning")}>
-        {t("adv.keys.dialogBody")}
-        <code class="font-mono">aifly consumer key add</code>
-        {t("adv.keys.dialogCode")}
-      </Alert>
-      <CopyField value={keyIssue.result.key} label="key" />
-      <p class="text-[11px] text-muted-foreground">
-        key id <code class="font-mono">{keyIssue.result.keyId}</code>
-      </p>
-    </div>
-    {#snippet footer()}
-      <CardFooter label={t("adv.keys.dialogTitle")}>
-        <PressButton variant="fill" onclick={() => (keyIssue.result = null)}>{t("adv.keys.done")}</PressButton>
-      </CardFooter>
-    {/snippet}
-  {/if}
-</Dialog>
+<!-- key 一次性原文 dialog 已退役（Owner 2026-09-13 #5：原文随库，统一服务
+     视图 key 行随时复制，无 dialog 必要） -->
 
 <RelayPickerDialog bind:open={relayDialogOpen} />
 

@@ -8,7 +8,7 @@ import { call } from "./rpc.svelte.ts";
 import { toastRpcError, toastSuccess } from "./toast.svelte.ts";
 import { app, refresh } from "./app.svelte.ts";
 import { parsePositiveInt } from "./share-wizard.svelte.ts";
-import { authInput, authSelFromService, type AuthSel, type HeaderValue } from "$lib/auth-source.ts";
+import { authInput, authSelFromService, hooksField, hooksScriptFromService, type AuthSel, type HeaderValue } from "$lib/auth-source.ts";
 
 /** services.add 的输入类型（契约推导，保持单源）。 */
 type ServiceAddInput = Parameters<RpcClient["provider"]["services"]["add"]>[0];
@@ -30,9 +30,12 @@ export const serviceForm = $state({
   name: "",
   upstream: "",
   port: "",
-  /** 认证头取值（PM 方案 B：单一来源选择，取代旧 secretName+hooks 双字段；
-   *  keep 哨兵回显透传 CLI/预配置，编辑不再静默丢认证）。 */
+  /** 认证头取值（PM 方案 B：单一来源选择；keep 哨兵回显透传 CLI/预配置，
+   *  编辑不再静默丢认证）。 */
   auth: { kind: "none" } as AuthSel,
+  /** 服务激活的 hooks 脚本（Owner 裁决 2026-09-13 #3 双控件：先在此选
+   *  脚本，认证头 select 才出现对应条目；"" = 未激活）。 */
+  hooksScript: "",
   /** 编辑时的表单外字段透传（全量走查 2026-09-13：remove+add 重建会丢
    *  表单没覆盖的字段——routes 与 headerSet 的非 authorization 头原样带回）。 */
   passthrough: null as { routes?: ServiceAddInput["routes"]; headerRest?: Record<string, HeaderValue> } | null,
@@ -48,6 +51,7 @@ export function openServiceAdd(): void {
   serviceForm.upstream = "";
   serviceForm.port = "";
   serviceForm.auth = { kind: "none" };
+  serviceForm.hooksScript = "";
   serviceForm.passthrough = null;
   void loadHooks();
   serviceForm.match = [{ type: "suffix", value: "" }];
@@ -61,6 +65,7 @@ export function openServiceEdit(service: ServiceConfigView): void {
   serviceForm.upstream = service.upstream;
   serviceForm.port = String(service.defaultPort);
   serviceForm.auth = authSelFromService(service);
+  serviceForm.hooksScript = hooksScriptFromService(service);
   const { authorization, ...headerRest } = (service.rewrite?.headerSet ?? {}) as Record<string, HeaderValue>;
   serviceForm.passthrough = {
     ...(service.routes !== undefined && service.routes.length > 0 ? { routes: service.routes } : {}),
@@ -91,13 +96,15 @@ function serviceInput(): { ok: true; input: ServiceAddInput } | { ok: false; mes
   if (serviceForm.port.trim() !== "" && port === undefined) {
     return { ok: false, message: "port must be a positive integer" };
   }
-  // 认证头取值统一组装（none 清除 / secret / hook / keep 透传）；编辑时与
+  // 认证头取值统一组装（none 清除 / secret / hook / keep 透传）+ hooks
+  // 脚本字段（双控件：脚本选择优先，secret 认证补 "secret"）；编辑时与
   // 表单外字段合并——headerSet 其他头保留，authorization 由选择器决定
   const authParts = authInput(serviceForm.auth);
   const headerSet: Record<string, HeaderValue> = { ...(serviceForm.passthrough?.headerRest ?? {}) };
-  if (authParts.rewrite !== undefined) {
-    headerSet["authorization"] = authParts.rewrite.headerSet.authorization;
+  if (authParts.authorization !== undefined) {
+    headerSet["authorization"] = authParts.authorization;
   }
+  const hooks = hooksField(serviceForm.hooksScript, serviceForm.auth);
   return {
     ok: true,
     input: {
@@ -105,7 +112,7 @@ function serviceInput(): { ok: true; input: ServiceAddInput } | { ok: false; mes
       upstream,
       match,
       ...(port !== undefined ? { defaultPort: port } : {}),
-      ...(authParts.hooks !== undefined ? { hooks: authParts.hooks } : {}),
+      ...(hooks !== undefined ? { hooks } : {}),
       ...(serviceForm.passthrough?.routes !== undefined ? { routes: serviceForm.passthrough.routes } : {}),
       ...(Object.keys(headerSet).length > 0 ? { rewrite: { headerSet } } : {}),
     },
@@ -340,10 +347,10 @@ export async function removeGroup(name: string): Promise<void> {
 
 export const keyIssue = $state({
   group: "",
+  /** key 名（Owner 裁决 2026-09-13 #5：签发时必填；缺省 "default"）。 */
+  name: "default",
   busy: false,
   error: null as RpcError | null,
-  /** 一次性原文（dialog 展示 + 复制；关闭即弃）。 */
-  result: null as { keyId: string; key: string } | null,
 });
 
 export async function issueKey(): Promise<void> {
@@ -351,8 +358,10 @@ export async function issueKey(): Promise<void> {
   keyIssue.busy = true;
   keyIssue.error = null;
   try {
-    const result = await call((c) => c.provider.keys.issue({ group: keyIssue.group }));
-    keyIssue.result = { keyId: result.keyId, key: result.key };
+    await call((c) =>
+      c.provider.keys.issue({ group: keyIssue.group, name: keyIssue.name.trim() || "default" }),
+    );
+    // 原文随库可复制（#5）——不再弹一次性 dialog；分组视图 key 行直接可复制
     refresh("keys", "provider");
   } catch (error) {
     keyIssue.error = toRpcError(error);

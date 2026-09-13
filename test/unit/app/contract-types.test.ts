@@ -119,7 +119,8 @@ const checkChannels: AssertEqual<
 > = true;
 void checkChannels;
 
-/** keys.list 输出不含哈希（视图仅 keyId/group/createdAt/revokedAt?）。 */
+/** keys.list 输出不含哈希（Owner 2026-09-13 #5：视图含 name/key 原文，
+ *  随时可复制；旧记录两字段缺省）。 */
 type KeysListOutput = Awaited<ReturnType<Client["provider"]["keys"]["list"]>>;
 const checkKeys: AssertEqual<
   KeysListOutput,
@@ -129,6 +130,8 @@ const checkKeys: AssertEqual<
       group: string;
       createdAt: number;
       revokedAt?: number | undefined;
+      name?: string | undefined;
+      key?: string | undefined;
     }>;
   }
 > = true;

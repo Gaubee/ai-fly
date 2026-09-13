@@ -51,16 +51,18 @@ describe("ProviderStore 服务/分组/密钥往返", () => {
     expect(reopened.verifyKey(seeded.key)).toMatchObject({ status: "valid", keyId: seeded.keyId, group: "friends" });
   });
 
-  it("密钥原文不可逆：文件与 list 不含原文，仅哈希", () => {
+  it("key 原文随库可复制（Owner 裁决 2026-09-13：随时可取，取代旧不可逆语义）", () => {
     const seeded = seedBasic();
     const raw = readFileSync(ProviderStore.filePath(dir), "utf8");
-    expect(raw).not.toContain(seeded.key);
-    expect(raw).not.toContain("sk-aifly-");
-    expect(raw).toMatch(/"hash": "[0-9a-f]{64}"/);
-    for (const k of seeded.store.listKeys()) {
-      expect(Object.keys(k).sort()).toEqual(["createdAt", "group", "hash", "keyId"]);
+    expect(raw).toContain(seeded.key); // 原文落库（本机个人工具，与密钥库明文同威胁模型）
+    expect(raw).toMatch(/"hash": "[0-9a-f]{64}"/); // 哈希仍在（验证面不变）
+    const listed = seeded.store.listKeys();
+    for (const k of listed) {
+      expect(k.key).toBe(seeded.key);
+      expect(k.name).toBe("default");
     }
-    // 错误原文 -> invalid
+    expect(seeded.store.getKeyMaterial(listed[0]!.keyId)).toBe(seeded.key);
+    // 错误原文 -> invalid（验证不受原文落库影响）
     expect(seeded.store.verifyKey("sk-aifly-wrongwrongwrongwrongwrongwrongwrong")).toEqual({ status: "invalid" });
   });
 

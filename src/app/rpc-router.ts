@@ -51,12 +51,16 @@ function keyView(key: KeyRecord): {
   group: string;
   createdAt: number;
   revokedAt?: number;
+  name?: string;
+  key?: string;
 } {
   return {
     keyId: key.keyId,
     group: key.group,
     createdAt: key.createdAt,
     ...(key.revokedAt !== undefined ? { revokedAt: key.revokedAt } : {}),
+    ...(key.name !== undefined ? { name: key.name } : {}),
+    ...(key.key !== undefined ? { key: key.key } : {}),
   };
 }
 
@@ -248,7 +252,7 @@ export function createRpcRouter(deps: RpcRouterDeps) {
       },
       keys: {
         issue: rpc.provider.keys.issue.handler(({ input }) =>
-          host.providerStore().issueKey(input.group),
+          host.providerStore().issueKey(input.group, input.name),
         ),
         list: rpc.provider.keys.list.handler(() => ({
           keys: host.providerStore().listKeys().map(keyView),
@@ -319,6 +323,8 @@ export function createRpcRouter(deps: RpcRouterDeps) {
             invite,
             endpointId: daemon.endpointId,
             relayUrls: relayStatus.urls,
+            keyId: input.keyId,
+            keyName: input.keyName,
           });
           return { link: result.link, keyId: result.keyId, warnings: result.warnings };
         }),

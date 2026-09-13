@@ -43,8 +43,9 @@ export function hookAuthOptions(
     .map((s) => ({ script: s.name }));
 }
 
-/** 编辑回显：落库的 hooks × authorization → AuthSel（keep 兜底一切
- * 本表单不产生的形态）。 */
+/** 编辑回显：落库的 authorization → AuthSel（keep 兜底一切本表单不产生
+ *  的形态）。hooks 脚本选择（service.hooks）由表单单独回显——内置取值源
+ *  脚本（secret/env/file）不进 hooks 选择器，其绑定由密钥条目/keep 承载。 */
 export function authSelFromService(service: ServiceConfigView): AuthSel {
   const authorization = service.rewrite?.headerSet?.["authorization"] as HeaderValue | undefined;
   if (authorization === undefined) return { kind: "none" };
@@ -66,8 +67,13 @@ export function authSelFromService(service: ServiceConfigView): AuthSel {
   return { kind: "keep", label: "custom", hooks: service.hooks, authorization };
 }
 
+/** 编辑回显：service.hooks → hooks 脚本选择器的显示值（内置取值源归 ""）。 */
+export function hooksScriptFromService(service: ServiceConfigView): string {
+  return service.hooks !== undefined && !BUILTIN_VALUE_SCRIPTS.has(service.hooks) ? service.hooks : "";
+}
+
 /** 向导 ② 预选：预设携带的认证（presetAuth 型显式 hook 绑定；keyEnv 型
- * 降为 keep 哨兵承载 env 组装，用户可显式改选覆盖）。 */
+ *  降为 keep 哨兵承载 env 组装，用户可显式改选覆盖）。 */
 export function authSelFromPreset(preset: Preset): AuthSel {
   if (preset.authHeader !== undefined) {
     if (preset.hooks !== undefined && !BUILTIN_VALUE_SCRIPTS.has(preset.hooks)) {
@@ -86,38 +92,42 @@ export function authSelFromPreset(preset: Preset): AuthSel {
   return { kind: "none" };
 }
 
-/** 提交组装：AuthSel → services.add 输入的 hooks/rewrite 片段（none 同时
- * 清除两字段——编辑是 remove+add 重建，缺省即清除）。 */
+/** 向导 ② 预选：预设携带的 hooks 脚本（内置取值源归 ""）。 */
+export function hooksScriptFromPreset(preset: Preset): string {
+  return preset.hooks !== undefined && !BUILTIN_VALUE_SCRIPTS.has(preset.hooks) ? preset.hooks : "";
+}
+
+/** hooks 字段组装：表单的脚本选择优先；secret 认证补 "secret"；keep 透传
+ *  自带值；none 且未选脚本 → 不带（编辑重建即清除）。 */
+export function hooksField(
+  selectedScript: string,
+  sel: AuthSel,
+): string | undefined {
+  if (selectedScript !== "") return selectedScript;
+  if (sel.kind === "secret") return "secret";
+  if (sel.kind === "keep" && sel.hooks !== undefined && sel.hooks !== "") return sel.hooks;
+  return undefined;
+}
+
+/** 提交组装：AuthSel → authorization 片段（hooks 字段不在本函数——双控件
+ *  模型下由 hooksField 单独组装，Owner 裁决 2026-09-13 #3）。 */
 export function authInput(
   sel: AuthSel,
-): { hooks?: string; rewrite?: { headerSet: { authorization: HeaderValue } } } {
+): { authorization?: HeaderValue } {
   switch (sel.kind) {
     case "none":
       return {};
     case "secret":
-      return {
-        hooks: "secret",
-        rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: sel.name } } } },
-      };
+      return { authorization: { hook: "authHeader", args: { name: sel.name } } };
     case "hook":
       return {
-        hooks: sel.script,
-        rewrite: {
-          headerSet: {
-            authorization: {
-              hook: "authHeader",
-              ...(sel.bearer ? { bearer: true } : {}),
-            },
-          },
+        authorization: {
+          hook: "authHeader",
+          ...(sel.bearer ? { bearer: true } : {}),
         },
       };
     case "keep":
-      return {
-        ...(sel.hooks !== undefined && sel.hooks !== "" ? { hooks: sel.hooks } : {}),
-        ...(sel.authorization !== undefined
-          ? { rewrite: { headerSet: { authorization: sel.authorization } } }
-          : {}),
-      };
+      return sel.authorization !== undefined ? { authorization: sel.authorization } : {};
   }
 }
 

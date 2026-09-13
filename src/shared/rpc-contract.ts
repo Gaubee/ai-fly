@@ -134,12 +134,15 @@ export const GROUP_SCHEMA = z.strictObject({
   limits: GROUP_LIMITS_SCHEMA.optional(),
 });
 
-/** 密钥视图：keyId/分组/时间/状态；哈希与原文一律不进契约（原文仅 issue 时一次性返回）。 */
+/** 密钥视图：keyId/分组/时间/状态 + 名 + 原文（Owner 2026-09-13：随时可
+ *  复制——原文随库返回；旧记录只存哈希 → 两字段皆缺省）。 */
 export const KEY_VIEW_SCHEMA = z.strictObject({
   keyId: z.string().min(1).max(128),
   group: z.string().min(1).max(256),
   createdAt: z.number().int().min(0),
   revokedAt: z.number().int().min(0).optional(),
+  name: z.string().min(1).max(128).optional(),
+  key: z.string().min(8).max(256).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -357,6 +360,10 @@ export const SHARE_CREATE_INPUT_SCHEMA = z.strictObject({
   group: z.string().min(1).max(256),
   /** TTL 毫秒（1s..30d；缺省 60min——范围校验复用 link.ts 常量语义）。 */
   ttlMs: z.number().int().min(1_000).max(30 * 86_400_000).optional(),
+  /** 复用既有 key（现铸 invite 重发链接；缺省签发新钥）。 */
+  keyId: z.string().min(1).max(128).optional(),
+  /** 新钥名（缺省签发路径下默认 "default"）。 */
+  keyName: z.string().min(1).max(128).optional(),
 });
 
 const PRESET_APPLY_INPUT_SCHEMA = z.strictObject({
@@ -544,11 +551,11 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
         .output(z.object({ removed: z.literal(true) })),
     },
     keys: {
-      /** 签发（原文仅本次返回；此后只余哈希）。 */
+      /** 签发（name 缺省 "default"；原文随库可再取）。 */
       issue: oc
-        .input(z.strictObject({ group: z.string().min(1).max(256) }))
+        .input(z.strictObject({ group: z.string().min(1).max(256), name: z.string().min(1).max(128).optional() }))
         .output(z.object({ keyId: z.string(), key: z.string(), createdAt: z.number().int() })),
-      /** 密钥清单（无哈希、无原文）。 */
+      /** 密钥清单（含名与原文——本机 GUI 随时复制；无哈希）。 */
       list: oc.input(z.object({})).output(z.object({ keys: z.array(KEY_VIEW_SCHEMA) })),
       /** 撤销（幂等）。 */
       revoke: oc
