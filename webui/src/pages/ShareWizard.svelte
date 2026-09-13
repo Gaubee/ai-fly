@@ -24,9 +24,10 @@
   import { slide } from "svelte/transition";
   import StepHeader from "../components/StepHeader.svelte";
   import { t } from "$lib/i18n.svelte.ts";
+  import { authSelSummary } from "$lib/auth-source.ts";
   import ErrorAlert from "../components/ErrorAlert.svelte";
   import CopyField from "../components/CopyField.svelte";
-  import SecretPicker from "../components/SecretPicker.svelte";
+  import AuthSourcePicker from "../components/AuthSourcePicker.svelte";
   import GroupPicker from "../components/GroupPicker.svelte";
   import TestConnection from "../components/TestConnection.svelte";
   import {
@@ -459,21 +460,14 @@
           </AccordionItem>
         </Accordion>
 
-        <!-- 密钥选择器（本地运行时/自定义也显示：可选不选）+ 连通测试 -->
-        <SecretPicker value={share.secretName} onchange={(name) => (share.secretName = name)} />
-        <!-- 预设 hook 认证提示（全量视觉验收 2026-09-13：codex 预设无需
-             API 密钥——认证由 codex hook 读 ~/.codex/auth.json；不提示的话
-             分享者会误以为服务无认证） -->
-        {#if share.presetAuth !== undefined && share.secretName === undefined}
-          <p class="text-[11px] leading-relaxed text-primary">
-            {t("share.presetHookAuth", { hook: share.presetHooks ?? share.presetAuth.hook })}
-          </p>
-        {/if}
+        <!-- 认证头取值（PM 方案 B）：预设携带 → 预选（codex 型 hook 条目 /
+             env keep 哨兵），② 显式改选即覆盖（含改"无"）+ 连通测试 -->
+        <AuthSourcePicker value={share.auth} onchange={(sel) => (share.auth = sel)} />
 
         <TestConnection
           upstream={share.customUpstream.trim()}
           apiForm={selectedPreset?.apiForm}
-          secretName={share.secretName}
+          secretName={share.auth.kind === "secret" ? share.auth.name : undefined}
           presetId={share.mode === "preset" ? share.presetId : undefined}
         />
       </div>
@@ -517,15 +511,7 @@
             </div>
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
               <dt class="text-muted-foreground">{t("share.generate.auth")}</dt>
-              <dd class="font-mono">
-                {share.secretName !== undefined
-                  ? `secret:${share.secretName}`
-                  : share.presetAuth !== undefined
-                    ? `${share.presetHooks ?? share.presetAuth.hook} hook`
-                    : share.presetKeyEnv !== undefined
-                      ? `env:${share.presetKeyEnv}`
-                      : t("share.generate.authNone")}
-              </dd>
+              <dd class="font-mono">{authSelSummary(share.auth)}</dd>
             </div>
           </dl>
           <!-- 路由映射（M3-r6：分享时可见「from → upstream+to」行清单） -->
@@ -546,10 +532,10 @@
               </p>
             </div>
           {/if}
-          {#if share.secretName !== undefined}
+          {#if share.auth.kind === "secret"}
             <p class="text-[11px] leading-relaxed text-muted-foreground">
               {t("share.generate.secret")}
-              (<code class="font-mono">{share.secretName}</code>) - consumers only ever see
+              (<code class="font-mono">{share.auth.name}</code>) - consumers only ever see
               <code class="font-mono">&#9679;</code>.
             </p>
           {/if}

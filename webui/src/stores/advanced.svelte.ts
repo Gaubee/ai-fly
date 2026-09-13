@@ -8,6 +8,7 @@ import { call } from "./rpc.svelte.ts";
 import { toastRpcError, toastSuccess } from "./toast.svelte.ts";
 import { app, refresh } from "./app.svelte.ts";
 import { parsePositiveInt } from "./share-wizard.svelte.ts";
+import { authInput, authSelFromService, type AuthSel, type HeaderValue } from "$lib/auth-source.ts";
 
 /** services.add 的输入类型（契约推导，保持单源）。 */
 type ServiceAddInput = Parameters<RpcClient["provider"]["services"]["add"]>[0];
@@ -29,10 +30,12 @@ export const serviceForm = $state({
   name: "",
   upstream: "",
   port: "",
-  /** 选中的 hooks 脚本（"" = 无；选项来自 hooksPanel——表单打开时懒加载）。 */
-  hooks: "",
-  /** 选中密钥名（undefined = 不注入 authorization；$secret: 语法，M3 6.2）。 */
-  secretName: undefined as string | undefined,
+  /** 认证头取值（PM 方案 B：单一来源选择，取代旧 secretName+hooks 双字段；
+   *  keep 哨兵回显透传 CLI/预配置，编辑不再静默丢认证）。 */
+  auth: { kind: "none" } as AuthSel,
+  /** 编辑时的表单外字段透传（全量走查 2026-09-13：remove+add 重建会丢
+   *  表单没覆盖的字段——routes 与 headerSet 的非 authorization 头原样带回）。 */
+  passthrough: null as { routes?: ServiceAddInput["routes"]; headerRest?: Record<string, HeaderValue> } | null,
   match: [{ type: "suffix", value: "" }] as Array<{ type: string; value: string }>,
   busy: false,
   error: null as RpcError | null,
@@ -44,9 +47,9 @@ export function openServiceAdd(): void {
   serviceForm.name = "";
   serviceForm.upstream = "";
   serviceForm.port = "";
-  serviceForm.hooks = "";
+  serviceForm.auth = { kind: "none" };
+  serviceForm.passthrough = null;
   void loadHooks();
-  serviceForm.secretName = undefined;
   serviceForm.match = [{ type: "suffix", value: "" }];
   serviceForm.error = null;
 }
@@ -57,13 +60,13 @@ export function openServiceEdit(service: ServiceConfigView): void {
   serviceForm.name = service.name;
   serviceForm.upstream = service.upstream;
   serviceForm.port = String(service.defaultPort);
-  serviceForm.hooks = service.hooks ?? "";
+  serviceForm.auth = authSelFromService(service);
+  const { authorization, ...headerRest } = (service.rewrite?.headerSet ?? {}) as Record<string, HeaderValue>;
+  serviceForm.passthrough = {
+    ...(service.routes !== undefined && service.routes.length > 0 ? { routes: service.routes } : {}),
+    ...(Object.keys(headerRest).length > 0 ? { headerRest } : {}),
+  };
   void loadHooks();
-  const authorization = service.rewrite?.headerSet?.["authorization"];
-  serviceForm.secretName =
-    typeof authorization === "object" && authorization.args?.name !== undefined
-      ? authorization.args.name
-      : undefined;
   serviceForm.match = service.match.map((rule) => ({ type: rule.type, value: rule.value }));
   serviceForm.error = null;
 }
@@ -82,14 +85,19 @@ function serviceInput(): { ok: true; input: ServiceAddInput } | { ok: false; mes
     .map((rule) => ({ type: rule.type as "exact" | "suffix" | "regex", value: rule.value.trim() }))
     .filter((rule) => rule.value !== "");
   const port = parsePositiveInt(serviceForm.port);
-  const secretName = serviceForm.secretName?.trim();
   if (name === "") return { ok: false, message: "service name is required" };
   if (!/^https?:\/\//.test(upstream)) return { ok: false, message: "upstream must be an http(s) URL" };
   if (match.length === 0) return { ok: false, message: "at least one match rule is required" };
   if (serviceForm.port.trim() !== "" && port === undefined) {
     return { ok: false, message: "port must be a positive integer" };
   }
-  const hooks = serviceForm.hooks;
+  // 认证头取值统一组装（none 清除 / secret / hook / keep 透传）；编辑时与
+  // 表单外字段合并——headerSet 其他头保留，authorization 由选择器决定
+  const authParts = authInput(serviceForm.auth);
+  const headerSet: Record<string, HeaderValue> = { ...(serviceForm.passthrough?.headerRest ?? {}) };
+  if (authParts.rewrite !== undefined) {
+    headerSet["authorization"] = authParts.rewrite.headerSet.authorization;
+  }
   return {
     ok: true,
     input: {
@@ -97,12 +105,9 @@ function serviceInput(): { ok: true; input: ServiceAddInput } | { ok: false; mes
       upstream,
       match,
       ...(port !== undefined ? { defaultPort: port } : {}),
-      // 有密钥 → secret 脚本注入优先；否则用显式选择的 hooks 脚本
-      ...(secretName !== undefined && secretName !== ""
-        ? { hooks: "secret", rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: secretName } } } } }
-        : hooks !== ""
-          ? { hooks }
-          : {}),
+      ...(authParts.hooks !== undefined ? { hooks: authParts.hooks } : {}),
+      ...(serviceForm.passthrough?.routes !== undefined ? { routes: serviceForm.passthrough.routes } : {}),
+      ...(Object.keys(headerSet).length > 0 ? { rewrite: { headerSet } } : {}),
     },
   };
 }
@@ -118,8 +123,10 @@ export async function submitService(): Promise<void> {
   serviceForm.busy = true;
   serviceForm.error = null;
   try {
-    if (serviceForm.editingName !== "" && serviceForm.editingName !== parsed.input.name) {
-      // 改名：契约无 update，remove+add 序列（引擎校验同样兜底）
+    // 编辑 = remove + add 重建（契约无 update）。不限改名——同名编辑也必须
+    // 先 remove，否则 add 撞 CONFLICT（全量走查 2026-09-13 实证：旧条件
+    // `editingName !== name` 让同名保存必失败，编辑路径从未真正可用）。
+    if (serviceForm.editingName !== "") {
       await call((c) => c.provider.services.remove({ name: serviceForm.editingName }));
     }
     await call((c) => c.provider.services.add(parsed.input));

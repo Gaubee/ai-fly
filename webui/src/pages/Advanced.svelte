@@ -26,7 +26,7 @@
   import { slide } from "svelte/transition";
   import ErrorAlert from "../components/ErrorAlert.svelte";
   import CopyField from "../components/CopyField.svelte";
-  import SecretPicker from "../components/SecretPicker.svelte";
+  import AuthSourcePicker from "../components/AuthSourcePicker.svelte";
   import ServiceTestCard from "../components/ServiceTestCard.svelte";
   import type { ServiceRouteView as ServiceTestCardRoutes, RouteTestOutput } from "../stores/connect-wizard.svelte.ts";
   import type { RouteForm } from "$shared/rpc-contract.ts";
@@ -111,7 +111,7 @@
   });
 
   // ── 密钥库区（M3 6.1）：页面内联卡（非 dialog）──────────────────────
-  // 共享 store 只持名称名单（SecretPicker 用）；本区另持带时间戳的行
+  // 共享 store 只持名称名单（AuthSourcePicker/密钥库区用）；本区另持带时间戳的行
   // （契约回 name/createdAt/updatedAt/bearerPrefix，值不跨 RPC 亦不回显）。
   interface SecretRow {
     name: string;
@@ -520,30 +520,16 @@
                   onclick={() => (serviceForm.match = [...serviceForm.match, { type: "suffix", value: "" }])}
                 >+ add rule</PressButton>
               </div>
-              <!-- 密钥选择器（M3 6.2）：$env 变量名 → 本机密钥库；提交写 $secret: -->
-              <SecretPicker
-                value={serviceForm.secretName}
-                onchange={(name) => (serviceForm.secretName = name)}
-              />
-              <!-- hooks 脚本选择器（Owner 视觉验收 2026-09-12）：无密钥选择时生效 -->
-              <div class="flex items-center gap-2">
-                <span class="w-24 flex-none font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">hooks</span>
-                <div class="w-72">
-                  <Select
-                    options={[
-                      { value: "", label: "none" },
-                      ...hooksPanel.scripts.map((h) => ({
-                        value: h.name,
-                        label: `${h.name} (${h.fns.join(", ")})`,
-                      })),
-                    ]}
-                    bind:value={serviceForm.hooks}
-                  />
-                </div>
-              </div>
+              <!-- 认证头取值（Owner 裁决 2026-09-13 + PM 方案 B）：单一选择器
+                   承载 无/密钥族/hook 脚本族（authHeader() 返回值显式绑定），
+                   keep 哨兵回显透传 CLI/预配置；旧 hooks 下拉是假控制已移除 -->
+              <AuthSourcePicker value={serviceForm.auth} onchange={(sel) => (serviceForm.auth = sel)} />
               <!-- 连通测试（M3 6.3）：自定义服务不传 apiForm（服务端缺省）/
                    presetId（无模型下拉），密钥取表单当前选择 -->
-              <TestConnection upstream={serviceForm.upstream} secretName={serviceForm.secretName} />
+              <TestConnection
+                upstream={serviceForm.upstream}
+                secretName={serviceForm.auth.kind === "secret" ? serviceForm.auth.name : undefined}
+              />
               {#if serviceForm.editingName !== ""}
                 <p class="text-[11px] text-muted-foreground">
                   editing re-creates the service (remove + add) - group membership is preserved by name.
