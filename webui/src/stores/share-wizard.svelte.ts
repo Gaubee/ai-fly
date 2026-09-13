@@ -120,8 +120,6 @@ export const share = $state({
   /** 在途阶段（'' | 'service' | 'group' | 'daemon' | 'key'）。 */
   busy: "",
   error: null as RpcError | null,
-  /** 链接现铸缓存（keyId → link；复制时逐 key 调 share.create）。 */
-  links: {} as Record<string, string>,
 });
 
 /** 重置向导（进入页面/完成后重新开始）。 */
@@ -144,7 +142,6 @@ export function resetShare(): void {
   share.ttlMs = TTL_OPTIONS[0]!.ttlMs;
   share.busy = "";
   share.error = null;
-  share.links = {};
 }
 
 /** ① 选择预设 → 展开预填 ②（M3-r5：预设 = 预填的 Custom，一切可改）并前进。 */
@@ -357,7 +354,7 @@ async function ensureGroupWithService(serviceName: string): Promise<void> {
 /**
  * ③ 进入 group 视图（Owner 裁决 2026-09-13 #6）：服务 → 分组 → daemon →
  * 保底 key（组内无活跃 key 则自动签发 "default"）。不在此铸造链接——
- * 链接按 key 现铸（mintShareLink）。重进 ③ 幂等：服务已存在则跳过 add。
+ * 链接铸造收敛在 GroupKeysPanel 的分享 Dialog。
  */
 export async function enterGroupView(): Promise<void> {
   if (share.busy !== "" || share.step !== 3) return;
@@ -408,44 +405,6 @@ export async function enterGroupView(): Promise<void> {
   } catch (error) {
     share.error = toRpcError(error);
     toastRpcError(share.error);
-  } finally {
-    share.busy = "";
-  }
-}
-
-/** ③ 新增 key（带 key-name；Owner #5/#6）。 */
-export async function addGroupKey(name: string): Promise<void> {
-  if (share.busy !== "") return;
-  share.error = null;
-  share.busy = "key";
-  try {
-    await call((c) =>
-      c.provider.keys.issue({ group: share.groupName, name: name.trim() || "default" }),
-    );
-    refresh("keys");
-  } catch (error) {
-    share.error = toRpcError(error);
-    toastRpcError(share.error);
-  } finally {
-    share.busy = "";
-  }
-}
-
-/** ③ 为指定 key 现铸分享链接（invite 每次新铸；key 原文复用）。 */
-export async function mintShareLink(keyId: string): Promise<string | null> {
-  if (share.busy !== "") return null;
-  share.error = null;
-  share.busy = "share";
-  try {
-    const result = await call((c) =>
-      c.provider.share.create({ group: share.groupName, ttlMs: share.ttlMs, keyId }),
-    );
-    share.links = { ...share.links, [keyId]: result.link };
-    return result.link;
-  } catch (error) {
-    share.error = toRpcError(error);
-    toastRpcError(share.error);
-    return null;
   } finally {
     share.busy = "";
   }

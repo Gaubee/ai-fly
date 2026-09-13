@@ -29,6 +29,7 @@
   import CopyField from "../components/CopyField.svelte";
   import AuthSourcePicker from "../components/AuthSourcePicker.svelte";
   import GroupPicker from "../components/GroupPicker.svelte";
+  import GroupKeysPanel from "../components/GroupKeysPanel.svelte";
   import TestConnection from "../components/TestConnection.svelte";
   import {
     app,
@@ -46,8 +47,6 @@
     shareBack,
     namingNext,
     enterGroupView,
-    addGroupKey,
-    mintShareLink,
     TTL_OPTIONS,
     updateRouteFrom,
     toggleRouteBound,
@@ -78,27 +77,7 @@
     if (share.step === 3) untrack(() => void enterGroupView());
   });
 
-  /** ③ 新增 key 的名字草稿。 */
-  let wizardKeyDraft = $state("");
-
   /** key 原文/链接复制。 */
-  async function copyText(text: string): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const area = document.createElement("textarea");
-      area.value = text;
-      document.body.append(area);
-      area.select();
-      document.execCommand("copy");
-      area.remove();
-    }
-  }
-
-  async function copyKeyLink(keyId: string): Promise<void> {
-    const link = share.links[keyId] ?? (await mintShareLink(keyId));
-    if (link !== null) await copyText(link);
-  }
 
   onMount(() => {
     void loadHooks();
@@ -333,6 +312,8 @@
              disabled（命名唯一性与端口冲突判定以分组为前提）；分组选择
              不再门控 route paths——两者独立 -->
         <div class="grid gap-3 sm:grid-cols-2">
+          <!-- Owner 2026-09-13 #2：分组排服务名前（先定组；未选组时服务名 disabled） -->
+          <GroupPicker value={share.groupName || undefined} onchange={(name) => (share.groupName = name ?? "")} />
           <Input
             label={t("share.name.label")}
             placeholder={share.mode === "preset" ? share.name : t("share.name.ph")}
@@ -342,8 +323,6 @@
             spellcheck={false}
             bind:value={share.name}
           />
-          <!-- 分组选择器（M3-r3 ①）：manage groups… 弹窗承载新建/编辑/删除 -->
-          <GroupPicker value={share.groupName || undefined} onchange={(name) => (share.groupName = name ?? "")} />
         </div>
         {#if share.groupName !== ""}
           <p class="text-[11px] text-muted-foreground">
@@ -497,6 +476,13 @@
           hooksScript={share.hooksScript}
         />
 
+        <TestConnection
+          upstream={share.customUpstream.trim()}
+          apiForm={selectedPreset?.apiForm}
+          secretName={share.auth.kind === "secret" ? share.auth.name : undefined}
+          presetId={share.mode === "preset" ? share.presetId : undefined}
+        />
+
         <!-- {t('share.advanced')}（M3-acceptance ③：ghost accordion，默认折叠——
              default consumer port + match domains；路由已按 Owner 裁决
              提升主面板） -->
@@ -533,17 +519,6 @@
       </div>
       {#snippet foot()}
         <CardFooter label="share wizard actions">
-          {#snippet start()}
-            <!-- Owner 2026-09-13 #5：连通测试入 CardFooter inline-start 座 -->
-            <div class="max-w-[26rem]">
-                      <TestConnection
-          upstream={share.customUpstream.trim()}
-          apiForm={selectedPreset?.apiForm}
-          secretName={share.auth.kind === "secret" ? share.auth.name : undefined}
-          presetId={share.mode === "preset" ? share.presetId : undefined}
-        />
-            </div>
-          {/snippet}
           <PressButton variant="ghost" onclick={shareBack} class={share.busy !== "" ? "pointer-events-none opacity-50" : undefined}>back</PressButton>
           <PressButton
             variant="fill"
@@ -583,68 +558,9 @@
           </div>
         </dl>
 
-        <!-- keys：一行一 key（名 + 复制原文 + 现铸链接复制） -->
-        <div class="flex flex-col gap-1.5">
-          <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-            {t("share.groupview.keys")}
-          </span>
-          {#if share.busy !== "" && share.busy !== "share"}
-            <p class="text-[11px] text-muted-foreground">{t("share.busy." + (share.busy === "key" ? "share" : share.busy))}</p>
-          {/if}
-          {#each app.keys.filter((k) => k.group === share.groupName && k.revokedAt === undefined) as key (key.keyId)}
-            <div class="flex flex-wrap items-center gap-2 border border-border/70 px-2.5 py-1.5">
-              <span class="font-mono text-xs">{key.name ?? "(unnamed)"}</span>
-              <code class="font-mono text-[10px] text-muted-foreground">{key.keyId.slice(0, 8)}</code>
-              <!-- Owner 裁决 2026-09-13：分享主体 = Group with key——key 行
-                   复制产物是完整 aifly1. 链接（原 key 复制按钮删除） -->
-              {#if key.key !== undefined}
-                <PressButton
-                  variant="ghost"
-                  class="h-5 px-1.5 text-[10px]"
-                  loading={share.busy === "share"}
-                  onclick={() => void copyKeyLink(key.keyId)}
-                >{t("share.groupview.copyLink")}</PressButton>
-              {:else}
-                <span class="text-[10px] text-muted-foreground">{t("adv.keys.legacy")}</span>
-              {/if}
-              {#if share.links[key.keyId] !== undefined}
-                <span class="text-[10px] text-primary">{t("share.groupview.linkReady")}</span>
-              {/if}
-            </div>
-          {:else}
-            {#if share.busy === ""}
-              <p class="text-[11px] text-muted-foreground">{t("share.groupview.noKeys")}</p>
-            {/if}
-          {/each}
-          <!-- 新增 key（Owner #5：带 key-name） -->
-          <div class="flex items-center gap-1.5">
-            <input
-              class="w-32 border border-border bg-transparent px-2 py-1 font-mono text-[11px] focus:border-primary focus:outline-none"
-              placeholder="key-name"
-              autocapitalize="none"
-              autocorrect="off"
-              spellcheck={false}
-              bind:value={wizardKeyDraft}
-            />
-            <PressButton
-              variant="ghost"
-              class="h-5 px-1.5 text-[10px]"
-              loading={share.busy === "key"}
-              onclick={() => {
-                void addGroupKey(wizardKeyDraft);
-                wizardKeyDraft = "";
-              }}
-            >{t("share.groupview.addKey")}</PressButton>
-          </div>
-        </div>
-
-        <div class="max-w-56">
-          <Select
-            label={t("share.ttl.label")}
-            options={TTL_OPTIONS.map((option) => ({ value: String(option.ttlMs), label: option.label }))}
-            bind:value={ttlSel}
-          />
-        </div>
+        <!-- 组内 keys（Owner #4：与高级页同一 GroupKeysPanel/同一数据源；
+             分享（TTL→生成→复制）收敛进面板内 Dialog） -->
+        <GroupKeysPanel group={share.groupName} />
         <Alert variant="tonal" title={t("share.credential.title")}>
           {t("share.credential.body")}
         </Alert>

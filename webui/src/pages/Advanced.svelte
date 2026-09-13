@@ -23,12 +23,12 @@
   import Tabs, { TabsList, TabsTrigger, TabsContent } from "$lib/ui/tabs";
   import Dialog from "$lib/ui/dialog";
   import { toRpcError } from "$lib/rpc-client";
-  import { TTL_OPTIONS } from "../stores/share-wizard.svelte.ts";
   import type { ServiceConfigView } from "$shared/rpc-contract.ts";
   import { slide } from "svelte/transition";
   import ErrorAlert from "../components/ErrorAlert.svelte";
   import CopyField from "../components/CopyField.svelte";
   import AuthSourcePicker from "../components/AuthSourcePicker.svelte";
+  import GroupKeysPanel from "../components/GroupKeysPanel.svelte";
   import ServiceTestCard from "../components/ServiceTestCard.svelte";
   import type { ServiceRouteView as ServiceTestCardRoutes, RouteTestOutput } from "../stores/connect-wizard.svelte.ts";
   import type { RouteForm } from "$shared/rpc-contract.ts";
@@ -49,9 +49,6 @@
     removeHookScript,
     hookView,
     openHookView,
-    groupLink,
-    copyGroupKeyLink,
-    groupLinkTtl,
     openServiceAdd,
     openServiceEdit,
     closeServiceForm,
@@ -66,10 +63,6 @@
     submitGroupEdit,
     groupRemove,
     removeGroup,
-    keyIssue,
-    issueKey,
-    keyRevoke,
-    revokeKey,
     relayForm,
     initRelayForm,
     saveRelay,
@@ -80,18 +73,6 @@
   let tab = $state("services");
   /** 服务行展开集合（detail：upstream/match 全集/rewrite；$env 值显示 ●）。 */
   let expanded = $state(new Set<string>());
-  /** 组内新增 key 的名字草稿（组名 → key-name；空 = "default"）。 */
-  let keyNameDrafts = $state<Record<string, string>>({});
-  /** 组 keys 区的链接 TTL 草稿（select 字符串值 → 提交时转数值）。 */
-  let ttlDrafts = $state<Record<string, string>>({});
-  $effect(() => {
-    const next: Record<string, number> = {};
-    for (const [name, value] of Object.entries(ttlDrafts)) {
-      const parsed = Number.parseInt(value, 10);
-      if (Number.isFinite(parsed)) next[name] = parsed;
-    }
-    groupLinkTtl.drafts = next;
-  });
   /** 服务表单 hooks 脚本选择的显示值（NativeSelect bind 用；联动走 store）。 */
   let hookScriptSel = $state("");
   $effect(() => {
@@ -550,69 +531,8 @@
                     <p class="text-[11px] text-muted-foreground">{t("f.noServices")}</p>
                   {/each}
                 </div>
-                <!-- 组内 keys（Owner 2026-09-13 #4/#5：归组显示；key 名；
-                     原文随时可复制（旧记录无原文则标注）；新增带 key-name） -->
-                <div class="mt-1.5 flex flex-col gap-1 border-t border-border pt-1.5">
-                  <span class="flex items-center justify-between gap-2">
-                    <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">keys</span>
-                    <Select
-                      options={TTL_OPTIONS.map((o) => ({ value: String(o.ttlMs), label: o.label }))}
-                      bind:value={ttlDrafts[group.name]}
-                    />
-                  </span>
-                  {#each app.keys.filter((k) => k.group === group.name && k.revokedAt === undefined) as key (key.keyId)}
-                    <div class="flex flex-wrap items-center gap-2 pl-1">
-                      <span class="font-mono text-[11px]">{key.name ?? "(unnamed)"}</span>
-                      <code class="font-mono text-[10px] text-muted-foreground">{key.keyId.slice(0, 8)}</code>
-                      {#if key.key !== undefined}
-                        <PressButton
-                          variant="ghost"
-                          class="h-5 px-1.5 text-[10px]"
-                          loading={groupLink.busy}
-                          onclick={() =>
-                            void copyGroupKeyLink(group.name, key.keyId, groupLinkTtl.drafts[group.name] ?? 30 * 86_400_000)}
-                        >{t("share.groupview.copyLink")}</PressButton>
-                        {#if groupLink.links[key.keyId] !== undefined}
-                          <span class="text-[10px] text-primary">{t("share.groupview.linkReady")}</span>
-                        {/if}
-                      {:else}
-                        <span class="text-[10px] text-muted-foreground">{t("adv.keys.legacy")}</span>
-                      {/if}
-                      {#if keyRevoke.confirm === key.keyId}
-                        <PressButton
-                          variant="tonal"
-                          class="jx-pair-destructive"
-                          loading={keyRevoke.busy === key.keyId}
-                          onclick={() => void revokeKey(key.keyId)}
-                        >{t("adv.keys.confirmRevoke")}</PressButton>
-                        <PressButton variant="ghost" onclick={() => (keyRevoke.confirm = "")}>{t("common.cancel")}</PressButton>
-                      {:else}
-                        <PressButton variant="ghost" class="h-5 px-1.5 text-[10px]" onclick={() => (keyRevoke.confirm = key.keyId)}>{t("common.remove")}</PressButton>
-                      {/if}
-                    </div>
-                  {:else}
-                    <span class="pl-1 text-[11px] text-muted-foreground">no keys</span>
-                  {/each}
-                  <div class="flex items-center gap-1.5 pl-1">
-                    <input
-                      class="w-28 border border-border bg-transparent px-2 py-1 font-mono text-[11px] focus:border-primary focus:outline-none"
-                      placeholder="key-name"
-                      autocapitalize="none"
-                      autocorrect="off"
-                      spellcheck={false}
-                      bind:value={keyNameDrafts[group.name]}
-                    />
-                    <PressButton
-                      variant="ghost"
-                      class="h-5 px-1.5 text-[10px]"
-                      onclick={() => {
-                        keyIssue.group = group.name;
-                        keyIssue.name = (keyNameDrafts[group.name] ?? "").trim() || "default";
-                        void issueKey();
-                      }}
-                    >+ key</PressButton>
-                  </div>
-                </div>
+                <!-- 组内 keys（#4：与分享向导③同一组件同一数据源 app.keys） -->
+                <GroupKeysPanel group={group.name} />
                 {#if groupEdit.open === group.name}
                   <!-- 行内编辑：成员勾选 + 限额（保存走 setServices + setLimits，
                        空限额 = 清除为无限） -->
