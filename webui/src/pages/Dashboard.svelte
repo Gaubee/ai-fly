@@ -10,6 +10,7 @@
   import Badge from "$lib/ui/badge";
   import PressButton from "$lib/ui/press-button";
   import Skeleton from "$lib/ui/skeleton";
+  import { Item, ItemGroup, ItemContent, ItemTitle, ItemDescription, ItemEnd, ItemActions } from "$lib/ui/list-item";
   import { t } from "$lib/i18n.svelte.ts";
   import Separator from "$lib/ui/separator";
   import { slide } from "svelte/transition";
@@ -310,49 +311,56 @@
               import a share link ->
             </a>
           {:else}
-            {#each consumer.providers as entry (entry.endpointId)}
-              {@const ringEnabled = ringEnabledById.get(entry.endpointId) ?? true}
-              <div class="flex flex-col gap-1 border border-border/70 px-2.5 py-2" transition:slide={{ duration: 150 }}>
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="font-mono text-xs" class:opacity-60={!ringEnabled}>{entry.alias}</span>
-                  <StateBadge state={entry.state} />
-                  {#if !ringEnabled}
-                    <span class="rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{t("dash.prov.stoppedBadge")}</span>
-                  {/if}
-                  <PressButton
-                    variant="ghost"
-                    class="text-[11px]"
-                    loading={providerBusy === entry.endpointId}
-                    onclick={() => void toggleProviderRing(entry.endpointId, entry.alias, ringEnabled)}
-                  >{ringEnabled ? t("dash.prov.stop") : t("dash.prov.start")}</PressButton>
-                  <span class="ml-auto font-mono text-[11px] text-muted-foreground">
-                    {Object.keys(entry.ports).length} port(s) - {entry.servedCount} served
-                  </span>
-                </div>
-                {#if entry.lastError}
-                  <p class="truncate font-mono text-[11px] text-muted-foreground" title={entry.lastError}>
-                    last error: {entry.lastError}
-                  </p>
-                {/if}
-                {#if forgetConfirm === entry.endpointId}
-                  <div class="flex items-center gap-2">
-                    <span class="text-[11px] text-muted-foreground">{t("dash.forgetConfirm")}</span>
-                    <PressButton variant="tonal" class="jx-pair-destructive" loading={forgetBusy} onclick={() => void forgetProvider(entry.endpointId)}>
-                      confirm forget
-                    </PressButton>
-                    <PressButton variant="ghost" onclick={() => (forgetConfirm = "")}>{t("common.cancel")}</PressButton>
-                  </div>
-                {:else}
-                  <button
-                    type="button"
-                    class="self-start text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                    onclick={() => (forgetConfirm = entry.endpointId)}
-                  >
-                    forget
-                  </button>
-                {/if}
-              </div>
-            {/each}
+            <ItemGroup class="m-3">
+              {#each consumer.providers as entry (entry.endpointId)}
+                {@const ringEnabled = ringEnabledById.get(entry.endpointId) ?? true}
+                <Item>
+                  <ItemContent>
+                    <ItemTitle>
+                      <span class="font-mono" class:opacity-60={!ringEnabled}>{entry.alias}</span>
+                      <StateBadge state={entry.state} />
+                      {#if !ringEnabled}
+                        <span class="rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{t("dash.prov.stoppedBadge")}</span>
+                      {/if}
+                    </ItemTitle>
+                    <ItemDescription class="font-mono">
+                      {#if forgetConfirm === entry.endpointId}
+                        {t("dash.forgetConfirm")}
+                      {:else if entry.lastError}
+                        last error: {entry.lastError}
+                      {:else}
+                        {entry.endpointId}
+                      {/if}
+                    </ItemDescription>
+                  </ItemContent>
+                  <ItemEnd wrap="never">
+                    <span class="font-mono text-[11px] text-muted-foreground">
+                      {Object.keys(entry.ports).length} port(s) - {entry.servedCount} served
+                    </span>
+                  </ItemEnd>
+                  <ItemActions label={t("dash.prov.actionsLabel")}>
+                    {#if forgetConfirm === entry.endpointId}
+                      <PressButton variant="tonal" class="jx-pair-destructive" loading={forgetBusy} onclick={() => void forgetProvider(entry.endpointId)}>
+                        confirm forget
+                      </PressButton>
+                      <PressButton variant="ghost" onclick={() => (forgetConfirm = "")}>{t("common.cancel")}</PressButton>
+                    {:else}
+                      <PressButton
+                        variant="ghost"
+                        class="text-[11px]"
+                        onclick={() => (forgetConfirm = entry.endpointId)}
+                      >forget</PressButton>
+                    {/if}
+                    <PressButton
+                      variant="ghost"
+                      class="text-[11px]"
+                      loading={providerBusy === entry.endpointId}
+                      onclick={() => void toggleProviderRing(entry.endpointId, entry.alias, ringEnabled)}
+                    >{ringEnabled ? t("dash.prov.stop") : t("dash.prov.start")}</PressButton>
+                  </ItemActions>
+                </Item>
+              {/each}
+            </ItemGroup>
           {/if}
         </div>
         {#snippet foot()}

@@ -71,6 +71,7 @@ export const zh: Record<string, string> = {
   "dash.prov.stop": "终止提供方",
   "dash.prov.start": "启动提供方",
   "dash.prov.stoppedBadge": "已停用",
+  "dash.prov.actionsLabel": "提供方操作",
   "dash.prov.stoppedToast": "提供方已终止（全部服务）",
   "dash.prov.startedToast": "提供方已启动",
   "dash.ports.removedToast": "服务已移除",

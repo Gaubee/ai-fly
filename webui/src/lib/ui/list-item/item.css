@@ -1,0 +1,784 @@
+@layer theme, base, components, utilities;
+
+/*
+ * jixoai Item family css (registry/files/ui/list-item/item.css,
+ * openspec list-item-systemization design §4–§5, 2026-08-25).
+ *
+ * STAMPED-ATTRIBUTE PAINTING: css paints what the components
+ * resolved and stamped (data-item-chrome/data-layout/data-density/
+ * data-selected on rows; data-mode/data-inset/… on the group frame;
+ * data-dividers on the ul). It NEVER infers chrome from descendant
+ * context; group rules are direct-child only.
+ *
+ * The presence matrix keys off FOUR top-level bits (media · end ·
+ * header · footer). ItemAfter/ItemActions/ItemChevron live INSIDE
+ * the end lane — they are never bits. Every combination declares
+ * BOTH columns AND areas (the ghost-track law): no cascade path may
+ * mint implicit tracks.
+ *
+ * Paint is terminal-lawful: --card is BANNED here (source-guarded);
+ * hover/selected ride --terminal-hover; focus is the inset ring;
+ * radius/bevel come from --radius + the consumer base law.
+ */
+
+@layer components {
+  /* ── custom properties + the base grid ─────────────────────────── */
+  :where(.jx-item) {
+    /* family vars DERIVED from the density aliases (§7) */
+    --jx-item-column-gap: var(--jx-gap);
+    --jx-item-row-gap: var(--jx-stack);
+    --jx-item-media-gutter: var(--jx-media-gutter);
+    --jx-item-media-size: var(--jx-image);
+    --jx-item-content-gap: var(--jx-gap-content);
+    --jx-item-end-gap: var(--jx-gap-end);
+
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    /* the density row law (design §1/appendix B) — BASE level so
+       standalone rows and the no-subgrid fallback keep it; the
+       subgrid block below only adds grouped geometry. 尺规: B is the
+       row's ONE sanctioned padding (edge breathing belongs to the
+       row box); everything BETWEEN elements is ruler gaps. The
+       single-line floor is the HIT height — the two-line reserve is
+       a POSTURE, not a row law (Owner 2026-09-05): only rows
+       carrying BOTH title and description elements earn it below */
+    min-block-size: var(--jx-hit);
+    padding-block: var(--jx-stack);
+    padding-inline: var(--jx-inset);
+    row-gap: var(--jx-stack);
+    column-gap: var(--jx-item-column-gap);
+    row-gap: var(--jx-item-row-gap);
+    transition:
+      background-color 120ms ease-out,
+      color 120ms ease-out,
+      border-color 120ms ease-out;
+  }
+
+  /* ── the two-line reserve is a POSTURE (Owner 2026-09-05: a
+     title-only or description-only row is ONE line tall — the space
+     waste the Owner caught; wanting the second line = render BOTH
+     slots, one left empty earns the same two-line floor) ─────────── */
+  :where(.jx-item):has([data-slot='item-title']):has([data-slot='item-description']) {
+    min-block-size: var(--jx-row-min);
+  }
+
+  /* ── the presence matrix (16 exhaustive self-contained combos) ────
+     media × end × header × footer; each combo owns columns+areas. */
+  :where(.jx-item) {
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr) minmax(0, max-content);
+    grid-template-areas: 'header header header'
+      'media content end'
+      'footer footer footer';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-footer']))) {
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr) minmax(0, max-content);
+    grid-template-areas: 'header header header'
+      'media content end';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-header']))) {
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr) minmax(0, max-content);
+    grid-template-areas: 'media content end'
+      'footer footer footer';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-header'])):not(:has(> [data-slot='item-footer']))) {
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr) minmax(0, max-content);
+    grid-template-areas: 'media content end';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-end']))) {
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    grid-template-areas: 'header header'
+      'media content'
+      'footer footer';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-end'])):not(:has(> [data-slot='item-footer']))) {
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    grid-template-areas: 'header header'
+      'media content';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-end'])):not(:has(> [data-slot='item-header']))) {
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    grid-template-areas: 'media content'
+      'footer footer';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-end'])):not(:has(> [data-slot='item-header'])):not(:has(> [data-slot='item-footer']))) {
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    grid-template-areas: 'media content';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-media']))) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, max-content);
+    grid-template-areas: 'header header'
+      'content end'
+      'footer footer';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-media'])):not(:has(> [data-slot='item-footer']))) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, max-content);
+    grid-template-areas: 'header header'
+      'content end';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-media'])):not(:has(> [data-slot='item-header']))) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, max-content);
+    grid-template-areas: 'content end'
+      'footer footer';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-media'])):not(:has(> [data-slot='item-header'])):not(:has(> [data-slot='item-footer']))) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, max-content);
+    grid-template-areas: 'content end';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-media'])):not(:has(> [data-slot='item-end']))) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'header'
+      'content'
+      'footer';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-media'])):not(:has(> [data-slot='item-end'])):not(:has(> [data-slot='item-footer']))) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'header'
+      'content';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-media'])):not(:has(> [data-slot='item-end'])):not(:has(> [data-slot='item-header']))) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'content'
+      'footer';
+  }
+  :where(.jx-item:not(:has(> [data-slot='item-media'])):not(:has(> [data-slot='item-end'])):not(:has(> [data-slot='item-header'])):not(:has(> [data-slot='item-footer']))) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'content';
+  }
+
+  /* ── slot geometry ──────────────────────────────────────────────── */
+  :where([data-slot='item-media']),
+  :where([data-slot='item-end']),
+  :where([data-slot='item-content']),
+  :where([data-slot='item-header']),
+  :where([data-slot='item-footer']) {
+    min-width: 0;
+  }
+  :where([data-slot='item-media']),
+  :where([data-slot='item-end']) {
+    align-self: center;
+  }
+  /* a description makes media self-start (optical alignment, the
+     shadcn rule) */
+  :where(.jx-item:has([data-slot='item-description']) > [data-slot='item-media']) {
+    align-self: start;
+  }
+  :where([data-slot='item-content']) {
+    grid-area: content;
+    display: flex;
+    flex-direction: column;
+    gap: var(--jx-item-content-gap);
+  }
+  :where([data-slot='item-media']) {
+    grid-area: media;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    gap: var(--jx-item-media-gutter);
+  }
+  :where([data-slot='item-header']),
+  :where([data-slot='item-footer']) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--jx-gap);
+  }
+  :where([data-slot='item-header']) {
+    grid-area: header;
+  }
+  :where([data-slot='item-footer']) {
+    grid-area: footer;
+  }
+
+  :where([data-slot='item-title']) {
+    font-size: var(--jx-text);
+    line-height: var(--jx-line);
+    font-weight: 500;
+    color: inherit;
+    margin: 0;
+  }
+  :where([data-slot='item-description']) {
+    font-size: var(--jx-text-secondary);
+    line-height: var(--jx-line-secondary);
+    color: var(--muted-foreground);
+    margin: 0;
+  }
+
+  /* the END lane: the one trailing GRID slot; after/actions/chevron
+     flow inside it (metadata → controls → glyph) */
+  :where([data-slot='item-end']) {
+    grid-area: end;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--jx-item-end-gap);
+    flex-wrap: wrap;
+    min-width: 0;
+    /* the inherited floor lives in the BASE lane — standalone rows and
+       the no-subgrid fallback keep it (impl-review r1-1) */
+    min-block-size: var(--jx-hit);
+  }
+  :where([data-slot='item-content']) {
+    min-width: 0;
+  }
+
+  /* ── the END-INSET OWNERSHIP law, lane edition (2026-09-05 r2, the
+     Owner vocabulary inset: 'auto' | number | boolean): the optical
+     tail has exactly ONE owner. auto (the lane's default) is presence
+     inference — a self-insetting control at the TERMINAL position
+     (select's chevron reserve, input's clear/picker/suffix hit-lane,
+     number's + button; declared as data-self-inset at the control's
+     root face) wins the tail and the row yields; 'on' forces the
+     yield, 'off' forbids it, and a number hands the tail to the LANE
+     itself with exactly N px of breathing (the explicit custom
+     property --jx-item-end-inset). The input shell's own edge-zone law
+     is the same ruling one level down — the vocabulary is the global
+     practice. No JS, no measurement; presence via the native :has(). */
+  :where(.jx-item:has(> [data-slot='item-end'][data-inset='on'])),
+  :where(.jx-item:has(> [data-slot='item-end'][data-inset='set'])),
+  :where(.jx-item:has(> [data-slot='item-end'][data-inset='auto'] > [data-self-inset]:last-child)) {
+    padding-inline-end: 0;
+  }
+  /* the explicit tail: the lane carries exactly the declared px */
+  :where([data-slot='item-end'][data-inset='set']) {
+    padding-inline-end: var(--jx-item-end-inset, 0px);
+  }
+
+  /* ── the size contract (2026-09-05): declared ladders, space picks
+     the rung — the md:/lg: idiom for slot composition. The LANE
+     carries the ladder (the end track's max-content growth resolves
+     the specified width); platform controls fill it, nothing sniffs
+     child structure. md: number/time-class; lg: text/long-select;
+     full: greedy. A sized lane is BY DECLARATION foldable, so the
+     narrow law's wrap=never exemption cannot apply to it. */
+  :where([data-slot='item-end'][data-fit='md']) {
+    --jx-item-end-w: 10rem;
+  }
+  :where([data-slot='item-end'][data-fit='lg']) {
+    --jx-item-end-w: 16rem;
+  }
+  :where([data-slot='item-end'][data-fit='full']) {
+    --jx-item-end-w: 100%;
+  }
+  :where([data-slot='item-end'][data-fit]) {
+    inline-size: var(--jx-item-end-w);
+  }
+  /* the fitted lane's children FILL the ladder rung — a fitted lane
+     holds the control by contract, so flex fill is the contract's own
+     semantics (no platform-tag guessing, no shell-class sniffing) */
+  :where([data-slot='item-end'][data-fit]) > :where(*) {
+    flex: 1 1 auto;
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+  /* the mid tier: declared ladders step DOWN but keep the shared end
+     line (44rem — the wide settings pane collapsing toward a rail) */
+  @container jx-items (max-width: 44rem) {
+    :where([data-slot='item-end'][data-fit='md']) {
+      --jx-item-end-w: 7rem;
+    }
+    :where([data-slot='item-end'][data-fit='lg']) {
+      --jx-item-end-w: 11rem;
+    }
+  }
+  :where([data-slot='item-content'][data-content-wrap='truncate'] > *) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :where([data-slot='item-end'][data-align='start']) {
+    align-items: flex-start;
+  }
+  :where([data-slot='item-end'][data-wrap='never']) {
+    flex-wrap: nowrap;
+  }
+  :where([data-slot='item-after']) {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--jx-item-end-gap);
+    font-size: var(--jx-text-secondary);
+    line-height: var(--jx-line-secondary);
+    color: var(--muted-foreground);
+    white-space: nowrap;
+  }
+  :where([data-slot='item-after'][data-tone='default']) {
+    color: inherit;
+  }
+  :where([data-slot='item-chevron']) {
+    display: inline-flex;
+    color: var(--muted-foreground);
+  }
+  /* the optical correction is CONSUMED (K0 §7.1): solid media glyphs
+     shift by the bounded token; default 0px = no shift */
+  :where([data-slot='item-media'][data-variant='icon'] svg) {
+    translate: clamp(var(--jx-icon-optical, 0px), calc(var(--jx-unit) / -2), calc(var(--jx-unit) / 2)) 0;
+  }
+  :where([data-slot='item-chevron'] svg) {
+    width: var(--jx-icon);
+    height: var(--jx-icon);
+  }
+
+  /* the media coordination law: the BOX is the size authority.
+     The host PROVIDES the avatar's default size (the derived square)
+     through an injectable token — a default-size avatar fills its box
+     (three-edge proportional relation) with no layer-law fight;
+     explicit smaller squares keep their size and anchor start. */
+  :where([data-slot='item-media']) {
+    --jx-avatar-md: var(--jx-image);
+  }
+  :where([data-slot='item-media'][data-variant='default']),
+  :where([data-slot='item-media'][data-variant='image']) {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+
+  /* media variants */
+  :where([data-slot='item-media'][data-variant='icon']) svg {
+    width: var(--jx-icon);
+    height: var(--jx-icon);
+  }
+  :where([data-slot='item-media'][data-variant='default']),
+  :where([data-slot='item-media'][data-variant='image']) {
+    width: var(--jx-image);
+    height: var(--jx-image);
+    overflow: hidden;
+  }
+  :where([data-slot='item-media'][data-variant='image']) img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  /* layout="media": custom properties only — never a new presence bit */
+  :where(.jx-item[data-layout='media']) {
+    --jx-item-media-size: var(--jx-image);
+    --jx-item-content-gap: var(--jx-stack);
+  }
+  :where(.jx-item[data-layout='media'] > [data-slot='item-media']) {
+    align-self: start;
+  }
+
+  /* ── resolved row paint (stamped chrome) ──────────────────────────
+     the family fill (Owner 2026-09-05 r3: the old --terminal-muted —
+     8% terminal-foreground into terminal — read muddy gray; the
+     upgrade is a breath of ink over the page background instead —
+     clean in light, auto-lifted in dark, theme-reciprocal by
+     construction) */
+  :where(.jx-item) {
+    --jx-item-fill: color-mix(in oklab, var(--foreground) 3.5%, var(--background));
+  }
+  :where(.jx-item[data-item-chrome='surface']) {
+    border: 1px solid var(--border);
+    background: var(--jx-item-fill);
+    box-shadow: var(--shadow-2xs);
+    border-radius: var(--radius);
+  }
+  :where(.jx-item[data-item-chrome='outline']) {
+    border: 1px solid var(--border);
+    background: var(--jx-item-fill);
+    border-radius: var(--radius);
+  }
+  :where(.jx-item[data-item-chrome='muted']) {
+    background: var(--jx-item-fill);
+    border-radius: var(--radius);
+  }
+  /* chrome="none" (grouped auto) and chrome="default" (explicit
+     transparent escape hatch) paint nothing — the group owns the
+     surface */
+
+
+  /* link rows carry their own engagement (color only — press law) */
+  :where(a.jx-item) {
+    text-decoration: none;
+    color: inherit;
+  }
+  :where(a.jx-item:hover) {
+    background: var(--terminal-hover);
+  }
+  :where(.jx-item[data-selected='true']) {
+    background: var(--terminal-hover);
+    box-shadow: inset 2px 0 0 var(--primary);
+  }
+  :where(.jx-item:focus-visible) {
+    outline: 1px solid var(--ring);
+    outline-offset: -1px;
+  }
+
+  /* ── the group: frame + native list + dividers ──────────────────── */
+  :where(.jx-item-group) {
+    width: 100%;
+    min-width: 0;
+  }
+  :where(.jx-item-group[data-mode='default']) {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-xs);
+  }
+  :where(.jx-item-group[data-mode='muted']) {
+    background: var(--jx-item-fill);
+    border-radius: var(--radius);
+  }
+  /* plain: the host owns the surface — nothing painted here */
+  :where(.jx-item-group[data-inset='true']) {
+    margin-inline: calc(3 * var(--jx-gap));
+    width: auto;
+  }
+  :where(.jx-item-group-label) {
+    font-family: var(--font-nav);
+    font-size: var(--jx-text-secondary);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+    padding: var(--jx-stack) var(--jx-inset);
+  }
+
+  :where([data-slot='item-list']) {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    /* the LIST is the container: rows query it for the narrow
+       end-lane wrap */
+    container: jx-items / inline-size;
+  }
+  /* hairlines separate rows → no gap; no hairlines → the list keeps
+     a rhythm of its own */
+  :where([data-slot='item-list'][data-dividers='auto']) {
+    row-gap: 0;
+  }
+  :where([data-slot='item-list'][data-dividers='none']) {
+    row-gap: var(--jx-stack);
+  }
+  :where(.jx-item-group[data-mode='muted'] [data-slot='item-list'][data-dividers='none']) {
+    row-gap: 0;
+  }
+
+  :where([data-slot='item-row']) {
+    display: block;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* the automatic divider: adjacent direct rows only, 38% mix — one
+     source per edge, structurally exclusive with ItemDivider */
+  :where([data-slot='item-list'][data-dividers='auto'] > [data-slot='item-row'] + [data-slot='item-row']) {
+    border-top: 1px solid color-mix(in oklab, var(--border) 38%, transparent);
+  }
+  /* explicit edge resets — no-op guards today (adjacency already
+     breaks at a divider), kept readable and future-proof per the
+     design §5 law */
+  :where([data-slot='item-list'][data-dividers='auto'] > [data-slot='item-row']:has(+ [data-slot='item-divider'])),
+  :where([data-slot='item-list'][data-dividers='auto'] > [data-slot='item-divider'] + [data-slot='item-row']) {
+    border-top: 0;
+  }
+  /* the explicit divider: full strength, childless, presentational */
+  :where([data-slot='item-divider']) {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 0;
+    width: 100%;
+  }
+
+  /* ── the field scaffold (ItemField + adapters) ───────────────────── */
+  :where(.jx-item-field-label) {
+    font-family: var(--font-nav);
+    font-size: var(--jx-text-secondary);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--foreground);
+  }
+  /* the decorative glyph lane inline-start of the label (grindstone
+     #17-2): inside the label ELEMENT, so no grid face changes — the
+     alert family's title-icon law, moved into the row */
+  :where(.jx-item-field-icon) {
+    display: inline-flex;
+    align-items: center;
+    margin-inline-end: calc(var(--jx-gap) / 2);
+  }
+  :where(.jx-item-field-icon svg) {
+    width: var(--jx-icon);
+    height: var(--jx-icon);
+  }
+  :where(label.jx-item-field-label) {
+    cursor: pointer;
+  }
+  :where([data-item-field] .jx-item-field-description) {
+    font-size: var(--jx-text-secondary);
+    line-height: var(--jx-line-secondary);
+    color: var(--muted-foreground);
+  }
+  :where([data-item-field] .jx-item-field-error) {
+    font-size: var(--jx-text-secondary);
+    line-height: var(--jx-line-secondary);
+    color: var(--error);
+  }
+
+  /* ── the narrow law: the end lane takes its own full row ──────────
+     end-present combos only, wrap="never" opts out of the template
+     switch (the lane simply never splits) */
+  @container jx-items (max-width: 30rem) {
+    /* the inset contract SUSPENDS when stacked (Owner r2): a folded
+       full-width row keeps the default tail — auto's folded resolution
+       is 'keep', on/set lose their yield, the explicit px dissolves */
+    :where(.jx-item:has(> [data-slot='item-end'][data-inset='on'])),
+    :where(.jx-item:has(> [data-slot='item-end'][data-inset='set'])),
+    :where(.jx-item:has(> [data-slot='item-end'][data-inset='auto'] > [data-self-inset]:last-child)) {
+      padding-inline-end: var(--jx-inset);
+    }
+    :where([data-slot='item-end'][data-inset='set']) {
+      padding-inline-end: 0;
+    }
+    :where(.jx-item:has(> [data-slot='item-end']:not([data-wrap='never']))) {
+      grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+      grid-template-areas: 'header header'
+        'media content'
+        'end end'
+        'footer footer';
+    }
+    :where(.jx-item:has(> [data-slot='item-end']:not([data-wrap='never'])):not(:has(> [data-slot='item-footer']))) {
+      grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+      grid-template-areas: 'header header'
+        'media content'
+        'end end';
+    }
+    :where(.jx-item:has(> [data-slot='item-end']:not([data-wrap='never'])):not(:has(> [data-slot='item-header']))) {
+      grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+      grid-template-areas: 'media content'
+        'end end'
+        'footer footer';
+    }
+    :where(.jx-item:has(> [data-slot='item-end']:not([data-wrap='never'])):not(:has(> [data-slot='item-header'])):not(:has(> [data-slot='item-footer']))) {
+      grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+      grid-template-areas: 'media content'
+        'end end';
+    }
+    :where(.jx-item:has(> [data-slot='item-end']:not([data-wrap='never'])):not(:has(> [data-slot='item-media']))) {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: 'header'
+        'content'
+        'end'
+        'footer';
+    }
+    :where(.jx-item:has(> [data-slot='item-end']:not([data-wrap='never'])):not(:has(> [data-slot='item-media'])):not(:has(> [data-slot='item-footer']))) {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: 'header'
+        'content'
+        'end';
+    }
+    :where(.jx-item:has(> [data-slot='item-end']:not([data-wrap='never'])):not(:has(> [data-slot='item-media'])):not(:has(> [data-slot='item-header']))) {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: 'content'
+        'end'
+        'footer';
+    }
+    :where(.jx-item:has(> [data-slot='item-end']:not([data-wrap='never'])):not(:has(> [data-slot='item-media'])):not(:has(> [data-slot='item-header'])):not(:has(> [data-slot='item-footer']))) {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: 'content'
+        'end';
+    }
+    /* the folded lane stays END-aligned (Owner 2026-09-05 r3: a
+       left-hugging tail under left-aligned text reads unbalanced —
+       the lane's whole identity is the trailing edge) */
+    :where([data-slot='item-end']) {
+      justify-content: flex-end;
+    }
+  }
+
+@supports (grid-template-columns: subgrid) {
+  :where([data-slot='item-list']) {
+    display: grid;
+    column-gap: 0;
+    container: jx-items / inline-size;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* content-end: media is not a legal child of this ruler. */
+  :where([data-slot='item-list'][data-ruler='content-end']) {
+    grid-template-columns: minmax(0, 1fr) var(--jx-gap) max-content;
+  }
+
+  :where([data-slot='item-list'][data-ruler='media-content-end']) {
+    grid-template-columns:
+      var(--jx-image)
+      var(--jx-gap)
+      minmax(0, 1fr)
+      var(--jx-gap)
+      max-content;
+  }
+
+  :where([data-slot='item-row']) {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    column-gap: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  :where([data-slot='item-list'][data-ruler='content-end'] [data-slot='item-row'] > .jx-item) {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    column-gap: 0;
+    grid-template-areas:
+      'header header header'
+      'content . end'
+      'footer footer footer';
+  }
+
+  :where([data-slot='item-list'][data-ruler='media-content-end'] [data-slot='item-row'] > .jx-item) {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    column-gap: 0;
+    grid-template-areas:
+      'header header header header header'
+      'media . content . end'
+      'footer footer footer footer footer';
+  }
+
+  :where([data-slot='item-list'] [data-slot='item-row'] > .jx-item) {
+    box-sizing: border-box;
+    min-width: 0;
+  }
+
+  :where([data-slot='item-header']),
+  :where([data-slot='item-footer']) {
+    grid-column: 1 / -1;
+    gap: var(--jx-gap);
+  }
+  :where([data-slot='item-content']) {
+    grid-area: content;
+    display: flex;
+    flex-direction: column;
+    gap: var(--jx-gap-content);
+    min-width: 0;
+  }
+  :where([data-slot='item-media']) {
+    grid-area: media;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--jx-media-gutter);
+    min-width: 0;
+  }
+  :where([data-slot='item-media'][data-variant='icon']) {
+    width: var(--jx-icon);
+    min-block-size: var(--jx-icon);
+  }
+  :where([data-slot='item-media'][data-variant='default']),
+  :where([data-slot='item-media'][data-variant='image']) {
+    width: var(--jx-image);
+    min-block-size: var(--jx-image);
+  }
+  :where([data-slot='item-end']) {
+    grid-area: end;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--jx-gap-end);
+    flex-wrap: wrap;
+    min-width: 0;
+    min-block-size: var(--jx-hit);
+  }
+  :where([data-slot='item-end'][data-wrap='never']) {
+    flex-wrap: nowrap;
+  }
+  :where([data-slot='item-title']) {
+    font-size: var(--jx-text);
+    line-height: var(--jx-line);
+  }
+  :where([data-slot='item-description']),
+  :where([data-slot='item-after']),
+  :where(.jx-item-field-label) {
+    font-size: var(--jx-text-secondary);
+    line-height: var(--jx-line-secondary);
+  }
+  :where([data-slot='item-divider']) {
+    grid-column: 1 / -1;
+  }
+
+  /* the folded rung (size contract): a declared lane spans its new
+     full row, END-aligned (Owner r3 — the trailing edge stays the
+     trailing edge even when it owns a row) */
+  @container jx-items (max-width: 30rem) {
+    :where([data-slot='item-end'][data-fit]) {
+      --jx-item-end-w: 100%;
+      justify-content: flex-end;
+    }
+  }
+
+  /* content-end narrow auto: content and end become full-width rows. */
+  @container jx-items (max-width: 30rem) {
+    /* the inset contract suspends when stacked — same ruling as the
+       base block above, restated inside the subgrid geometry */
+    :where(.jx-item:has(> [data-slot='item-end'][data-inset='on'])),
+    :where(.jx-item:has(> [data-slot='item-end'][data-inset='set'])),
+    :where(.jx-item:has(> [data-slot='item-end'][data-inset='auto'] > [data-self-inset]:last-child)) {
+      padding-inline-end: var(--jx-inset);
+    }
+    :where([data-slot='item-end'][data-inset='set']) {
+      padding-inline-end: 0;
+    }
+    :where([data-slot='item-list'][data-ruler='content-end'] [data-slot='item-row'] > .jx-item:has(> [data-slot='item-end'][data-wrap='auto'] [data-slot='item-after'])),
+  /* raw interactive controls justify the full row too (the retired
+     item-actions span's detector, generalized: any button in a
+     wrapping lane — ItemActions clusters are wrap=never lanes) */
+  :where([data-slot='item-list'][data-ruler='content-end'] [data-slot='item-row'] > .jx-item:has(> [data-slot='item-end'][data-wrap='auto'] button)),
+  :where([data-slot='item-list'][data-ruler='content-end'] [data-slot='item-row'] > .jx-item:has(> [data-slot='item-end'][data-fit])) {
+      grid-template-areas:
+        'header header header'
+        'content . .'
+        'end end end'
+        'footer footer footer';
+    }
+
+    /* content-end narrow never keeps the shared end line. */
+    :where([data-slot='item-list'][data-ruler='content-end'] [data-slot='item-row'] > .jx-item:has(> [data-slot='item-end'][data-wrap='never'])) {
+      grid-template-areas:
+        'header header header'
+        'content . end'
+        'footer footer footer';
+    }
+
+    /* media-content-end narrow auto: the media host remains on the
+       ruler, while content and end occupy explicit full-width rows. */
+    :where([data-slot='item-list'][data-ruler='media-content-end'] [data-slot='item-row'] > .jx-item:has(> [data-slot='item-end'][data-wrap='auto'] [data-slot='item-after'])),
+  :where([data-slot='item-list'][data-ruler='media-content-end'] [data-slot='item-row'] > .jx-item:has(> [data-slot='item-end'][data-wrap='auto'] button)),
+  :where([data-slot='item-list'][data-ruler='media-content-end'] [data-slot='item-row'] > .jx-item:has(> [data-slot='item-end'][data-fit])) {
+      grid-template-areas:
+        'header header header header header'
+        'media . content . .'
+        'end end end end end'
+        'footer footer footer footer footer';
+    }
+
+    /* media-content-end narrow never keeps media, content, both gaps, end. */
+    :where([data-slot='item-list'][data-ruler='media-content-end'] [data-slot='item-row'] > .jx-item:has(> [data-slot='item-end'][data-wrap='never'])) {
+      grid-template-areas:
+        'header header header header header'
+        'media . content . end'
+        'footer footer footer footer footer';
+    }
+
+    /* folded lanes keep END alignment (Owner 2026-09-05 r3) */
+    :where([data-slot='item-end'][data-wrap='auto']) {
+      justify-content: flex-end;
+    }
+  }
+}
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(.jx-item) {
+    transition: none;
+  }
+}

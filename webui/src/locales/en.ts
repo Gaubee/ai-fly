@@ -72,6 +72,7 @@ export const en: Record<string, string> = {
   "dash.prov.stop": "stop provider",
   "dash.prov.start": "start provider",
   "dash.prov.stoppedBadge": "STOPPED",
+  "dash.prov.actionsLabel": "provider actions",
   "dash.prov.stoppedToast": "Provider stopped (all services)",
   "dash.prov.startedToast": "Provider started",
   "dash.ports.removedToast": "Service removed",
