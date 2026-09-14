@@ -43,8 +43,10 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
   });
   managerRef.current = manager;
   // 先物化既有目录的监听（离线 503 语义），再启动连接（AUTH_OK 后再全量同步刷新）；
-  // 停用服务（disabledServices）不物化（service-lifecycle）
+  // 停用服务（disabledServices）不物化；环级停用（ring.disabled）整环跳过
+  // （service-lifecycle）
   for (const ring of opts.rings) {
+    if (ring.disabled) continue;
     const visible = ring.services.filter((s) => !ring.disabledServices.includes(s.serviceId));
     if (visible.length > 0) {
       await gateway.syncProviderServices(ring.endpointId, ring.alias, visible, ring.ports);

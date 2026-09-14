@@ -68,6 +68,11 @@ export const zh: Record<string, string> = {
   "dash.ports.removeConfirm": "移除这个服务？只是停止暴露——目录条目保留，随时可重新启动。",
   "dash.ports.startedToast": "服务已启动",
   "dash.ports.stoppedToast": "服务已终止",
+  "dash.prov.stop": "终止提供方",
+  "dash.prov.start": "启动提供方",
+  "dash.prov.stoppedBadge": "已停用",
+  "dash.prov.stoppedToast": "提供方已终止（全部服务）",
+  "dash.prov.startedToast": "提供方已启动",
   "dash.ports.removedToast": "服务已移除",
   "dash.footer.pre": "引擎内部结构（match 全集、rewrite 规则、密钥）在",
 

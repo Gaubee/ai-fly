@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { parseArgv } from "../../args.ts";
 import { UsageError } from "../../errors.ts";
 import { isAlive, readPid, type StateKind } from "../../daemon-state.ts";
-import { consumersRoot, listKeyrings, loadKeyring, setServiceEnabled, type Keyring } from "../../../consumer/store.ts";
+import { consumersRoot, listKeyrings, loadKeyring, removeKeyring, setProviderEnabled, setServiceEnabled, type Keyring } from "../../../consumer/store.ts";
 import { ctxHomedir, ctxOut, type CommandContext } from "./common.ts";
 
 const KIND: StateKind = "gateway";
@@ -19,9 +19,13 @@ const SPEC = {
 
 const USAGE = `usage:
   ai-fly services [list] [--data <dir>]              list services across groups (state: ready/disabled)
-  ai-fly services stop <provider-ref> <service>      disable a service (stops its local listener)
-  ai-fly services rm <provider-ref> <service>        alias of stop (removable, revivable)
-  ai-fly services start <provider-ref> <service>     re-enable a disabled service
+  ai-fly services stop <provider-ref>                stop ALL services of a provider (ring-level, revivable)
+  ai-fly services stop <provider-ref> <service>      disable one service (stops its local listener)
+  ai-fly services start <provider-ref>               re-enable a stopped provider (per-service stops persist)
+  ai-fly services start <provider-ref> <service>     re-enable one disabled service
+  ai-fly services rm <provider-ref>                  remove the whole provider (= forget: keyring + fabric
+                                                      identity deleted; re-import to recover)
+  ai-fly services rm <provider-ref> <service>        remove one service (disabled, revivable)
   <provider-ref>: endpointId | 8-char prefix | alias; <service>: serviceId | unique name`;
 
 /** 服务定位：serviceId 精确优先，回退 name 唯一匹配（歧义报错）。 */
@@ -70,10 +74,14 @@ export async function run(argv: readonly string[], ctx: CommandContext = {}): Pr
       const rows = [...ring.services].sort((a, b) => a.serviceId.localeCompare(b.serviceId));
       for (const s of rows) {
         const port = ring.actualPorts[s.serviceId] ?? ring.ports[s.serviceId] ?? s.defaultPort;
-        const state = disabled.has(s.serviceId) ? "disabled" : "ready";
+        const state = ring.disabled || disabled.has(s.serviceId) ? "disabled" : "ready";
+        const prov = ring.disabled ? `${ring.alias} (off)` : ring.alias;
         out(
-          `${ring.alias.padEnd(18)}${s.serviceId.padEnd(36)}${s.name.padEnd(20)}${String(port).padEnd(7)}${state}`,
+          `${prov.padEnd(18)}${s.serviceId.padEnd(36)}${s.name.padEnd(20)}${String(port).padEnd(7)}${state}`,
         );
+      }
+      if (rows.length === 0) {
+        out(`${(ring.disabled ? `${ring.alias} (off)` : ring.alias).padEnd(18)}-`);
       }
     }
     return 0;
@@ -84,13 +92,36 @@ export async function run(argv: readonly string[], ctx: CommandContext = {}): Pr
   }
   const providerRef = positionals[1];
   const serviceRef = positionals[2];
-  if (providerRef === undefined || serviceRef === undefined) {
+  if (providerRef === undefined || (sub === "rm" && serviceRef === undefined && positionals.length > 2)) {
+    throw new UsageError(USAGE);
+  }
+  if (providerRef === undefined) {
     throw new UsageError(USAGE);
   }
   const ring = loadKeyring(root, providerRef);
   if (ring === undefined) {
     throw new UsageError(`error: provider '${providerRef}' not found`);
   }
+  daemonLine(out, home);
+
+  // 提供方级（单参）：stop/start 整环开关；rm = forget 真删（区别于单服务停用式）
+  if (serviceRef === undefined) {
+    if (sub === "rm") {
+      const removed = removeKeyring(root, ring.endpointId);
+      out(`removed provider '${removed.ring.alias}' (${removed.ring.endpointId})`);
+      out(`removed ${removed.dir} (keyring + fabric identity) - re-import to recover`);
+      return 0;
+    }
+    const enabled = sub === "start";
+    const { changed } = setProviderEnabled(root, ring.endpointId, enabled);
+    out(
+      changed
+        ? `${enabled ? "started" : "stopped"} provider '${ring.alias}' (${ring.services.length} service(s))`
+        : `provider '${ring.alias}' is already ${enabled ? "running" : "stopped"}`,
+    );
+    return 0;
+  }
+
   const target = findService(ring, serviceRef);
   const enabled = sub === "start";
   const { changed } = setServiceEnabled(root, ring.endpointId, target.serviceId, enabled);
@@ -100,6 +131,5 @@ export async function run(argv: readonly string[], ctx: CommandContext = {}): Pr
   } else {
     out(changed ? `stopped service '${target.name}' (${target.serviceId}) of '${alias}'` : `service '${target.name}' of '${alias}' is already disabled`);
   }
-  daemonLine(out, home);
   return 0;
 }

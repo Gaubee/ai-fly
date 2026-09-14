@@ -22,6 +22,7 @@ import {
   removeKeyring,
   saveKeyring,
   setPort,
+  setProviderEnabled,
   setServiceEnabled,
   updateServices,
   upsertKey,
@@ -46,7 +47,7 @@ function service(serviceId: string, name: string, port: number): ServiceEntry {
 }
 
 function ringOf(ep: string, alias = "prov"): Keyring {
-  return { alias, endpointId: ep, relayUrls: ["http://r1"], keys: [], services: [], ports: {}, actualPorts: {}, disabledServices: [] };
+  return { alias, endpointId: ep, relayUrls: ["http://r1"], keys: [], services: [], ports: {}, actualPorts: {}, disabledServices: [], disabled: false };
 }
 
 let root: string;
@@ -215,6 +216,37 @@ describe("setServiceEnabled（停用/启用写路径）", () => {
 
     expect(() => setServiceEnabled(root, ep, "svc-unknown", false)).toThrow(CliError);
     expect(() => setServiceEnabled(root, "no-such-provider", "svc-a", false)).toThrow(CliError);
+  });
+});
+
+describe("setProviderEnabled（环级停用，提供方级）", () => {
+  it("落盘、幂等、未知报错；applyCatalog 保留环级开关（目录同步不覆盖）", () => {
+    const ep = endpointId();
+    let ring = { ...ringOf(ep), services: [service("svc-a", "a", 1), service("svc-b", "b", 2)] };
+    ring.disabledServices = ["svc-b"];
+    saveKeyring(root, ring);
+
+    const stopped = setProviderEnabled(root, ep, false);
+    expect(stopped.changed).toBe(true);
+    expect(stopped.ring.disabled).toBe(true);
+    expect(stopped.ring.disabledServices).toEqual(["svc-b"]); // 单服务停用保持（叠加语义）
+    expect(loadKeyring(root, ep)?.disabled).toBe(true);
+
+    const again = setProviderEnabled(root, ep, false);
+    expect(again.changed).toBe(false);
+
+    // 目录全量替换（AUTH_OK）不覆盖环级开关
+    const synced = applyCatalog(loadKeyring(root, ep)!, { relayUrls: [], services: [service("svc-a", "a2", 1), service("svc-b", "b2", 2)] });
+    expect(synced.disabled).toBe(true);
+    expect(synced.disabledServices).toEqual(["svc-b"]); // 单服务停用集合原样保留（均存活）
+
+    const started = setProviderEnabled(root, ep, true);
+    expect(started.changed).toBe(true);
+    expect(started.ring.disabled).toBe(false);
+    expect(started.ring.disabledServices).toEqual(["svc-b"]); // 环恢复不触碰单服务停用（叠加）
+    expect(loadKeyring(root, ep)?.disabled).toBe(false);
+
+    expect(() => setProviderEnabled(root, "no-such-provider", false)).toThrow(CliError);
   });
 });
 

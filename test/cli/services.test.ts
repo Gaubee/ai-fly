@@ -2,7 +2,7 @@
 // 聚焦子命令契约：list 跨组展示与停用态标注、stop/start/rm 落盘语义、ref/service
 // 定位错误面。
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -26,7 +26,7 @@ function svc(serviceId: string, name: string, defaultPort: number): ServiceEntry
 }
 
 function ringOf(ep: string, alias: string, services: ServiceEntry[]): Keyring {
-  return { alias, endpointId: ep, relayUrls: [], keys: [], services, ports: {}, actualPorts: {}, disabledServices: [] };
+  return { alias, endpointId: ep, relayUrls: [], keys: [], services, ports: {}, actualPorts: {}, disabledServices: [], disabled: false };
 }
 
 const homes: string[] = [];
@@ -89,6 +89,43 @@ describe("ai-fly services", () => {
     await expect(run(["stop", "no-such", "s1", "--data", data], { homedir: home })).rejects.toThrow(/not found/);
     await expect(run(["stop", "delta", "no-such", "--data", data], { homedir: home })).rejects.toThrow(/unknown service/);
     await expect(run(["stop", "delta", "dup", "--data", data], { homedir: home })).rejects.toThrow(/ambiguous/);
-    await expect(run(["stop", "delta", "--data", data], { homedir: home })).rejects.toThrow(/usage:/);
+  });
+
+  it("提供方级：stop 整环开关、rm 单参 = forget 真删、list 环级标注", async () => {
+    const home = mkdtempSync(join(tmpdir(), "aifly-svc-cli-"));
+    homes.push(home);
+    const data = join(home, "consumers");
+    const ep = "ep-eeeeeeee05";
+    const dir = join(data, ep.slice(0, 8));
+    saveKeyring(data, ringOf(ep, "epsilon", [svc("s1", "a", 1), svc("s2", "b", 2)]));
+
+    const stopCode = await run(["stop", "epsilon", "--data", data], { homedir: home });
+    expect(stopCode).toBe(0);
+    expect(lines.join("")).toContain("stopped provider 'epsilon' (2 service(s))");
+    expect(loadKeyring(data, ep)?.disabled).toBe(true);
+
+    lines.length = 0;
+    const idem = await run(["stop", "epsilon", "--data", data], { homedir: home });
+    expect(idem).toBe(0);
+    expect(lines.join("")).toContain("already stopped");
+
+    lines.length = 0;
+    const startCode = await run(["start", "epsilon", "--data", data], { homedir: home });
+    expect(startCode).toBe(0);
+    expect(loadKeyring(data, ep)?.disabled).toBe(false);
+
+    // list 环级标注（off + 整组 disabled）
+    saveKeyring(data, { ...ringOf(ep, "epsilon", [svc("s1", "a", 1)]), disabled: true });
+    lines.length = 0;
+    await run(["list", "--data", data], { homedir: home });
+    expect(lines.join("")).toContain("epsilon (off)");
+    expect(lines.join("")).toContain("disabled");
+    saveKeyring(data, ringOf(ep, "epsilon", [svc("s1", "a", 1)]));
+
+    const rmCode = await run(["rm", "epsilon", "--data", data], { homedir: home });
+    expect(rmCode).toBe(0);
+    expect(lines.join("")).toContain("removed provider 'epsilon'");
+    expect(loadKeyring(data, ep)).toBeUndefined(); // forget 语义：keyring + fabric 目录已删
+    expect(existsSync(dir)).toBe(false);
   });
 });

@@ -45,7 +45,8 @@ Consumer:
                                single AI request through the local gateway
   ai-fly key add <sk-aifly-key> --provider <id>         bare key into an existing ring
   ai-fly services [list]                                services across groups (state + ports)
-  ai-fly services stop|start|rm <provider> <service>    single-service lifecycle (live)
+  ai-fly services stop|start <provider> [<service>]         provider- or service-level lifecycle (live)
+  ai-fly services rm <provider> [<service>]                rm provider (= forget) or one service
   ai-fly forget <endpointId|8-char-prefix>              drop an imported provider
 
 Config:

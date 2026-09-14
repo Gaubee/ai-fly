@@ -69,6 +69,11 @@ export const en: Record<string, string> = {
   "dash.ports.removeConfirm": "remove this service? it only stops exposing - the catalog entry stays and can be restarted anytime.",
   "dash.ports.startedToast": "Service started",
   "dash.ports.stoppedToast": "Service stopped",
+  "dash.prov.stop": "stop provider",
+  "dash.prov.start": "start provider",
+  "dash.prov.stoppedBadge": "STOPPED",
+  "dash.prov.stoppedToast": "Provider stopped (all services)",
+  "dash.prov.startedToast": "Provider started",
   "dash.ports.removedToast": "Service removed",
   "dash.footer.pre": "engine internals (match sets, rewrite rules, keys) live in",
 

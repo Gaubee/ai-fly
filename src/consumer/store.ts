@@ -46,6 +46,11 @@ export interface Keyring {
    * 停用记录一并修剪（applyCatalog）。
    */
   disabledServices: string[];
+  /**
+   * 环级停用（service-lifecycle 提供方级）：true = 该提供方全部服务不物化监听
+   * （keyring 保留、目录同步照常更新）；恢复时单服务停用保持叠加。
+   */
+  disabled: boolean;
 }
 
 export const KEYRING_SCHEMA = z.object({
@@ -63,6 +68,7 @@ export const KEYRING_SCHEMA = z.object({
   ports: z.record(z.string(), z.number().int().min(0).max(65535)),
   actualPorts: z.record(z.string(), z.number().int().min(0).max(65535)).default({}),
   disabledServices: z.array(z.string().min(1).max(128)).default([]),
+  disabled: z.boolean().default(false),
 });
 
 /** 目录刷新载荷（AUTH_OK / import 视图）应用于钥环时的输入。 */
@@ -269,6 +275,8 @@ export function mergeImportView(
     ports: {},
     actualPorts: {},
     disabledServices: [],
+
+    disabled: false,
   };
   const merged = new Map(ring.services.map((s) => [s.serviceId, s]));
   for (const s of payload.services) merged.set(s.serviceId, s); // 链接版本胜出
@@ -392,9 +400,24 @@ export function setServiceEnabled(root: string, ref: string, serviceId: string, 
     : currentlyDisabled
       ? existing.disabledServices
       : [...existing.disabledServices, serviceId];
-  // 翻转条件：当前停用状态 ≠ 目标停用状态（四种组合的真值表）
+  // 提前返回（无变化）：当前停用状态 === 目标停用状态（四种组合的真值表）
   if (currentlyDisabled === !enabled) return { ring: existing, changed: false };
   const next = { ...existing, disabledServices: nextDisabled };
+  saveKeyring(root, next);
+  return { ring: next, changed: true };
+}
+
+/**
+ * 环级停用/启用（提供方级，service-lifecycle）：幂等；目录同步不受影响
+ * （applyCatalog 保留环自身属性）。返回是否发生变更。
+ */
+export function setProviderEnabled(root: string, ref: string, enabled: boolean): { ring: Keyring; changed: boolean } {
+  const existing = loadKeyring(root, ref);
+  if (existing === undefined) {
+    throw new CliError(`error: provider '${ref}' not found`);
+  }
+  if (existing.disabled === !enabled) return { ring: existing, changed: false };
+  const next = { ...existing, disabled: !enabled };
   saveKeyring(root, next);
   return { ring: next, changed: true };
 }
@@ -430,5 +453,5 @@ export function removeKeyring(root: string, ref: string): { dir: string; ring: K
   rmSync(dir, { recursive: true, force: true });
   if (ring !== undefined) return { dir, ring };
   // 目录在而钥环缺（中间态）：仍按整目录删除，返回最小描述
-  return { dir, ring: { alias: ref, endpointId: ref, relayUrls: [], keys: [], services: [], ports: {}, actualPorts: {}, disabledServices: [] } };
+  return { dir, ring: { alias: ref, endpointId: ref, relayUrls: [], keys: [], services: [], ports: {}, actualPorts: {}, disabledServices: [], disabled: false } };
 }

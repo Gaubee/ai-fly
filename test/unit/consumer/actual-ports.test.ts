@@ -33,7 +33,7 @@ function svc(serviceId: string, defaultPort: number): ServiceEntry {
 }
 
 function ring(endpointId: string, services: ServiceEntry[], ports: Record<string, number> = {}, actualPorts: Record<string, number> = {}): Keyring {
-  return { alias: endpointId.slice(0, 8), endpointId, relayUrls: [], keys: [], services, ports, actualPorts, disabledServices: [] };
+  return { alias: endpointId.slice(0, 8), endpointId, relayUrls: [], keys: [], services, ports, actualPorts, disabledServices: [], disabled: false };
 }
 
 afterEach(() => {

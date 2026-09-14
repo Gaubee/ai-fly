@@ -25,6 +25,8 @@
   /** 两步确认（forget 整环删除）。 */
   let forgetConfirm = $state("");
   let forgetBusy = $state(false);
+  /** 提供方级启停单飞锁（endpointId）。 */
+  let providerBusy = $state("");
   /** 服务生命周期操作在途行（单飞锁：endpointId/serviceId）。 */
   let serviceBusy = $state("");
   /** 服务移除两步确认中的行（endpointId/serviceId；空 = 无）。 */
@@ -116,6 +118,24 @@
     }
     return rows;
   });
+
+  /** 环级 enabled（提供方级停用）按 endpointId 查表。 */
+  const ringEnabledById = $derived(new Map(app.cservices.map((e) => [e.endpointId, e.enabled] as const)));
+
+  /** 提供方级 启动/终止（环开关：全部服务；恢复时单服务停用保持叠加）。 */
+  async function toggleProviderRing(endpointId: string, alias: string, enabled: boolean): Promise<void> {
+    if (providerBusy !== "") return;
+    providerBusy = endpointId;
+    try {
+      await call((c) => c.consumer.services.setProviderRunning({ endpointId, running: !enabled }));
+      toastSuccess(t(enabled ? "dash.prov.stoppedToast" : "dash.prov.startedToast"), alias);
+      await refresh("cservices", "consumer", "ports");
+    } catch (error) {
+      toastRpcError(toRpcError(error));
+    } finally {
+      providerBusy = "";
+    }
+  }
 
   /** 启动/终止（enabled 翻转；内嵌引擎热生效，独立 daemon 经 keyring watch 传导）。 */
   async function toggleRowService(row: PortRow): Promise<void> {
@@ -291,10 +311,20 @@
             </a>
           {:else}
             {#each consumer.providers as entry (entry.endpointId)}
+              {@const ringEnabled = ringEnabledById.get(entry.endpointId) ?? true}
               <div class="flex flex-col gap-1 border border-border/70 px-2.5 py-2" transition:slide={{ duration: 150 }}>
                 <div class="flex flex-wrap items-center gap-2">
-                  <span class="font-mono text-xs">{entry.alias}</span>
+                  <span class="font-mono text-xs" class:opacity-60={!ringEnabled}>{entry.alias}</span>
                   <StateBadge state={entry.state} />
+                  {#if !ringEnabled}
+                    <span class="rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{t("dash.prov.stoppedBadge")}</span>
+                  {/if}
+                  <PressButton
+                    variant="ghost"
+                    class="text-[11px]"
+                    loading={providerBusy === entry.endpointId}
+                    onclick={() => void toggleProviderRing(entry.endpointId, entry.alias, ringEnabled)}
+                  >{ringEnabled ? t("dash.prov.stop") : t("dash.prov.start")}</PressButton>
                   <span class="ml-auto font-mono text-[11px] text-muted-foreground">
                     {Object.keys(entry.ports).length} port(s) - {entry.servedCount} served
                   </span>

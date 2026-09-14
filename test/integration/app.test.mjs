@@ -223,6 +223,57 @@ describe("app integration: token gate + contract over ws", () => {
     ws.close();
   });
 
+  it("services 提供方级：setProviderRunning 环开关（providers[].enabled + 叠加语义）", async () => {
+    const { client, ws } = makeClient();
+    const ep = "ep-svclife-integration02";
+    saveKeyring(join(base, ".aifly", "consumers"), {
+      alias: "ring-prov",
+      endpointId: ep,
+      relayUrls: [],
+      keys: [],
+      services: [
+        { serviceId: "svc-p1", name: "one", match: [{ type: "suffix", value: ".p1.test" }], defaultPort: 18081 },
+        { serviceId: "svc-p2", name: "two", match: [{ type: "suffix", value: ".p2.test" }], defaultPort: 18082 },
+      ],
+      ports: {},
+      actualPorts: {},
+      disabledServices: ["svc-p2"],
+      disabled: false,
+    });
+
+    const prov = (listed) => listed.providers.find((p) => p.endpointId === ep);
+    const svc = (listed, id) => prov(listed)?.services.find((s) => s.serviceId === id);
+
+    const before = await client.consumer.services.list({});
+    assert.equal(prov(before).enabled, true);
+    assert.equal(svc(before, "svc-p2").enabled, false, "单服务停用先行");
+
+    const stopped = await client.consumer.services.setProviderRunning({ endpointId: ep, running: false });
+    assert.equal(stopped.changed, true);
+    const idem = await client.consumer.services.setProviderRunning({ endpointId: ep, running: false });
+    assert.equal(idem.changed, false);
+
+    const during = await client.consumer.services.list({});
+    assert.equal(prov(during).enabled, false, "环级停用");
+    assert.equal(svc(during, "svc-p1").enabled, false, "环停用覆盖全部服务");
+
+    const started = await client.consumer.services.setProviderRunning({ endpointId: ep, running: true });
+    assert.equal(started.changed, true);
+    const after = await client.consumer.services.list({});
+    assert.equal(prov(after).enabled, true);
+    assert.equal(svc(after, "svc-p1").enabled, true, "环恢复：正常服务回来");
+    assert.equal(svc(after, "svc-p2").enabled, false, "环恢复：单服务停用保持叠加");
+
+    await assert.rejects(
+      client.consumer.services.setProviderRunning({ endpointId: "ep-no-such-ref", running: false }),
+      (err) => {
+        assert.match(String(err.code ?? ""), /INVALID_INPUT|NOT_FOUND|INTERNAL/);
+        return true;
+      },
+    );
+    ws.close();
+  });
+
   it("密钥库往返：set/list/remove；值绝不跨 RPC；文件 0600", async () => {
     const { client, ws } = makeClient();
     const first = await client.provider.secrets.set({ name: "openai", value: "Bearer sk-test-123" });

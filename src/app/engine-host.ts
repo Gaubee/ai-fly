@@ -267,6 +267,24 @@ export class EngineHost {
   }
 
   /**
+   * 提供方级停用/启用热应用（环级开关）：环停用 = 该环全部监听关闭；恢复 =
+   * 逐服务重放（单服务停用保持叠加——与 lifecycle-watch 的 replay 同语义）。
+   */
+  async applyProviderEnabled(ring: Keyring, enabled: boolean): Promise<void> {
+    if (this.consumer === null) return;
+    const disabled = new Set(ring.disabledServices);
+    for (const service of ring.services) {
+      await this.consumer.gateway.setServiceEnabled(
+        ring.endpointId,
+        ring.alias,
+        service,
+        ring.ports,
+        enabled && !disabled.has(service.serviceId),
+      );
+    }
+  }
+
+  /**
    * 消费侧数据变更（import/join/key.add/forget/ports.set）后重建网关：
    * 运行中则 stop→start 拉入新钥环；停止态为 no-op（下次 start 自然带上）。
    */

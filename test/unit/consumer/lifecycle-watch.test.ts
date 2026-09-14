@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServiceEntry } from "../../../src/wire/frames.ts";
 import { Gateway } from "../../../src/consumer/gateway.ts";
-import { saveKeyring, setServiceEnabled, type Keyring } from "../../../src/consumer/store.ts";
+import { saveKeyring, setProviderEnabled, setServiceEnabled, type Keyring } from "../../../src/consumer/store.ts";
 import { watchServiceLifecycle } from "../../../src/consumer/lifecycle-watch.ts";
 import type { ProviderRoute, ProviderStateKind } from "../../../src/consumer/providers.ts";
 
@@ -28,7 +28,7 @@ function svc(serviceId: string, defaultPort: number): ServiceEntry {
 }
 
 function ringOf(ep: string, services: ServiceEntry[]): Keyring {
-  return { alias: "prov", endpointId: ep, relayUrls: [], keys: [], services, ports: {}, actualPorts: {}, disabledServices: [] };
+  return { alias: "prov", endpointId: ep, relayUrls: [], keys: [], services, ports: {}, actualPorts: {}, disabledServices: [], disabled: false };
 }
 
 const roots: string[] = [];
@@ -72,6 +72,32 @@ describe("watchServiceLifecycle（keyring 外部变更 → 网关热重放）", 
     setServiceEnabled(root, ep, "svc-b", false);
     await new Promise((r) => setTimeout(r, 400));
     expect(gateway.listenerInfo().map((l) => l.serviceId).sort()).toEqual(["svc-a", "svc-b"]);
+  });
+
+  it("环级停用：外部 setProviderEnabled 传导全部监听关；恢复时单服务停用保持", async () => {
+    const root = mkdtempSync(join(tmpdir(), "aifly-lc-"));
+    roots.push(root);
+    const ep = "ep-lifecycle-watch-03";
+    let ring = ringOf(ep, [svc("svc-a", 11434), svc("svc-b", 8787)]);
+    ring.disabledServices = ["svc-a"];
+    saveKeyring(root, ring);
+
+    const route = new FakeRoute();
+    const gateway = new Gateway({ resolveRoute: () => route });
+    gateways.push(gateway);
+    await gateway.syncProviderServices(ep, route.alias, [svc("svc-b", 8787)], ring.ports);
+    expect(gateway.listenerInfo().map((l) => l.serviceId)).toEqual(["svc-b"]);
+
+    watchServiceLifecycle({ root, rings: [ring], gateway, debounceMs: 30, pollMs: 500 });
+    setProviderEnabled(root, ep, false);
+    await vi.waitFor(() => {
+      expect(gateway.listenerInfo()).toHaveLength(0);
+    }, { timeout: 3000 });
+
+    setProviderEnabled(root, ep, true);
+    await vi.waitFor(() => {
+      expect(gateway.listenerInfo().map((l) => l.serviceId)).toEqual(["svc-b"]); // svc-a 单服务停用保持
+    }, { timeout: 3000 });
   });
 
   it("目录全量替换后 disabled 仍生效（可复活语义的网关侧闭环）", async () => {

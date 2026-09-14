@@ -49,8 +49,9 @@ export function watchServiceLifecycle(opts: LifecycleWatchOptions): LifecycleWat
       }
       const disabled = new Set(ring.disabledServices);
       for (const service of ring.services) {
+        const enabled = !ring.disabled && !disabled.has(service.serviceId);
         opts.gateway
-          .setServiceEnabled(ring.endpointId, ring.alias, service, ring.ports, !disabled.has(service.serviceId))
+          .setServiceEnabled(ring.endpointId, ring.alias, service, ring.ports, enabled)
           .catch((err: unknown) => {
             notice(`warning: service lifecycle apply failed for '${ring.alias}/${service.serviceId}': ${(err as Error).message}`);
           });

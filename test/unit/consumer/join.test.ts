@@ -175,6 +175,7 @@ describe("importLink", () => {
       ports: {},
       actualPorts: {},
       disabledServices: [],
+      disabled: false,
     };
     saveKeyring(root, existing);
     mkdirSync(fabricDir(root, payload.provider.endpointId), { recursive: true }); // fabric 身份已存在
@@ -209,6 +210,7 @@ describe("importLink", () => {
       ports: {},
       actualPorts: {},
       disabledServices: [],
+      disabled: false,
     };
     saveKeyring(root, existing);
     mkdirSync(fabricDir(root, payload.provider.endpointId), { recursive: true });
@@ -250,7 +252,7 @@ describe("joinDevice", () => {
 
   it("已入网：保留既有身份与钥环，丢弃 staging（token 已消耗如实提示）", async () => {
     const providerEp = epId();
-    const existing: Keyring = { alias: "kept", endpointId: providerEp, relayUrls: [], keys: [{ keyId: "k", key: keyText(), group: "g" }], services: [], ports: {}, actualPorts: {}, disabledServices: [] };
+    const existing: Keyring = { alias: "kept", endpointId: providerEp, relayUrls: [], keys: [{ keyId: "k", key: keyText(), group: "g" }], services: [], ports: {}, actualPorts: {}, disabledServices: [], disabled: false };
     saveKeyring(root, existing);
     mkdirSync(fabricDir(root, providerEp), { recursive: true });
     const factory = fakeFactory();
@@ -300,7 +302,7 @@ describe("addKey", () => {
 
   it("已入网：入环生效（幂等），keyId/group 留待 AUTH_OK 回填", () => {
     const ep = epId();
-    saveKeyring(root, { alias: "p", endpointId: ep, relayUrls: [], keys: [], services: [], ports: {}, actualPorts: {}, disabledServices: [] });
+    saveKeyring(root, { alias: "p", endpointId: ep, relayUrls: [], keys: [], services: [], ports: {}, actualPorts: {}, disabledServices: [], disabled: false });
     mkdirSync(fabricDir(root, ep), { recursive: true });
     const key = keyText();
     const r1 = addKey(key, ep, root);
@@ -320,7 +322,7 @@ describe("addKey", () => {
 
   it("别名定位同样生效", () => {
     const ep = epId();
-    saveKeyring(root, { alias: "byname", endpointId: ep, relayUrls: [], keys: [], services: [], ports: {}, actualPorts: {}, disabledServices: [] });
+    saveKeyring(root, { alias: "byname", endpointId: ep, relayUrls: [], keys: [], services: [], ports: {}, actualPorts: {}, disabledServices: [], disabled: false });
     mkdirSync(fabricDir(root, ep), { recursive: true });
     expect(addKey(keyText(), "byname", root).added).toBe(true);
   });

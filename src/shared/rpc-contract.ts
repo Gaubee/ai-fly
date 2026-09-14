@@ -664,6 +664,8 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
               z.object({
                 alias: z.string(),
                 endpointId: z.string(),
+                /** 环级开关（提供方级停用）。 */
+                enabled: z.boolean(),
                 services: z.array(
                   z.object({
                     serviceId: z.string(),
@@ -689,6 +691,15 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
           }),
         )
         .output(z.object({ alias: z.string(), serviceId: z.string(), running: z.boolean(), changed: z.boolean() })),
+      /** 提供方级停用/启用（环级开关：全部服务；恢复时单服务停用保持叠加）。 */
+      setProviderRunning: oc
+        .input(
+          z.strictObject({
+            endpointId: z.string().min(8).max(128),
+            running: z.boolean(),
+          }),
+        )
+        .output(z.object({ alias: z.string(), running: z.boolean(), changed: z.boolean() })),
       /** 移除单个服务（= 停用；组内可复活）。 */
       remove: oc
         .input(

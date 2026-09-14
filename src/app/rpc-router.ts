@@ -16,7 +16,7 @@ import type { KeyRecord, ServiceConfig, ServiceInput } from "../provider/store.t
 import { SecretsStore } from "../provider/secrets.ts";
 import { probeUpstreamModels, testUpstream, pickDefaultModel } from "../provider/upstream-test.ts";
 import { importLink, joinDevice, addKey } from "../consumer/join.ts";
-import { listKeyrings, removeKeyring, setPort, setServiceEnabled } from "../consumer/store.ts";
+import { listKeyrings, removeKeyring, setPort, setProviderEnabled, setServiceEnabled } from "../consumer/store.ts";
 import { testLocalService } from "../consumer/local-test.ts";
 import { testServiceRoute } from "../provider/route-test.ts";
 import { applyWriter, previewWriter } from "./writers/index.ts";
@@ -416,11 +416,12 @@ export function createRpcRouter(deps: RpcRouterDeps) {
               return {
                 alias: ring.alias,
                 endpointId: ring.endpointId,
+                enabled: !ring.disabled,
                 services: ring.services.map((s) => ({
                   serviceId: s.serviceId,
                   name: s.name,
                   port: ring.actualPorts[s.serviceId] ?? ring.ports[s.serviceId] ?? s.defaultPort,
-                  enabled: !disabled.has(s.serviceId),
+                  enabled: !ring.disabled && !disabled.has(s.serviceId),
                   listening: listening.has(`${ring.endpointId}/${s.serviceId}`),
                 })),
               };
@@ -431,6 +432,11 @@ export function createRpcRouter(deps: RpcRouterDeps) {
           const { ring, changed } = setServiceEnabled(host.consumersRoot, input.endpointId, input.serviceId, input.running);
           if (changed) await host.applyServiceEnabled(ring, input.serviceId, input.running);
           return { alias: ring.alias, serviceId: input.serviceId, running: input.running, changed };
+        }),
+        setProviderRunning: rpc.consumer.services.setProviderRunning.handler(async ({ input }) => {
+          const { ring, changed } = setProviderEnabled(host.consumersRoot, input.endpointId, input.running);
+          if (changed) await host.applyProviderEnabled(ring, input.running);
+          return { alias: ring.alias, running: input.running, changed };
         }),
         remove: rpc.consumer.services.remove.handler(async ({ input }) => {
           const { ring, changed } = setServiceEnabled(host.consumersRoot, input.endpointId, input.serviceId, false);
