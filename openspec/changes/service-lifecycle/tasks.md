@@ -37,4 +37,11 @@
 - [x] 4.2 交付前自走查（webui 子代理真实浏览器全链 + DOM 断言：终止/启动/移除
       两步确认/provider 开关/EN locale；keyring 与 services.json 落盘态同步验证；
       摩擦点 5 衍生修复：编辑重建保留停用态）
+      ——2026-09-14 MainAgent 端到端复核（沙盒 HOME + 本机 relay + upstream
+      echo + 双端真实 fabric 会话）：CLI 热启停（stop 1.5s 内端口拒绝/启动
+      恢复透传）、provider 目录传导（stop 3s 内 consumer 服务消失端口关/
+      start 恢复）、rm 停用态、webui 干净环境终止 t=0 端口关 + 启动恢复；
+      语义边界记录：consumer 停用记录在 provider 目录移除该服务时被修剪
+      （applyCatalog 防泄漏），provider 重新暴露后服务自动复活——"可复活"
+      的深层路径，跨 provider 目录变化不持久
 - [ ] 4.3 README（EN+zh）services 命令章节 + openspec 归档
