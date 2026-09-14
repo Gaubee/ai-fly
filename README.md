@@ -38,14 +38,26 @@ credential injection impossible without MITM).
 ```bash
 # Provider
 ai-fly serve   --upstream http://127.0.0.1:11434   # run + manage services/groups
+ai-fly service stop ollama                         # pause exposure (catalog drops it, config kept)
+ai-fly service start ollama                        # resume; consumers see it again
 ai-fly key     issue --group friends                # sk-aifly-… keys
 ai-fly share   --group friends --ttl 30m            # aifly1.… link (token + key)
 
 # Consumer
 ai-fly import  <link> --run                        # join + keyring + start gateway
 ai-fly key     add <sk-aifly-…> --provider <id>    # bare key into an existing ring
+ai-fly services                                     # list services across groups (state + ports)
+ai-fly services stop <provider> <service>          # stop one service's local listener (live)
+ai-fly services start <provider> <service>         # re-enable (revivable; catalog sync keeps the entry)
 ai-fly status  --verbose                            # ports, providers, service details
 ```
+
+Service lifecycle: a stopped provider service disappears from the consumer catalog
+(local listener closes, in-flight requests abort, requests get 404); a stopped
+consumer service is "removed but revivable" — the provider's catalog sync still
+updates the entry, it just never re-materializes a local port until you start it
+back. The running gateway daemon picks these changes up live (keyring watch); the
+dashboard's port table exposes the same start/stop/remove actions.
 
 ## Development
 
@@ -103,3 +115,11 @@ strings below are exactly what the UI shows.
     picked by default, the dropdown lists models sorted by price, and the
     result line shows `ok · <ms> · <model>` or the upstream error (an
     upstream 401 with an invalid key is a PASS — the network is proven).
+11. **Service lifecycle** — with a running gateway, stop a service from the
+    dashboard's port table (or `ai-fly services stop`): its local port
+    refuses connections within ~a second and the row flips to disabled;
+    start restores the same port. Stop it on the *provider* (`ai-fly service
+    stop <name>`): the consumer's row disappears (catalog sync); start brings
+    it back. Remove on the consumer keeps the entry hidden-but-revivable —
+    `ai-fly services` still lists it as `disabled`, and starting it again
+    works without re-importing.
