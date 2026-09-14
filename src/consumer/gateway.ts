@@ -300,6 +300,28 @@ export class Gateway {
     }
   }
 
+  /**
+   * 单服务停用/启用热生效（service-lifecycle）：stop 关端口 + 终结在途请求；
+   * start 建监听（冲突自动错开 + NOTICE）。幂等（停用无监听、启用已监听均为
+   * no-op）。条目与端口偏好由调用方从钥环提供（Gateway 不读磁盘）。
+   */
+  async setServiceEnabled(
+    providerId: string,
+    alias: string,
+    service: ServiceEntry,
+    ports: Readonly<Record<string, number>>,
+    enabled: boolean,
+  ): Promise<void> {
+    if (this.stopped) return;
+    const key = `${providerId}/${service.serviceId}`;
+    if (!enabled) {
+      this.removeService(key, "disabled locally");
+      return;
+    }
+    if (this.listeners.has(key)) return;
+    await this.addService(providerId, alias, service, ports);
+  }
+
   private async addService(
     providerId: string,
     alias: string,

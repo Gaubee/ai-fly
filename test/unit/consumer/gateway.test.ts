@@ -532,6 +532,40 @@ describe("目录同步与端口", () => {
     await gw.stop();
   });
 
+  it("setServiceEnabled 热启停：stop 关端口（幂等）、start 按端口偏好恢复", async () => {
+    const route = new FakeRoute();
+    const port = await freePort();
+    const service = svc("svc-a", "a", port);
+    const gw = await bootGateway(route, service, {}, { "svc-a": port });
+    expect(gw.gateway.listenerInfo()).toHaveLength(1);
+
+    // stop：监听关闭，连接拒绝
+    await gw.gateway.setServiceEnabled("p1", route.alias, service, { "svc-a": port }, false);
+    expect(gw.gateway.listenerInfo()).toHaveLength(0);
+    const probe = await new Promise<string>((resolve) => {
+      const s = tcpConnect({ host: "127.0.0.1", port });
+      s.once("error", (e: NodeJS.ErrnoException) => resolve(e.code ?? "error"));
+      s.once("connect", () => {
+        s.destroy();
+        resolve("connected");
+      });
+    });
+    expect(probe).toBe("ECONNREFUSED");
+
+    // 重复 stop 幂等
+    await gw.gateway.setServiceEnabled("p1", route.alias, service, { "svc-a": port }, false);
+    expect(gw.gateway.listenerInfo()).toHaveLength(0);
+
+    // start：按端口偏好恢复同端口；重复 start 幂等不重建
+    await gw.gateway.setServiceEnabled("p1", route.alias, service, { "svc-a": port }, true);
+    const info = gw.gateway.listenerInfo();
+    expect(info).toHaveLength(1);
+    expect(info[0]!.port).toBe(port);
+    await gw.gateway.setServiceEnabled("p1", route.alias, service, { "svc-a": port }, true);
+    expect(gw.gateway.listenerInfo()).toHaveLength(1);
+    await gw.stop();
+  });
+
   it("端口被占自动错开：NOTICE 显著标注实际端口", async () => {
     const occupied = await new Promise<{ server: Server; port: number }>((resolve) => {
       const server = httpServer();

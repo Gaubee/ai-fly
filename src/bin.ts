@@ -44,6 +44,8 @@ Consumer:
   ai-fly test [--data <dir>] [--service <name>] [--form …] [--content <text>]
                                single AI request through the local gateway
   ai-fly key add <sk-aifly-key> --provider <id>         bare key into an existing ring
+  ai-fly services [list]                                services across groups (state + ports)
+  ai-fly services stop|start|rm <provider> <service>    single-service lifecycle (live)
   ai-fly forget <endpointId|8-char-prefix>              drop an imported provider
 
 Config:
@@ -111,6 +113,7 @@ async function dispatch(command: string, rest: string[]): Promise<number> {
     .with("run", () => lazy(() => import("./cli/commands/consumer/run.ts"))(rest))
     .with("ports", () => lazy(() => import("./cli/commands/consumer/ports.ts"))(rest))
     .with("forget", () => lazy(() => import("./cli/commands/consumer/forget.ts"))(rest))
+    .with("services", () => lazy(() => import("./cli/commands/consumer/services.ts"))(rest))
     .with("key", () => {
       const sub = rest[0];
       if (sub === "add") {

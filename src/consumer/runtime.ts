@@ -42,10 +42,12 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     },
   });
   managerRef.current = manager;
-  // 先物化既有目录的监听（离线 503 语义），再启动连接（AUTH_OK 后再全量同步刷新）
+  // 先物化既有目录的监听（离线 503 语义），再启动连接（AUTH_OK 后再全量同步刷新）；
+  // 停用服务（disabledServices）不物化（service-lifecycle）
   for (const ring of opts.rings) {
-    if (ring.services.length > 0) {
-      await gateway.syncProviderServices(ring.endpointId, ring.alias, ring.services, ring.ports);
+    const visible = ring.services.filter((s) => !ring.disabledServices.includes(s.serviceId));
+    if (visible.length > 0) {
+      await gateway.syncProviderServices(ring.endpointId, ring.alias, visible, ring.ports);
     }
   }
   // 实际监听端口回写（自动错开时 ai-fly test 按 actualPorts 命中真实端口，

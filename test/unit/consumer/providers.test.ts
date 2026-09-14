@@ -143,7 +143,7 @@ function epId(): string {
 }
 
 function ringOf(ep: string, keys: Array<{ keyId: string; key: string; group: string }> = []): Keyring {
-  return { alias: "prov", endpointId: ep, relayUrls: [], keys, services: [], ports: {}, actualPorts: {} };
+  return { alias: "prov", endpointId: ep, relayUrls: [], keys, services: [], ports: {}, actualPorts: {}, disabledServices: [] };
 }
 
 const HANDLERS = (): ForwardHandlers & { events: string[] } => {

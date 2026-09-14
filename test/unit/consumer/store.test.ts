@@ -22,6 +22,7 @@ import {
   removeKeyring,
   saveKeyring,
   setPort,
+  setServiceEnabled,
   updateServices,
   upsertKey,
   type Keyring,
@@ -45,7 +46,7 @@ function service(serviceId: string, name: string, port: number): ServiceEntry {
 }
 
 function ringOf(ep: string, alias = "prov"): Keyring {
-  return { alias, endpointId: ep, relayUrls: ["http://r1"], keys: [], services: [], ports: {}, actualPorts: {} };
+  return { alias, endpointId: ep, relayUrls: ["http://r1"], keys: [], services: [], ports: {}, actualPorts: {}, disabledServices: [] };
 }
 
 let root: string;
@@ -166,6 +167,54 @@ describe("mergeImportView / applyCatalog", () => {
     const next = updateServices(root, ep, { alias: "prov2", relayUrls: [], services: [service("svc-x", "x", 9)] });
     expect(next.alias).toBe("prov2");
     expect(loadKeyring(root, ep)?.services[0]?.serviceId).toBe("svc-x");
+  });
+
+  it("disabledServices 跨目录同步保留（不复活），目录消失条目修剪", () => {
+    const ep = endpointId();
+    let ring = ringOf(ep);
+    ring.services = [service("svc-a", "a", 1), service("svc-gone", "gone", 2)];
+    ring.disabledServices = ["svc-a", "svc-gone"];
+    const next = applyCatalog(ring, {
+      relayUrls: [],
+      // 目录全量替换：svc-a 条目仍在（内容更新）、svc-gone 消失、svc-new 新增
+      services: [service("svc-a", "a2", 1), service("svc-new", "new", 3)],
+    });
+    expect(next.disabledServices).toEqual(["svc-a"]); // 停用记录不被同步复活/清除
+    expect(next.services.map((s) => s.serviceId)).toContain("svc-a"); // 条目本身仍随同步更新
+  });
+
+  it("mergeImportView 新建骨架携带 disabledServices 空集合", () => {
+    const ep = endpointId();
+    const { ring } = mergeImportView(
+      undefined,
+      { alias: "prov", endpointId: ep, relayUrls: [], services: [service("s", "s", 1)] },
+      { keyId: "k", key: "sk-aifly-k1", group: "g" },
+    );
+    expect(ring.disabledServices).toEqual([]);
+  });
+});
+
+describe("setServiceEnabled（停用/启用写路径）", () => {
+  it("stop 落盘、重复 stop 幂等、start 恢复、未知服务报错", () => {
+    const ep = endpointId();
+    const base = { ...ringOf(ep), services: [service("svc-a", "a", 1)] };
+    saveKeyring(root, base);
+
+    const stopped = setServiceEnabled(root, ep, "svc-a", false);
+    expect(stopped.changed).toBe(true);
+    expect(stopped.ring.disabledServices).toEqual(["svc-a"]);
+    expect(loadKeyring(root, ep)?.disabledServices).toEqual(["svc-a"]);
+
+    const again = setServiceEnabled(root, ep, "svc-a", false);
+    expect(again.changed).toBe(false); // 幂等，不重复追加
+
+    const started = setServiceEnabled(root, ep, "svc-a", true);
+    expect(started.changed).toBe(true);
+    expect(started.ring.disabledServices).toEqual([]);
+    expect(loadKeyring(root, ep)?.disabledServices).toEqual([]);
+
+    expect(() => setServiceEnabled(root, ep, "svc-unknown", false)).toThrow(CliError);
+    expect(() => setServiceEnabled(root, "no-such-provider", "svc-a", false)).toThrow(CliError);
   });
 });
 

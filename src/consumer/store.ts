@@ -40,6 +40,12 @@ export interface Keyring {
   ports: Record<string, number>;
   /** 网关最近一次实际监听端口（自动错开回写；区别于 ports 的用户偏好）。 */
   actualPorts: Record<string, number>;
+  /**
+   * 本地停用的服务（serviceId 集合，service-lifecycle）：「移除+可复活」语义——
+   * 目录全量替换不复活停用服务，但条目变更仍随同步更新；服务从目录消失时
+   * 停用记录一并修剪（applyCatalog）。
+   */
+  disabledServices: string[];
 }
 
 export const KEYRING_SCHEMA = z.object({
@@ -56,6 +62,7 @@ export const KEYRING_SCHEMA = z.object({
   services: z.array(SERVICE_ENTRY_SCHEMA),
   ports: z.record(z.string(), z.number().int().min(0).max(65535)),
   actualPorts: z.record(z.string(), z.number().int().min(0).max(65535)).default({}),
+  disabledServices: z.array(z.string().min(1).max(128)).default([]),
 });
 
 /** 目录刷新载荷（AUTH_OK / import 视图）应用于钥环时的输入。 */
@@ -261,6 +268,7 @@ export function mergeImportView(
     services: [],
     ports: {},
     actualPorts: {},
+    disabledServices: [],
   };
   const merged = new Map(ring.services.map((s) => [s.serviceId, s]));
   for (const s of payload.services) merged.set(s.serviceId, s); // 链接版本胜出
@@ -279,6 +287,7 @@ export function mergeImportView(
 /**
  * 目录全量替换（AUTH_OK 初次/refresh 同构）：services、relayUrls 整体替换，
  * alias 可选更新；ports 修剪到存活服务（被删服务的端口记录一并移除）。
+ * disabledServices 跨同步保留（可复活语义）但修剪到存活条目。
  */
 export function applyCatalog(ring: Keyring, patch: CatalogPatch): Keyring {
   const alive = new Set(patch.services.map((s) => s.serviceId));
@@ -290,12 +299,14 @@ export function applyCatalog(ring: Keyring, patch: CatalogPatch): Keyring {
   for (const [serviceId, port] of Object.entries(ring.actualPorts ?? {})) {
     if (alive.has(serviceId)) actualPorts[serviceId] = port;
   }
+  const disabledServices = ring.disabledServices.filter((id) => alive.has(id));
   const next: Keyring = {
     ...ring,
     relayUrls: [...patch.relayUrls],
     services: [...patch.services],
     ports,
     actualPorts,
+    disabledServices,
   };
   if (patch.alias !== undefined && patch.alias !== "") next.alias = patch.alias;
   return next;
@@ -363,6 +374,31 @@ export function setPort(root: string, endpointId: string, serviceId: string, por
   return next;
 }
 
+/**
+ * 服务停用/启用（services stop|start / rm 写路径，service-lifecycle）：
+ * 幂等；服务须存在于目录（含已停用条目——可复活语义）。返回是否发生变更。
+ */
+export function setServiceEnabled(root: string, ref: string, serviceId: string, enabled: boolean): { ring: Keyring; changed: boolean } {
+  const existing = loadKeyring(root, ref);
+  if (existing === undefined) {
+    throw new CliError(`error: provider '${ref}' not found`);
+  }
+  if (!existing.services.some((s) => s.serviceId === serviceId)) {
+    throw new CliError(`error: unknown service '${serviceId}' for provider '${existing.alias}'`);
+  }
+  const currentlyDisabled = existing.disabledServices.includes(serviceId);
+  const nextDisabled = enabled
+    ? existing.disabledServices.filter((id) => id !== serviceId)
+    : currentlyDisabled
+      ? existing.disabledServices
+      : [...existing.disabledServices, serviceId];
+  // 翻转条件：当前停用状态 ≠ 目标停用状态（四种组合的真值表）
+  if (currentlyDisabled === !enabled) return { ring: existing, changed: false };
+  const next = { ...existing, disabledServices: nextDisabled };
+  saveKeyring(root, next);
+  return { ring: next, changed: true };
+}
+
 /** 网关实际监听端口回写（引擎启动路径；整体替换并修剪到存活服务）。 */
 export function setActualPorts(root: string, endpointId: string, actual: Readonly<Record<string, number>>): Keyring {
   const existing = loadKeyring(root, endpointId);
@@ -394,5 +430,5 @@ export function removeKeyring(root: string, ref: string): { dir: string; ring: K
   rmSync(dir, { recursive: true, force: true });
   if (ring !== undefined) return { dir, ring };
   // 目录在而钥环缺（中间态）：仍按整目录删除，返回最小描述
-  return { dir, ring: { alias: ref, endpointId: ref, relayUrls: [], keys: [], services: [], ports: {}, actualPorts: {} } };
+  return { dir, ring: { alias: ref, endpointId: ref, relayUrls: [], keys: [], services: [], ports: {}, actualPorts: {}, disabledServices: [] } };
 }

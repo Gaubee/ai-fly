@@ -746,7 +746,9 @@ export class ProviderManager {
         ...(opts.backoff !== undefined ? { backoff: opts.backoff } : {}),
         ...(opts.pollIntervalMs !== undefined ? { pollIntervalMs: opts.pollIntervalMs } : {}),
         onCatalog: (conn, updated) => {
-          opts.onCatalog?.(conn.endpointId, updated.alias, updated.services, updated.ports);
+          // 停用服务不进入网关物化视图（service-lifecycle：目录同步不复活停用服务）
+          const visible = updated.services.filter((s) => !updated.disabledServices.includes(s.serviceId));
+          opts.onCatalog?.(conn.endpointId, updated.alias, visible, updated.ports);
         },
         onStateChange: (conn) => {
           opts.onStateChange?.(conn.endpointId, conn.state);
