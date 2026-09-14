@@ -2,7 +2,8 @@
      - 空数据首屏：两条向导大入口卡（spec「首屏三步可达」）。
      - 双角色状态卡：提供方（daemon 运行态/服务数/分组与密钥/在线会话/relay）
        + 使用方（每提供者状态行：别名/六态/路径/端口摘要 + 网关开关）。
-     - 端口表（服务名/端口/提供者）。
+     - 端口表（服务名/端口/提供者 + 生命周期：行内 启动/终止/移除——
+       service-lifecycle，数据源 consumer.services.list 的 enabled/listening）。
      - 数据全部来自 app store（通知驱动拉取；断线重连全量对账）。 -->
 <script lang="ts">
   import Card, { CardFooter } from "$lib/ui/card";
@@ -12,9 +13,11 @@
   import { t } from "$lib/i18n.svelte.ts";
   import Separator from "$lib/ui/separator";
   import { slide } from "svelte/transition";
+  import { toRpcError } from "$lib/rpc-client";
   import StateBadge, { type ConsumerState } from "../components/StateBadge.svelte";
   import { app, refresh } from "../stores/app.svelte.ts";
   import { call } from "../stores/rpc.svelte.ts";
+  import { toastRpcError, toastSuccess } from "../stores/toast.svelte.ts";
 
   /** daemon/gateway 开关在途标记（按钮 loading 锁）。 */
   let daemonBusy = $state(false);
@@ -22,6 +25,10 @@
   /** 两步确认（forget 整环删除）。 */
   let forgetConfirm = $state("");
   let forgetBusy = $state(false);
+  /** 服务生命周期操作在途行（单飞锁：endpointId/serviceId）。 */
+  let serviceBusy = $state("");
+  /** 服务移除两步确认中的行（endpointId/serviceId；空 = 无）。 */
+  let serviceRemoveConfirm = $state("");
 
   const provider = $derived(app.provider);
   const consumer = $derived(app.consumer);
@@ -72,23 +79,83 @@
     }
   }
 
-  /** 端口表行（消费侧实际端口；网关停止时为存储投影）。 */
+  /** 端口表行（service-lifecycle：consumer.services.list 的 enabled/listening +
+     consumer.status 的提供者连接态按 endpointId 合流；端口网关停止时为存储投影）。 */
+  interface PortRow {
+    key: string;
+    endpointId: string;
+    serviceId: string;
+    alias: string;
+    name: string;
+    port: number;
+    state: ConsumerState;
+    enabled: boolean;
+    listening: boolean;
+  }
+
   const portRows = $derived.by(() => {
-    if (consumer === null) return [];
-    const rows: Array<{ alias: string; name: string; port: number; state: ConsumerState }> = [];
-    for (const entry of consumer.providers) {
-      const nameById = new Map(entry.services.map((service) => [service.serviceId, service.name]));
-      for (const [serviceId, port] of Object.entries(entry.ports)) {
+    const stateById = new Map(
+      (consumer?.providers ?? []).map((entry) => [entry.endpointId, entry.state] as const),
+    );
+    const rows: PortRow[] = [];
+    for (const entry of app.cservices) {
+      const state = stateById.get(entry.endpointId) ?? "stopped";
+      for (const service of entry.services) {
         rows.push({
+          key: `${entry.endpointId}/${service.serviceId}`,
+          endpointId: entry.endpointId,
+          serviceId: service.serviceId,
           alias: entry.alias,
-          name: nameById.get(serviceId) ?? serviceId,
-          port,
-          state: entry.state,
+          name: service.name,
+          port: service.port,
+          state,
+          enabled: service.enabled,
+          listening: service.listening,
         });
       }
     }
     return rows;
   });
+
+  /** 启动/终止（enabled 翻转；内嵌引擎热生效，独立 daemon 经 keyring watch 传导）。 */
+  async function toggleRowService(row: PortRow): Promise<void> {
+    if (serviceBusy !== "") return;
+    serviceBusy = row.key;
+    try {
+      await call((c) =>
+        c.consumer.services.setRunning({
+          endpointId: row.endpointId,
+          serviceId: row.serviceId,
+          running: !row.enabled,
+        }),
+      );
+      toastSuccess(
+        t(row.enabled ? "dash.ports.stoppedToast" : "dash.ports.startedToast"),
+        `${row.alias} / ${row.name}`,
+      );
+      await refresh("cservices", "consumer", "ports");
+    } catch (error) {
+      toastRpcError(toRpcError(error));
+    } finally {
+      serviceBusy = "";
+    }
+  }
+
+  /** 移除（= 停用语义：列表移除且不物化监听，目录同步不复活；组内可随时重启）。 */
+  async function removeRowService(row: PortRow): Promise<void> {
+    if (serviceBusy !== "") return;
+    serviceBusy = row.key;
+    try {
+      await call((c) => c.consumer.services.remove({ endpointId: row.endpointId, serviceId: row.serviceId }));
+      toastSuccess(t("dash.ports.removedToast"), `${row.alias} / ${row.name}`);
+      await refresh("cservices", "consumer", "ports");
+    } catch (error) {
+      toastRpcError(toRpcError(error));
+    } finally {
+      serviceBusy = "";
+      serviceRemoveConfirm = "";
+    }
+  }
 </script>
 
 <div class="mx-auto flex max-w-4xl flex-col gap-4 p-4 md:p-6">
@@ -270,12 +337,15 @@
     </Card>
   </div>
 
-  <!-- 端口表 -->
+  <!-- 端口表（service-lifecycle：行内 启动/终止 + 移除两步确认——低频间接空间） -->
   <Card title={t("dash.ports.title")} scroll={false}>
-    {#if portRows.length === 0}
-      <p class="p-3 text-xs text-muted-foreground">
-        no ports yet - they appear after sharing or importing services.
-      </p>
+    {#if app.busy.cservices && portRows.length === 0}
+      <div class="flex flex-col gap-2 p-3">
+        <Skeleton class="h-4 w-2/3" />
+        <Skeleton class="h-4 w-1/2" />
+      </div>
+    {:else if portRows.length === 0}
+      <p class="p-3 text-xs text-muted-foreground">{t("dash.ports.empty")}</p>
     {:else}
       <table class="w-full text-xs">
         <thead>
@@ -284,15 +354,58 @@
             <th class="px-3 py-2 font-normal">{t("dash.ports.port")}</th>
             <th class="px-3 py-2 font-normal">{t("dash.ports.provider")}</th>
             <th class="px-3 py-2 font-normal">{t("dash.ports.state")}</th>
+            <th class="px-3 py-2 text-right font-normal">{t("dash.ports.actions")}</th>
           </tr>
         </thead>
         <tbody>
-          {#each portRows as row (`${row.alias}:${row.name}:${row.port}`)}
-            <tr class="border-b border-border/50 transition-colors hover:bg-muted/40" transition:slide={{ duration: 150 }}>
+          {#each portRows as row (row.key)}
+            <tr
+              class="border-b border-border/50 transition-colors hover:bg-muted/40 {row.enabled ? '' : 'opacity-60'}"
+              transition:slide={{ duration: 150 }}
+            >
               <td class="px-3 py-1.5 font-mono">{row.name}</td>
               <td class="px-3 py-1.5 font-mono">{row.port}</td>
               <td class="px-3 py-1.5 font-mono text-muted-foreground">{row.alias}</td>
-              <td class="px-3 py-1.5"><StateBadge state={row.state} /></td>
+              <td class="px-3 py-1.5">
+                <span class="flex flex-wrap items-center gap-1.5">
+                  <StateBadge state={row.state} />
+                  {#if !row.enabled}
+                    <Badge variant="tonal" class="jx-hue-neutral">{t("dash.ports.disabled")}</Badge>
+                  {:else if row.listening}
+                    <Badge variant="tonal" class="jx-hue-success">{t("dash.ports.listening")}</Badge>
+                  {:else}
+                    <Badge variant="tonal" class="jx-hue-warning">{t("dash.ports.notListening")}</Badge>
+                  {/if}
+                </span>
+              </td>
+              <td class="px-3 py-1.5 text-right">
+                <span class="flex items-center justify-end gap-1.5">
+                  {#if serviceRemoveConfirm === row.key}
+                    <span class="flex items-center gap-1.5">
+                      <span class="text-[11px] text-muted-foreground">{t("dash.ports.removeConfirm")}</span>
+                      <PressButton
+                        variant="tonal"
+                        class="jx-pair-destructive"
+                        loading={serviceBusy === row.key}
+                        onclick={() => void removeRowService(row)}
+                      >{t("common.confirmRemove")}</PressButton>
+                      <PressButton variant="ghost" onclick={() => (serviceRemoveConfirm = "")}>{t("common.cancel")}</PressButton>
+                    </span>
+                  {:else}
+                    <PressButton
+                      variant="ghost"
+                      class="text-[11px]"
+                      loading={serviceBusy === row.key}
+                      onclick={() => void toggleRowService(row)}
+                    >{row.enabled ? t("dash.ports.stop") : t("dash.ports.start")}</PressButton>
+                    <PressButton
+                      variant="ghost"
+                      class="text-[11px]"
+                      onclick={() => (serviceRemoveConfirm = row.key)}
+                    >{t("common.remove")}</PressButton>
+                  {/if}
+                </span>
+              </td>
             </tr>
           {/each}
         </tbody>

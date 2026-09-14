@@ -25,14 +25,27 @@ export type ConsumerProviderView = ConsumerStatusView["providers"][number];
 export type PortsListView = Out<RpcClient["consumer"]["ports"]["list"]>;
 export type PortsProviderRow = PortsListView["providers"][number];
 export type PortServiceRow = PortsProviderRow["services"][number];
+/** consumer.services.list 视图（service-lifecycle：enabled/listening 驱动端口表）。 */
+export type ConsumerServicesListView = Out<RpcClient["consumer"]["services"]["list"]>;
+export type ConsumerServicesProviderRow = ConsumerServicesListView["providers"][number];
+export type ConsumerServiceEntry = ConsumerServicesProviderRow["services"][number];
 
 /** 全部状态区（脏标记粒度）。 */
-type Section = "provider" | "consumer" | "ports" | "groups" | "keys" | "services" | "settings";
+type Section =
+  | "provider"
+  | "consumer"
+  | "ports"
+  | "cservices"
+  | "groups"
+  | "keys"
+  | "services"
+  | "settings";
 
 const ALL_SECTIONS: readonly Section[] = [
   "provider",
   "consumer",
   "ports",
+  "cservices",
   "groups",
   "keys",
   "services",
@@ -46,10 +59,10 @@ const SECTION_BY_EVENT: Readonly<Record<string, readonly Section[]>> = {
   "provider-roster": ["provider"],
   "provider-relay": ["provider"],
   "provider-store": ["provider", "services", "groups", "keys"],
-  "consumer-gateway": ["consumer", "ports"],
+  "consumer-gateway": ["consumer", "ports", "cservices"],
   "consumer-state": ["consumer"],
-  "consumer-ports": ["ports", "consumer"],
-  "consumer-catalog": ["consumer", "ports"],
+  "consumer-ports": ["ports", "consumer", "cservices"],
+  "consumer-catalog": ["consumer", "ports", "cservices"],
 };
 
 /** 应用快照（$state 代理；页面直接读取）。 */
@@ -59,12 +72,14 @@ export const app = $state({
   provider: null as ProviderStatusView | null,
   consumer: null as ConsumerStatusView | null,
   ports: [] as PortsProviderRow[],
+  /** consumer.services.list（生命周期视图：enabled/listening）。 */
+  cservices: [] as ConsumerServicesProviderRow[],
   groups: [] as GroupView[],
   keys: [] as KeyView[],
   services: [] as ServiceConfigView[],
   settings: null as Settings | null,
   /** 各区在途标记（skeleton 消费）。 */
-  busy: { provider: false, consumer: false, ports: false, groups: false, keys: false, services: false, settings: false } as Record<Section, boolean>,
+  busy: { provider: false, consumer: false, ports: false, cservices: false, groups: false, keys: false, services: false, settings: false } as Record<Section, boolean>,
 });
 
 const dirty = new Set<Section>();
@@ -123,6 +138,9 @@ async function pull(section: Section): Promise<void> {
         break;
       case "ports":
         app.ports = (await connection.call((c) => c.consumer.ports.list({}))).providers;
+        break;
+      case "cservices":
+        app.cservices = (await connection.call((c) => c.consumer.services.list({}))).providers;
         break;
       case "groups":
         app.groups = (await connection.call((c) => c.provider.groups.list({}))).groups;

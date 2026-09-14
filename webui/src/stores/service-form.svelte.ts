@@ -330,13 +330,20 @@ export async function submit(): Promise<void> {
   serviceForm.busy = true;
   serviceForm.error = null;
   try {
+    // 编辑重建（remove+add）保留原停用态（service-lifecycle）：remove 不可逆，
+    // 停用值须在重建前读出并注入 add 输入，否则编辑保存会静默复活服务
+    let prevEnabled: boolean | undefined;
     if (serviceForm.editingName !== "") {
+      const { services } = await call((c) => c.provider.services.list({}));
+      prevEnabled = services.find((s) => s.name === serviceForm.editingName)?.enabled;
       await call((c) => c.provider.services.remove({ name: serviceForm.editingName }));
     }
-    await call((c) => c.provider.services.add(parsed.input));
-    await ensureGroupWithService(parsed.input.name);
+    const input =
+      prevEnabled === false ? { ...parsed.input, enabled: false } : parsed.input;
+    await call((c) => c.provider.services.add(input));
+    await ensureGroupWithService(input.name);
     serviceForm.open = false;
-    toastSuccess(serviceForm.editingName !== "" ? "Service updated" : "Service added", parsed.input.name);
+    toastSuccess(serviceForm.editingName !== "" ? "Service updated" : "Service added", input.name);
     refresh("services", "groups", "provider");
   } catch (error) {
     serviceForm.error = toRpcError(error);

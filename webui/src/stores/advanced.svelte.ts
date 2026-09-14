@@ -4,6 +4,7 @@
 // 引擎校验错误就地内联渲染（error 字段）+ toast；变更经通知通道即时反映。
 import { toRpcError, type RpcClient, type RpcError } from "$lib/rpc-client";
 import type { ServiceConfigView } from "$shared/rpc-contract.ts";
+import { t } from "$lib/i18n.svelte.ts";
 import { call } from "./rpc.svelte.ts";
 import { toastRpcError, toastSuccess } from "./toast.svelte.ts";
 import { app, refresh } from "./app.svelte.ts";
@@ -49,6 +50,32 @@ export async function removeService(name: string): Promise<void> {
   } finally {
     serviceRemove.busy = "";
     serviceRemove.confirm = "";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 服务启停（service-lifecycle）：停暴露不删配置；AUTH_OK 目录排除 disabled →
+// 消费端监听自然关停传导。开关单飞锁（busy = serviceId）。
+// ---------------------------------------------------------------------------
+
+export const serviceRunning = $state({
+  busy: "",
+  error: null as RpcError | null,
+});
+
+export async function setServiceRunning(serviceId: string, running: boolean, name: string): Promise<void> {
+  if (serviceRunning.busy !== "") return;
+  serviceRunning.busy = serviceId;
+  serviceRunning.error = null;
+  try {
+    await call((c) => c.provider.services.setRunning({ serviceId, running }));
+    toastSuccess(t(running ? "svc.runningToast" : "svc.stoppedToast"), name);
+    await refresh("services", "provider");
+  } catch (error) {
+    serviceRunning.error = toRpcError(error);
+    toastRpcError(serviceRunning.error);
+  } finally {
+    serviceRunning.busy = "";
   }
 }
 

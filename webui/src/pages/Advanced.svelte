@@ -52,6 +52,8 @@
     openHookView,
     serviceRemove,
     removeService,
+    serviceRunning,
+    setServiceRunning,
     groupForm,
     openGroupAdd,
     submitGroupAdd,
@@ -70,6 +72,15 @@
   let tab = $state("services");
   /** 服务行展开集合（detail：upstream/match 全集/rewrite；$env 值显示 ●）。 */
   let expanded = $state(new Set<string>());
+  /** 启停开关乐观草稿（serviceId → 开）；点击即翻，落库/失败后 sync 对齐真值。 */
+  let runningDraft = $state<Record<string, boolean>>({});
+  $effect(() => {
+    // 真值同步：非在途行始终反映 store（新行初始化、失败回滚都走这里）
+    for (const service of app.services) {
+      if (serviceRunning.busy === service.serviceId) continue;
+      runningDraft[service.serviceId] = service.enabled;
+    }
+  });
   interface SecretRow {
     name: string;
     createdAt: number;
@@ -344,6 +355,24 @@
               {/if}
             </button>
             <span class="flex items-center gap-1.5">
+              <!-- 启停（service-lifecycle）：状态徽章 + 开关；停暴露不删配置，
+                   目录同步传导消费端。开关单向受控（checked = 乐观草稿 ?? 真值）：
+                   点击写草稿即乐观翻面；落库/失败后由下方 sync 效应对齐真值回写
+                   DOM。绝不可 bind 到未初始化的 record 成员（undefined 触发
+                   Svelte props_invalid_value，实例化中断——走查实证），
+                   也不可手写 DOM 回滚（与 Svelte 的写入 memo 脱钩成幽灵态）。 -->
+              <Badge variant="tonal" class={service.enabled ? "jx-hue-success" : "jx-hue-neutral"}>
+                {service.enabled ? t("adv.services.running") : t("adv.services.stopped")}
+              </Badge>
+              <Toggle
+                aria-label={t("adv.services.toggleAria")}
+                checked={runningDraft[service.serviceId] ?? service.enabled}
+                disabled={serviceRunning.busy !== ""}
+                onchange={(event) => {
+                  runningDraft[service.serviceId] = event.currentTarget.checked;
+                  void setServiceRunning(service.serviceId, runningDraft[service.serviceId] ?? service.enabled, service.name);
+                }}
+              />
               <PressButton
                 variant="ghost"
                 onclick={() => (serviceTestOpen = serviceTestOpen === service.serviceId ? null : service.serviceId)}
@@ -546,6 +575,7 @@
         {/if}
 
         <ErrorAlert error={serviceRemove.error} />
+        <ErrorAlert error={serviceRunning.error} />
 
         <!-- 服务增/改表单（Owner 裁决 2026-09-13 #5：与分享向导②同一套
              ServiceForm 组件/stores，编辑改为 Dialog） -->
