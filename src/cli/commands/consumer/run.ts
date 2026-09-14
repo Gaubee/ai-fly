@@ -13,6 +13,7 @@ import { parseArgv } from "../../args.ts";
 import { CliError, UsageError, reportCliError } from "../../errors.ts";
 import { consumersRoot, listKeyrings } from "../../../consumer/store.ts";
 import { startEngine } from "../../../consumer/runtime.ts";
+import { watchServiceLifecycle } from "../../../consumer/lifecycle-watch.ts";
 import { createFabricProviderTransport } from "../../../consumer/providers.ts";
 import {
   clearPid,
@@ -154,9 +155,18 @@ async function start(runArgv: readonly string[], home: string, ctx: CommandConte
     strictPorts: options["strict-ports"] === true,
     onNotice: out,
   });
+  // service-lifecycle：CLI（services stop/start/rm 独立进程写 keyring.json）经
+  // 文件 watch 传导到本 daemon（去抖 + 轮询兜底；停止时随引擎一并清理）
+  const lifecycle = watchServiceLifecycle({
+    root,
+    rings: engineRings,
+    gateway: engine.gateway,
+    onNotice: out,
+  });
   printListeners(out, engine.gateway.listenerInfo());
   out("gateway running - press Ctrl-C to stop");
   await waitForSignals();
+  lifecycle.stop();
   await engine.stop();
   out("gateway stopped");
   return 0;

@@ -153,6 +153,7 @@ export async function joinDevice(
         services: [],
         ports: {},
         actualPorts: {},
+        disabledServices: [],
       };
       if (existing === undefined) saveKeyring(root, ring);
       return { ring, provider, alreadyJoined: true };
@@ -169,6 +170,7 @@ export async function joinDevice(
       services: [],
       ports: {},
       actualPorts: {},
+      disabledServices: [],
     };
     const existing = loadKeyring(root, provider.endpointId);
     saveKeyring(root, existing ?? ring);
