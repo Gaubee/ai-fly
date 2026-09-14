@@ -143,6 +143,7 @@ function makeService(port: number): ServiceConfig {
     upstream: `http://127.0.0.1:${port}`,
     rewrite: undefined,
     defaultPort: 11434,
+    enabled: true,
   };
 }
 

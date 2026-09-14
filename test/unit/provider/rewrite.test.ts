@@ -21,6 +21,7 @@ function makeService(over: Partial<ServiceConfig> = {}): ServiceConfig {
     upstream: "http://127.0.0.1:11434",
     rewrite: undefined,
     defaultPort: 11434,
+    enabled: true,
     ...over,
   };
 }

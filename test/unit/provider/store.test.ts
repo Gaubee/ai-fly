@@ -188,6 +188,64 @@ describe("CRUD 与加载校验", () => {
     expect(ProviderStore.open(dir).alias).toBe("my-box");
   });
 
+describe("服务停用开关（service-lifecycle）", () => {
+  it("setServiceEnabled：落盘、幂等、未知服务报错；旧文件缺省 enabled=true", () => {
+    const { store, serviceId } = seedBasic();
+    expect(store.getService(serviceId)?.enabled).toBe(true);
+
+    expect(store.setServiceEnabled(serviceId, false).changed).toBe(true);
+    expect(store.getService(serviceId)?.enabled).toBe(false);
+    // 幂等
+    expect(store.setServiceEnabled(serviceId, false).changed).toBe(false);
+    // 重启往返（落盘持久）
+    const reopened = ProviderStore.open(dir);
+    expect(reopened.getService(serviceId)?.enabled).toBe(false);
+    expect(reopened.setServiceEnabled(serviceId, true).changed).toBe(true);
+
+    try {
+      store.setServiceEnabled("no-such", false);
+      expect.unreachable();
+    } catch (err) {
+      expect((err as StoreError).code).toBe("not-found");
+    }
+  });
+
+  it("groupServices 排除停用服务（目录/分享链接视图传导）", () => {
+    const store = ProviderStore.open(dir);
+    const a = store.addService({ name: "a", upstream: "http://127.0.0.1:9001", match: [{ type: "suffix", value: ".a.test" }] });
+    store.addService({ name: "b", upstream: "http://127.0.0.1:9002", match: [{ type: "suffix", value: ".b.test" }] });
+    store.addGroup("g", ["a", "b"]);
+    expect(store.groupServices("g").map((s) => s.name).sort()).toEqual(["a", "b"]);
+
+    store.setServiceEnabled(a.serviceId, false);
+    expect(store.groupServices("g").map((s) => s.name)).toEqual(["b"]);
+
+    store.setServiceEnabled(a.serviceId, true);
+    expect(store.groupServices("g").map((s) => s.name).sort()).toEqual(["a", "b"]);
+  });
+
+  it("addService 尊重 enabled 输入（编辑重建保留停用态）", () => {
+    const store = ProviderStore.open(dir);
+    const a = store.addService({ name: "paused", upstream: "http://127.0.0.1:9010", match: [{ type: "suffix", value: ".p.test" }], enabled: false });
+    expect(a.enabled).toBe(false);
+    expect(store.getService(a.serviceId)?.enabled).toBe(false);
+  });
+
+  it("旧版 services.json（无 enabled 字段）加载缺省 true", () => {
+    const legacy = {
+      revision: 1,
+      services: [
+        { serviceId: "legacy1", name: "old", match: [{ type: "suffix", value: ".old.test" }], upstream: "http://127.0.0.1:9003", defaultPort: 29003 },
+      ],
+      groups: [],
+      keys: [],
+    };
+    writeFileSync(join(dir, "services.json"), JSON.stringify(legacy));
+    const store = ProviderStore.open(dir);
+    expect(store.getService("legacy1")?.enabled).toBe(true);
+  });
+});
+
 describe("分组管理（Owner 2026-09-10：对齐 keys）", () => {
   it("setGroupLimits 更新与清除限额", () => {
     const store = ProviderStore.open(dir);

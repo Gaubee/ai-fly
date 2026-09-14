@@ -105,6 +105,9 @@ export const SERVICE_STORE_SCHEMA = z.strictObject({
   hooks: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).optional(),
   routes: z.array(SERVICE_ROUTE_STORE_SCHEMA).max(3).optional(),
   defaultPort: z.number().int().min(1).max(65535),
+  /** 停用开关（service-lifecycle）：false = 临时停暴露（配置保留，目录同步
+   *  排除该服务→消费端端口关停），请求按 unknown_service 拒。旧文件缺省 true。 */
+  enabled: z.boolean().default(true),
 });
 
 export const GROUP_LIMITS_STORE_SCHEMA = z.strictObject({
@@ -166,6 +169,8 @@ export interface ServiceInput {
   routes?: ServiceRoute[] | undefined;
   /** hooks 脚本名（见 SERVICE_STORE_SCHEMA.hooks）。 */
   hooks?: string | undefined;
+  /** 编辑重建（remove+add）时保留原停用态；缺省 true（service-lifecycle）。 */
+  enabled?: boolean | undefined;
 }
 
 /** verifyKey 结果：有效（含定位）/ 无效 / 已撤销。 */
@@ -369,6 +374,7 @@ export class ProviderStore {
       ...(input.hooks !== undefined ? { hooks: input.hooks } : {}),
       ...(routes !== undefined ? { routes } : {}),
       defaultPort,
+      enabled: input.enabled ?? true,
     };
     this.data.services.push(service);
     this.save();
@@ -386,6 +392,18 @@ export class ProviderStore {
       group.serviceIds = group.serviceIds.filter((id) => id !== removed!.serviceId);
     }
     this.save();
+  }
+
+  /** 停用/启用（service-lifecycle）：幂等；返回是否发生变更。 */
+  setServiceEnabled(serviceId: string, enabled: boolean): { changed: boolean } {
+    const idx = this.data.services.findIndex((s) => s.serviceId === serviceId);
+    if (idx < 0) {
+      throw new StoreError("not-found", `error: service '${serviceId}' not found`);
+    }
+    if (this.data.services[idx]!.enabled === enabled) return { changed: false };
+    this.data.services[idx] = { ...this.data.services[idx]!, enabled };
+    this.save();
+    return { changed: true };
   }
 
   // -----------------------------------------------------------------------
@@ -410,7 +428,9 @@ export class ProviderStore {
     const out: ServiceConfig[] = [];
     for (const id of group.serviceIds) {
       const svc = this.getService(id);
-      if (svc !== undefined) out.push(svc);
+      // 停用服务不进目录视图（service-lifecycle）：AUTH_OK 分组载荷与分享链接
+      // 初始视图都经此投影——消费端端口自然关停。
+      if (svc !== undefined && svc.enabled !== false) out.push(svc);
     }
     return out;
   }

@@ -373,8 +373,8 @@ class ProviderPeerSession implements AuthSessionBinding {
       service === undefined
         ? undefined
         : this.grants.find((g) => this.engine.groupHasService(g.group, header.serviceId));
-    // 未授权/未知统一 unknown_service（防枚举）。
-    if (service === undefined || grant === undefined) {
+    // 未授权/未知/停用统一 unknown_service（防枚举；service-lifecycle）。
+    if (service === undefined || service.enabled === false || grant === undefined) {
       this.sendError(header.id, ERROR_CODE.unknown_service, "service not available");
       return;
     }
@@ -414,7 +414,7 @@ class ProviderPeerSession implements AuthSessionBinding {
     const { req, keyId, group } = inc;
     const service = this.engine.store.getService(req.serviceId);
     this.incoming.delete(header.id);
-    if (service === undefined) {
+    if (service === undefined || service.enabled === false) {
       this.sendError(header.id, ERROR_CODE.unknown_service, "service not available");
       return;
     }

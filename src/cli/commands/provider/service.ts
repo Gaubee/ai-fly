@@ -62,9 +62,11 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
     if (sub === "list") return list(options, home);
     if (sub === "get") return get(options, positionals, home);
     if (sub === "remove") return remove(options, positionals, home);
+    if (sub === "stop") return setRunning(options, positionals, home, false);
+    if (sub === "start") return setRunning(options, positionals, home, true);
     if (sub === "test") return await test(options, positionals, home);
     if (sub === undefined) throw new UsageError(USAGE);
-    throw new UsageError(`error: unknown service subcommand '${sub}' (known: add, list, get, remove, test)`);
+    throw new UsageError(`error: unknown service subcommand '${sub}' (known: add, list, get, remove, stop, start, test)`);
   } catch (err) {
     return reportCliError(err);
   }
@@ -159,7 +161,7 @@ function list(options: Readonly<Record<string, OptionValue>>, home: string): num
   }
   const lines: string[] = [];
   for (const s of services) {
-    lines.push(`${s.name}  [${s.serviceId}]`);
+    lines.push(`${s.name}  [${s.serviceId}]${s.enabled === false ? "  (stopped)" : ""}`);
     lines.push(`  upstream   : ${s.upstream}`);
     lines.push(`  defaultPort: ${s.defaultPort}`);
     lines.push(`  match      : ${s.match.map((m) => `${m.type}:${m.value}`).join(", ")}`);
@@ -174,6 +176,22 @@ function remove(options: Readonly<Record<string, OptionValue>>, positionals: rea
   const store = openStore(resolveDataDir(str(options.data), home));
   store.removeService(name);
   process.stdout.write(`service removed: ${name}\n`);
+  return 0;
+}
+
+/** 停用/启用（service-lifecycle）：按名称定位；daemon 在跑经 services.json watcher 热传导。 */
+function setRunning(options: Readonly<Record<string, OptionValue>>, positionals: readonly string[], home: string, running: boolean): number {
+  const name = positionals[1];
+  if (name === undefined) throw new UsageError(`error: service ${running ? "start" : "stop"} requires a <name> argument`);
+  const store = openStore(resolveDataDir(str(options.data), home));
+  const svc = store.getServiceByName(name);
+  if (svc === undefined) throw new UsageError(`error: unknown service '${name}'`);
+  const { changed } = store.setServiceEnabled(svc.serviceId, running);
+  process.stdout.write(
+    changed
+      ? `service ${running ? "started" : "stopped"}: ${name} (${running ? "exposed to consumers" : "removed from catalog; requests get 404"})\n`
+      : `service '${name}' is already ${running ? "running" : "stopped"}\n`,
+  );
   return 0;
 }
 

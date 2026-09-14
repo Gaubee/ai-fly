@@ -22,6 +22,7 @@ const service: ServiceConfig = {
     headerRemove: ["x-drop"],
   },
   defaultPort: 11434,
+  enabled: true,
 };
 
 describe("detail 披露脱敏", () => {
