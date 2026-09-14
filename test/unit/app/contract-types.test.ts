@@ -92,6 +92,7 @@ const checkAddInput: AssertEqual<
           template?: string | undefined;
         }>
       | undefined;
+    enabled?: boolean | undefined;
   }
 > = true;
 void checkAddInput;

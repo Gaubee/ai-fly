@@ -256,6 +256,17 @@ export class EngineHost {
   }
 
   /**
+   * 单服务停用/启用热应用（service-lifecycle）：keyring 已落盘，内嵌网关直接
+   * setServiceEnabled（不整网关重建）；网关停止态为 no-op（下次 start 自然带上）。
+   */
+  async applyServiceEnabled(ring: Keyring, serviceId: string, enabled: boolean): Promise<void> {
+    if (this.consumer === null) return;
+    const service = ring.services.find((s) => s.serviceId === serviceId);
+    if (service === undefined) return;
+    await this.consumer.gateway.setServiceEnabled(ring.endpointId, ring.alias, service, ring.ports, enabled);
+  }
+
+  /**
    * 消费侧数据变更（import/join/key.add/forget/ports.set）后重建网关：
    * 运行中则 stop→start 拉入新钥环；停止态为 no-op（下次 start 自然带上）。
    */

@@ -15,6 +15,7 @@ import { RPCLink } from "@orpc/client/websocket";
 import { WebServer } from "../../src/app/web-server.ts";
 import { createRpcRouter } from "../../src/app/rpc-router.ts";
 import { EngineHost } from "../../src/app/engine-host.ts";
+import { saveKeyring } from "../../src/consumer/store.ts";
 
 let base;
 let server;
@@ -160,6 +161,62 @@ describe("app integration: token gate + contract over ws", () => {
       client.consumer.import.preview({ link: "aifly1.not-base64!!!" }),
       (err) => {
         assert.match(String(err.code ?? ""), /INVALID_INPUT|INVALID_INPUT_INPUT/);
+        return true;
+      },
+    );
+    ws.close();
+  });
+
+  it("services 生命周期：list / setRunning / remove（停用可复活语义）", async () => {
+    const { client, ws } = makeClient();
+    const ep = "ep-svclife-integration01";
+    saveKeyring(join(base, ".aifly", "consumers"), {
+      alias: "life-prov",
+      endpointId: ep,
+      relayUrls: [],
+      keys: [],
+      services: [
+        {
+          serviceId: "svc-x",
+          name: "llama",
+          match: [{ type: "suffix", value: ".x.test" }],
+          defaultPort: 18080,
+        },
+      ],
+      ports: {},
+      actualPorts: {},
+      disabledServices: [],
+    });
+
+    const find = (listed) =>
+      listed.providers.find((p) => p.endpointId === ep)?.services.find((s) => s.serviceId === "svc-x");
+
+    const before = await client.consumer.services.list({});
+    assert.ok(find(before), "list 含新导入服务");
+    assert.equal(find(before).enabled, true);
+    assert.equal(find(before).listening, false, "网关未启动，listening 恒 false");
+
+    const stopped = await client.consumer.services.setRunning({ endpointId: ep, serviceId: "svc-x", running: false });
+    assert.equal(stopped.changed, true);
+    const idempotent = await client.consumer.services.setRunning({ endpointId: ep, serviceId: "svc-x", running: false });
+    assert.equal(idempotent.changed, false);
+
+    const after = await client.consumer.services.list({});
+    assert.equal(find(after).enabled, false, "停用集合生效");
+    assert.equal(find(after).listening, false);
+
+    const removed = await client.consumer.services.remove({ endpointId: ep, serviceId: "svc-x" });
+    assert.equal(removed.removed, true);
+
+    const restarted = await client.consumer.services.setRunning({ endpointId: ep, serviceId: "svc-x", running: true });
+    assert.equal(restarted.changed, true, "停用可复活");
+    const revived = await client.consumer.services.list({});
+    assert.equal(find(revived).enabled, true);
+
+    await assert.rejects(
+      client.consumer.services.setRunning({ endpointId: ep, serviceId: "ghost", running: false }),
+      (err) => {
+        assert.match(String(err.code ?? ""), /INVALID_INPUT|NOT_FOUND|INTERNAL/);
         return true;
       },
     );

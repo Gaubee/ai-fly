@@ -16,7 +16,7 @@ import type { KeyRecord, ServiceConfig, ServiceInput } from "../provider/store.t
 import { SecretsStore } from "../provider/secrets.ts";
 import { probeUpstreamModels, testUpstream, pickDefaultModel } from "../provider/upstream-test.ts";
 import { importLink, joinDevice, addKey } from "../consumer/join.ts";
-import { listKeyrings, removeKeyring, setPort } from "../consumer/store.ts";
+import { listKeyrings, removeKeyring, setPort, setServiceEnabled } from "../consumer/store.ts";
 import { testLocalService } from "../consumer/local-test.ts";
 import { testServiceRoute } from "../provider/route-test.ts";
 import { applyWriter, previewWriter } from "./writers/index.ts";
@@ -199,6 +199,10 @@ export function createRpcRouter(deps: RpcRouterDeps) {
         remove: rpc.provider.services.remove.handler(({ input }) => {
           host.providerStore().removeService(input.name);
           return { removed: true as const };
+        }),
+        setRunning: rpc.provider.services.setRunning.handler(({ input }) => {
+          const { changed } = host.providerStore().setServiceEnabled(input.serviceId, input.running);
+          return { serviceId: input.serviceId, running: input.running, changed };
         }),
         // 提供方侧按标准路由测试（Owner 裁决 2026-09-11：与 connect ③ 同形态）：
         // 路由命中 + rewrite 注入 + 直打 upstream；模型缺省与消费侧同规（models.dev
@@ -402,6 +406,37 @@ export function createRpcRouter(deps: RpcRouterDeps) {
         }),
       },
       services: {
+        list: rpc.consumer.services.list.handler(() => {
+          const { rings } = listKeyrings(host.consumersRoot);
+          const engine = host.consumerEngine();
+          const listening = new Set(engine?.gateway.listenerInfo().map((l) => `${l.providerId}/${l.serviceId}`) ?? []);
+          return {
+            providers: rings.map((ring) => {
+              const disabled = new Set(ring.disabledServices);
+              return {
+                alias: ring.alias,
+                endpointId: ring.endpointId,
+                services: ring.services.map((s) => ({
+                  serviceId: s.serviceId,
+                  name: s.name,
+                  port: ring.actualPorts[s.serviceId] ?? ring.ports[s.serviceId] ?? s.defaultPort,
+                  enabled: !disabled.has(s.serviceId),
+                  listening: listening.has(`${ring.endpointId}/${s.serviceId}`),
+                })),
+              };
+            }),
+          };
+        }),
+        setRunning: rpc.consumer.services.setRunning.handler(async ({ input }) => {
+          const { ring, changed } = setServiceEnabled(host.consumersRoot, input.endpointId, input.serviceId, input.running);
+          if (changed) await host.applyServiceEnabled(ring, input.serviceId, input.running);
+          return { alias: ring.alias, serviceId: input.serviceId, running: input.running, changed };
+        }),
+        remove: rpc.consumer.services.remove.handler(async ({ input }) => {
+          const { ring, changed } = setServiceEnabled(host.consumersRoot, input.endpointId, input.serviceId, false);
+          if (changed) await host.applyServiceEnabled(ring, input.serviceId, false);
+          return { alias: ring.alias, serviceId: input.serviceId, removed: true as const };
+        }),
         test: rpc.consumer.services.test.handler(async ({ input }) => {
           // 定位服务（keyring detail 持 upstream 与 routes）+ 端口（运行时实际监听
           // 优先；网关停止时用存储投影——fetch 的 ECONNREFUSED 即诚实信号）。

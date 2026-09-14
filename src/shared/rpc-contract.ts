@@ -110,6 +110,8 @@ export const SERVICE_SCHEMA = z.strictObject({
   routes: z.array(SERVICE_ROUTE_SCHEMA).max(3).optional(),
   hooks: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).optional(),
   defaultPort: z.number().int().min(1).max(65535),
+  /** 停用开关（service-lifecycle）：false = 临时停暴露（目录排除、请求 404）。 */
+  enabled: z.boolean().default(true),
 });
 
 /** services.add 输入（defaultPort 缺省规则的校验在 store，同 CLI）。 */
@@ -121,6 +123,8 @@ export const SERVICE_INPUT_SCHEMA = z.strictObject({
   rewrite: SERVICE_REWRITE_SCHEMA.optional(),
   routes: z.array(SERVICE_ROUTE_SCHEMA).max(3).optional(),
   hooks: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).optional(),
+  /** 编辑重建（remove+add）保留原停用态；缺省 true（service-lifecycle）。 */
+  enabled: z.boolean().optional(),
 });
 
 export const GROUP_LIMITS_SCHEMA = z.strictObject({
@@ -413,6 +417,15 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
       remove: oc
         .input(z.strictObject({ name: z.string().min(1).max(256) }))
         .output(z.object({ removed: z.literal(true) })),
+      /** 停用/启用服务（service-lifecycle：停暴露不删配置；目录同步传导消费端）。 */
+      setRunning: oc
+        .input(
+          z.strictObject({
+            serviceId: z.string().min(1).max(128),
+            running: z.boolean(),
+          }),
+        )
+        .output(z.object({ serviceId: z.string(), running: z.boolean(), changed: z.boolean() })),
       /** 上游连通性测试（草稿或已存服务形状；provider-local、不落盘、不计限额）。 */
       test: oc
         .input(
@@ -642,6 +655,49 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
         .output(z.object({ alias: z.string(), added: z.boolean() })),
     },
     services: {
+      /** 跨组服务清单（service-lifecycle：含停用态与网关实时监听态）。 */
+      list: oc
+        .input(z.object({}))
+        .output(
+          z.object({
+            providers: z.array(
+              z.object({
+                alias: z.string(),
+                endpointId: z.string(),
+                services: z.array(
+                  z.object({
+                    serviceId: z.string(),
+                    name: z.string(),
+                    port: z.number().int(),
+                    /** 停用集合之外（可启动）。 */
+                    enabled: z.boolean(),
+                    /** 网关当前实际监听（网关停止时恒 false）。 */
+                    listening: z.boolean(),
+                  }),
+                ),
+              }),
+            ),
+          }),
+        ),
+      /** 停用/启用（内嵌引擎内存热生效；独立 daemon 经 keyring watch 传导）。 */
+      setRunning: oc
+        .input(
+          z.strictObject({
+            endpointId: z.string().min(8).max(128),
+            serviceId: z.string().min(1).max(128),
+            running: z.boolean(),
+          }),
+        )
+        .output(z.object({ alias: z.string(), serviceId: z.string(), running: z.boolean(), changed: z.boolean() })),
+      /** 移除单个服务（= 停用；组内可复活）。 */
+      remove: oc
+        .input(
+          z.strictObject({
+            endpointId: z.string().min(8).max(128),
+            serviceId: z.string().min(1).max(128),
+          }),
+        )
+        .output(z.object({ alias: z.string(), serviceId: z.string(), removed: z.literal(true) })),
       /**
        * 消费侧连通测试（M3-r8：③ 步 = test——选协议、选端点、单轮输入框发
        * 真实 AI 请求）：对本机网关端口按 API 标准发最小请求，走完整 wire 链路；
