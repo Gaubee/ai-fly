@@ -36,6 +36,22 @@
 - **RPC + webui**：consumer 域加 `services.list / services.setRunning / services.remove`；
   Dashboard 端口表行内加 启动/终止 操作 + 移除入口（含 loading 态锁）。
 
+### consumer 侧：提供方级管理（Owner 2026-09-14 走查反馈追加）
+
+导入的单位是提供方（一个链接 = 一个提供方 + 一组服务），管理粒度必须对齐：
+
+- **存储**：Keyring 加 `disabled: boolean`（zod default false 兼容旧文件）——环级
+  停用开关；applyCatalog 保留（环自身属性不受目录全量替换影响）。与单服务
+  disabledServices 叠加语义：环停用即全部不物化；环恢复时先前单独停用的服务
+  保持停用。
+- **CLI 参数定粒度**：`ai-fly services stop|start <provider-ref>`（单参 = 整环
+  全部服务）；`ai-fly services rm <provider-ref>`（单参 = 移除整个提供方，
+  **= forget 真删**：keyring + fabric 身份目录，重新导入才能恢复——区别于单服务
+  rm 的停用式可复活）。list 对停用环整组标注。
+- **RPC + webui**：services.list 的 providers[] 带 `enabled`；加
+  `setProviderRunning`；Dashboard 使用方区块的 provider 行加 终止/启动（forget
+  已有，保持）。
+
 ### provider 侧
 
 - **存储**：SERVICE_STORE_SCHEMA 加 `enabled: boolean`（optional 缺省 true 兼容

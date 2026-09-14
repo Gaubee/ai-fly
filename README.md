@@ -47,8 +47,10 @@ ai-fly share   --group friends --ttl 30m            # aifly1.… link (token + k
 ai-fly import  <link> --run                        # join + keyring + start gateway
 ai-fly key     add <sk-aifly-…> --provider <id>    # bare key into an existing ring
 ai-fly services                                     # list services across groups (state + ports)
-ai-fly services stop <provider> <service>          # stop one service's local listener (live)
-ai-fly services start <provider> <service>         # re-enable (revivable; catalog sync keeps the entry)
+ai-fly services stop <provider>                     # stop ALL of a provider's services (revivable)
+ai-fly services stop <provider> <service>           # stop one service's local listener (live)
+ai-fly services rm <provider>                       # remove the whole provider (= forget: keyring + fabric identity)
+ai-fly services start <provider> [<service>]        # re-enable (per-service stops persist across ring stops)
 ai-fly status  --verbose                            # ports, providers, service details
 ```
 

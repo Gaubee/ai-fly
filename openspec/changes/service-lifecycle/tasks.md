@@ -45,3 +45,19 @@
       （applyCatalog 防泄漏），provider 重新暴露后服务自动复活——"可复活"
       的深层路径，跨 provider 目录变化不持久
 - [ ] 4.3 README（EN+zh）services 命令章节 + openspec 归档
+
+## 5. 提供方级管理（Owner 走查反馈，2026-09-14 追加）
+
+- [x] 5.1 Keyring.disabled 环级开关（schema default false；applyCatalog 保留）+
+      setProviderEnabled 写路径 + 叠加语义单测（环停用全覆盖；环恢复时单服务停用保持）
+- [x] 5.2 物化/目录同步/watch 传导环级过滤；Gateway 无需新方法（调用方按环循环
+      setServiceEnabled）
+- [x] 5.3 CLI 参数定粒度：`services stop|start <provider>`（单参=整环）、
+      `services rm <provider>`（单参=forget 真删，usage 写明双语义）；list 环级标注
+- [x] 5.4 RPC：services.list providers[].enabled + setProviderRunning；
+      webui Dashboard provider 行 终止/启动（forget 已有）+ i18n
+- [x] 5.5 走查（CLI 整环热启停 + provider 行 UI + 恢复叠加语义）+ 门禁
+      ——2026-09-14 实测：CLI `services stop <prov>` 1.5s 双端口全关 + list
+      `(off)` 标注；`start` 恢复且单服务停用保持叠加（r1 回 r2 留）；`rm <prov>`
+      keyring+fabric 真删；webui provider 行 终止/启动提供方 + 已停用徽标，
+      双端口同步开关；门禁 vitest 535 + tsc 0 + webui build + svelte-check 基线
