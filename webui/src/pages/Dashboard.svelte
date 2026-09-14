@@ -9,8 +9,10 @@
   import Card, { CardFooter } from "$lib/ui/card";
   import Badge from "$lib/ui/badge";
   import PressButton from "$lib/ui/press-button";
+  import IconButton from "$lib/ui/icon-button";
+  import Icon from "$lib/ui/icon";
   import Skeleton from "$lib/ui/skeleton";
-  import { Item, ItemGroup, ItemContent, ItemTitle, ItemDescription, ItemEnd, ItemActions } from "$lib/ui/list-item";
+  import { Item, ItemGroup, ItemContent, ItemTitle, ItemDescription, ItemActions } from "$lib/ui/list-item";
   import { t } from "$lib/i18n.svelte.ts";
   import Separator from "$lib/ui/separator";
   import { slide } from "svelte/transition";
@@ -323,40 +325,36 @@
                         <span class="rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{t("dash.prov.stoppedBadge")}</span>
                       {/if}
                     </ItemTitle>
-                    <ItemDescription class="font-mono">
+                    <ItemDescription class="truncate font-mono" title={forgetConfirm === entry.endpointId ? t("dash.forgetConfirm") : entry.lastError ?? undefined}>
                       {#if forgetConfirm === entry.endpointId}
                         {t("dash.forgetConfirm")}
                       {:else if entry.lastError}
-                        last error: {entry.lastError}
+                        {entry.endpointId.slice(0, 10)} · {Object.keys(entry.ports).length} port(s) · {entry.lastError}
                       {:else}
-                        {entry.endpointId}
+                        {entry.endpointId.slice(0, 10)} · {Object.keys(entry.ports).length} port(s) - {entry.servedCount} served
                       {/if}
                     </ItemDescription>
                   </ItemContent>
-                  <ItemEnd wrap="never">
-                    <span class="font-mono text-[11px] text-muted-foreground">
-                      {Object.keys(entry.ports).length} port(s) - {entry.servedCount} served
-                    </span>
-                  </ItemEnd>
                   <ItemActions label={t("dash.prov.actionsLabel")}>
                     {#if forgetConfirm === entry.endpointId}
                       <PressButton variant="tonal" class="jx-pair-destructive" loading={forgetBusy} onclick={() => void forgetProvider(entry.endpointId)}>
-                        confirm forget
+                        {t("dash.prov.forgetConfirmBtn")}
                       </PressButton>
                       <PressButton variant="ghost" onclick={() => (forgetConfirm = "")}>{t("common.cancel")}</PressButton>
                     {:else}
-                      <PressButton
+                      <IconButton iconOnly variant="ghost" text={t("dash.prov.forgetIcon")} onclick={() => (forgetConfirm = entry.endpointId)}>
+                        {#snippet icon()}<Icon name="trash2" size={14} />{/snippet}
+                      </IconButton>
+                      <IconButton
+                        iconOnly
                         variant="ghost"
-                        class="text-[11px]"
-                        onclick={() => (forgetConfirm = entry.endpointId)}
-                      >forget</PressButton>
+                        loading={providerBusy === entry.endpointId}
+                        text={ringEnabled ? t("dash.prov.stop") : t("dash.prov.start")}
+                        onclick={() => void toggleProviderRing(entry.endpointId, entry.alias, ringEnabled)}
+                      >
+                        {#snippet icon()}<Icon name="power" size={14} />{/snippet}
+                      </IconButton>
                     {/if}
-                    <PressButton
-                      variant="ghost"
-                      class="text-[11px]"
-                      loading={providerBusy === entry.endpointId}
-                      onclick={() => void toggleProviderRing(entry.endpointId, entry.alias, ringEnabled)}
-                    >{ringEnabled ? t("dash.prov.stop") : t("dash.prov.start")}</PressButton>
                   </ItemActions>
                 </Item>
               {/each}
@@ -385,7 +383,8 @@
     {:else if portRows.length === 0}
       <p class="p-3 text-xs text-muted-foreground">{t("dash.ports.empty")}</p>
     {:else}
-      <table class="w-full text-xs">
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
         <thead>
           <tr class="border-b border-border text-left font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
             <th class="px-3 py-2 font-normal">{t("dash.ports.service")}</th>
@@ -447,7 +446,8 @@
             </tr>
           {/each}
         </tbody>
-      </table>
+        </table>
+      </div>
     {/if}
   </Card>
 
