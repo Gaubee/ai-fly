@@ -139,12 +139,12 @@ chatgpt.com: GET /rate_limits via js-backend-fetch → 403 (Cloudflare, 0/13
 historically) vs rust-fetch → 404 (passes CF, reaches the backend); POST
 /responses with a real subscription → 200 + SSE through the full pipeline.
 
-Build & install the sidecar (not shipped in the repo):
+Build & install the sidecar (not shipped in the repo) — **required before the
+codex preset can serve**; without it every request fails with a masked
+`hook_failed` (the daemon logs a one-line install hint to its stderr):
 
 ```bash
-cd sidecars/rust-fetch && cargo build --release
-mkdir -p ~/.aifly/sidecars/rust-fetch
-cp target/release/rust-fetch ~/.aifly/sidecars/rust-fetch/
+pnpm sidecar:install   # cargo build --release + copy to ~/.aifly/sidecars/rust-fetch/
 # or point AIFLY_RUST_FETCH_BIN at the binary when starting the daemon
 ```
 

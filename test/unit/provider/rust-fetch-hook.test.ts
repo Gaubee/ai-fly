@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const HOOK = require("../../../hooks/rust-fetch.cjs") as {
   onRequest: (ctx: {
@@ -113,11 +113,18 @@ describe("rust-fetch hook：stdio 协议矩阵（stub sidecar）", () => {
     ).rejects.toThrow(/bad response meta/);
   });
 
-  it("spawn 失败（二进制不存在）→ 拒绝", async () => {
+  it("spawn 失败（二进制不存在）→ 拒绝 + ENOENT 时 stderr 打安装指引（运营侧诊断）", async () => {
     process.env.AIFLY_RUST_FETCH_BIN = join(dir, "does-not-exist");
-    await expect(
-      HOOK.onRequest({ ...ctxBase(), body: new Uint8Array(0), signal: new AbortController().signal }),
-    ).rejects.toThrow(/spawn failed/);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(
+        HOOK.onRequest({ ...ctxBase(), body: new Uint8Array(0), signal: new AbortController().signal }),
+      ).rejects.toThrow(/spawn failed/);
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(errSpy.mock.calls[0]?.[0]).toContain("sidecar:install");
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it("复核 R4-P0：预先 abort + 二进制不存在 → 宿主存活 + 脱敏拒绝（不杀进程组）", async () => {

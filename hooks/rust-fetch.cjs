@@ -151,7 +151,16 @@ module.exports.onRequest = function onRequest({ homedir, url, method, headers, b
       }
       fail("rust-fetch: stdout error");
     });
-    child.on("error", (err) => fail(`rust-fetch: spawn failed (${err.code ?? err.message})`));
+    child.on("error", (err) => {
+      // 运营侧诊断（wire 脱敏不动）：二进制缺失时往 daemon stderr 打一行安装
+      // 指引（app.log 的 warn/error 镜像承接）——消费侧错误帧仍是固定文案。
+      if (err.code === "ENOENT") {
+        console.error(
+          "[rust-fetch] sidecar binary not found (discovery: $AIFLY_RUST_FETCH_BIN > ~/.aifly/sidecars/rust-fetch/rust-fetch > PATH); build & install: pnpm sidecar:install",
+        );
+      }
+      fail(`rust-fetch: spawn failed (${err.code ?? err.message})`);
+    });
     child.on("close", (code) => {
       detach(); // 进程终结：解除 abort 监听（头行期不解除——body 流仍可中止）
       if (!headerDone) {

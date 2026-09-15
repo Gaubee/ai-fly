@@ -25,6 +25,7 @@
     "webui:build": "pnpm --filter @ai-fly/webui build",
     "app:dev": "AIFLY_APP_DEV=1 tsx src/app/main.ts",
     "app:icons": "tsx src/app/generate-icons.ts",
+    "sidecar:install": "cargo build --release --manifest-path sidecars/rust-fetch/Cargo.toml && node -e \"const fs=require('node:fs'),os=require('node:os'),path=require('node:path');const dest=path.join(os.homedir(),'.aifly','sidecars','rust-fetch','rust-fetch');fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync('sidecars/rust-fetch/target/release/rust-fetch',dest);fs.chmodSync(dest,0o755);console.log('[sidecar:install]',dest)\"",
     "app:build": "pnpm webui:build && pnpm app:icons && pnpm build && pnpm app:verify",
     "app:verify": "node --input-type=module --eval \"const fs=await import('node:fs');const {resolveOpenTrayPackage}=await import('@opentray/packaging');const dirs=fs.readdirSync('dist',{withFileTypes:true}).filter(d=>d.isDirectory()).map(d=>'dist/'+d.name+'/opentray-app-manifest.json').filter(p=>fs.existsSync(p));if(dirs.length===0)throw new Error('opentray-app-manifest.json not found under dist/');for(const m of dirs){const r=await resolveOpenTrayPackage(m,{artifactRoot:'dist'});if(!fs.existsSync(r.runtimeHostPath))throw new Error('staged runtime host missing: '+r.runtimeHostPath);console.log('[app:verify]',m,'->',r.runtimeHostPath)}\"",
     "app:start": "node dist/app/main.js"

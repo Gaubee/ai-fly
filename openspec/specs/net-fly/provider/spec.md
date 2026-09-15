@@ -311,7 +311,10 @@ Promise）；`{}` 为合法 no-op；绑定声明但导出缺失 / 抛错 / 返�
 
 **错误映射**：① 脚本缺席/抛错/空产出归既有 `secret_missing` 族（零上游请求、
 消息不泄脚本名与值）；②③④ 脚本缺席（绑定声明但导出缺失）、抛错、返回形状
-非法、流中途失败 SHALL 以新错误码 `hook_failed` 回送（消息同样脱敏）。
+非法、流中途失败 SHALL 以新错误码 `hook_failed` 回送（消息同样脱敏）。**脱敏
+仅约束 wire 面**：daemon stderr / app.log 可携带运营侧诊断行（Owner
+2026-09-16，实测锚点：rust-fetch sidecar 二进制缺失 → wire 固定文案 + stderr
+一行安装指引 `pnpm sidecar:install`；诊断行不含密钥值与服务脚本路径）。
 
 #### Scenario: 阶段按序组装
 
