@@ -19,6 +19,7 @@ import {
 } from "$shared/rpc-contract.ts";
 
 export type { StageFnNameValue };
+export { STAGE_FN_NAMES };
 
 /** 契约 auth 槽（{secret}|{script,args?}|{literal} + 可选 bearer）。 */
 export type AuthSlot = NonNullable<ServiceInputView["auth"]>;
@@ -72,6 +73,22 @@ export function scriptsForStage(
   stage: StageFnNameValue,
 ): string[] {
   return scripts.filter((s) => s.stages.includes(stage)).map((s) => s.name);
+}
+
+/** 生命周期双模式（Owner 2026-09-15）：custom = 逐槽；preset = hooks 整段绑定。 */
+export type LifecycleMode = "custom" | "preset";
+
+/** 预设模式候选：至少导出一个阶段函数的脚本（整段绑定无意义者不列）。 */
+export function presetEligibleScripts(scripts: readonly StageScriptRow[]): StageScriptRow[] {
+  return scripts.filter((s) => s.stages.length > 0);
+}
+
+/** 指定脚本覆盖的阶段（徽章呈现；未知脚本返回空）。 */
+export function coveredStagesOf(
+  scripts: readonly StageScriptRow[],
+  name: string,
+): StageFnNameValue[] {
+  return scripts.find((s) => s.name === name)?.stages ?? [];
 }
 
 // ---------------------------------------------------------------------------

@@ -122,7 +122,7 @@ export const serviceForm = $state({
   headerRemove: "",
   /** ② headers：整段脚本绑定（"" = 无）。 */
   headersScript: "",
-  /** ③ request：脚本绑定（"" = 原生 fetch 直连）。 */
+  /** ③ request：脚本绑定（"" = js-backend-fetch 直连）。 */
   requestScript: "",
   /** ④ response：脚本绑定（"" = 无）。 */
   responseScript: "",
@@ -131,6 +131,10 @@ export const serviceForm = $state({
   /** 预设 apiForm（连通测试请求形状；服务模型不落库该字段——custom 缺省
    *  openai-completions，仅草稿期供 services.test 携带）。 */
   apiForm: undefined as ApiForm | undefined,
+  /** 生命周期双模式（Owner 2026-09-15）：custom = 逐槽；preset = hooks 整段绑定。 */
+  lifecycleMode: "custom" as "custom" | "preset",
+  /** 预设模式整段脚本名（"" = 未绑定；仅 preset 模式生效）。 */
+  presetScript: "",
   busy: false,
   error: null as RpcError | null,
   /** 编辑透传（表单外字段原样带回；脚本 args 仅在脚本名未变时带回）。 */
@@ -142,6 +146,7 @@ export const serviceForm = $state({
     headersScriptArgs?: Record<string, string>;
     requestArgs?: Record<string, string>;
     responseArgs?: Record<string, string>;
+    hooksArgs?: Record<string, string>;
   } | null,
 });
 
@@ -162,6 +167,8 @@ function formReset(): void {
   serviceForm.responseScript = "";
   serviceForm.presetId = "";
   serviceForm.apiForm = undefined;
+  serviceForm.lifecycleMode = "custom";
+  serviceForm.presetScript = "";
   serviceForm.error = null;
   serviceForm.passthrough = null;
 }
@@ -192,6 +199,9 @@ export function openEdit(service: ServiceConfigView): void {
   serviceForm.headersScript = service.headers?.script?.name ?? "";
   serviceForm.requestScript = service.request?.script ?? "";
   serviceForm.responseScript = service.response?.script ?? "";
+  // 生命周期双模式回显（rust-fetch-sidecar）：hooks 整段绑定 → preset 模式
+  serviceForm.lifecycleMode = service.hooks !== undefined ? "preset" : "custom";
+  serviceForm.presetScript = service.hooks?.script ?? "";
   const suffixes = service.match.filter((r) => r.type === "suffix").map((r) => r.value);
   serviceForm.customMatch = suffixes.join(", ");
   const matchExtra = service.match.filter((r) => r.type !== "suffix");
@@ -210,6 +220,7 @@ export function openEdit(service: ServiceConfigView): void {
     ...(service.headers?.script?.args !== undefined ? { headersScriptArgs: service.headers.script.args } : {}),
     ...(service.request?.args !== undefined ? { requestArgs: service.request.args } : {}),
     ...(service.response?.args !== undefined ? { responseArgs: service.response.args } : {}),
+    ...(service.hooks?.args !== undefined ? { hooksArgs: service.hooks.args } : {}),
   };
   // 服务既有路由回显为可编辑行
   if (service.routes !== undefined && service.routes.length > 0) {
@@ -239,7 +250,14 @@ export function choosePreset(preset: Preset): void {
   serviceForm.port = String(preset.defaultPort);
   serviceForm.upstream = preset.baseUrl;
   serviceForm.customMatch = preset.matchDomains.join(", ");
-  serviceForm.auth = authSelFromPreset(preset);
+  if (preset.hooks !== undefined) {
+    // 预设模式（rust-fetch-sidecar）：整段脚本自带生命周期（codex = ①②③），
+    // 不做逐槽装配。
+    serviceForm.lifecycleMode = "preset";
+    serviceForm.presetScript = preset.hooks.script;
+  } else {
+    serviceForm.auth = authSelFromPreset(preset);
+  }
   serviceForm.routeRows = (preset.routes ?? []).map((route) => {
     const from = route.localPrefix ?? ROUTE_LOCAL_PREFIX[route.forms[0] ?? "openai-chat"];
     const to = toInputFromPrefix(route.upstreamPrefix ?? "");
@@ -442,6 +460,9 @@ export function validate(): string | null {
   if (serviceForm.auth.kind === "literal" && serviceForm.auth.value.trim() === "") {
     return "auth literal value is required";
   }
+  if (serviceForm.lifecycleMode === "preset" && serviceForm.presetScript === "") {
+    return "preset mode requires a lifecycle script";
+  }
   if (matchRules() === null) return "a valid upstream url is required to derive match rules";
   return null;
 }
@@ -452,27 +473,72 @@ export function composeInput(): { ok: true; input: ServiceAddInput } | { ok: fal
   if (problem !== null) return { ok: false, message: problem };
   const match = matchRules()!;
   const port = parsePositiveInt(serviceForm.port);
+  const routes = routesInput();
+  const rewrite = serviceForm.passthrough?.rewrite;
+  const base = {
+    name: serviceForm.name.trim(),
+    upstream: serviceForm.upstream.trim(),
+    match,
+    ...(port !== undefined ? { defaultPort: port } : {}),
+    ...(routes !== undefined ? { routes } : {}),
+    ...(rewrite !== undefined ? { rewrite } : {}),
+  };
+  if (serviceForm.lifecycleMode === "preset") {
+    // 预设模式：仅 hooks 整段绑定（与逐槽互斥——spec 冻结）。
+    const presetScript = serviceForm.presetScript;
+    const hooksArgs = serviceForm.passthrough?.hooksArgs;
+    return {
+      ok: true,
+      input: {
+        ...base,
+        hooks: { script: presetScript, ...(hooksArgs !== undefined ? { args: hooksArgs } : {}) },
+      },
+    };
+  }
   const auth = authDraft();
   const headers = headersSlotFromForm();
   const request = stageScriptSlot(serviceForm.requestScript, serviceForm.passthrough?.requestArgs);
   const response = stageScriptSlot(serviceForm.responseScript, serviceForm.passthrough?.responseArgs);
-  const routes = routesInput();
-  const rewrite = serviceForm.passthrough?.rewrite;
   return {
     ok: true,
     input: {
-      name: serviceForm.name.trim(),
-      upstream: serviceForm.upstream.trim(),
-      match,
-      ...(port !== undefined ? { defaultPort: port } : {}),
+      ...base,
       ...(auth !== undefined ? { auth } : {}),
       ...(headers !== undefined ? { headers } : {}),
       ...(request !== undefined ? { request } : {}),
       ...(response !== undefined ? { response } : {}),
-      ...(routes !== undefined ? { routes } : {}),
-      ...(rewrite !== undefined ? { rewrite } : {}),
     },
   };
+}
+
+/** 生命周期模式切换（互斥清空另一侧——spec「模式切换互斥清空」场景）。 */
+export function setLifecycleMode(mode: "custom" | "preset"): void {
+  if (serviceForm.lifecycleMode === mode) return;
+  serviceForm.lifecycleMode = mode;
+  if (mode === "custom") {
+    serviceForm.presetScript = "";
+    if (serviceForm.passthrough !== null) {
+      const { hooksArgs: _drop, ...rest } = serviceForm.passthrough;
+      serviceForm.passthrough = rest;
+    }
+  } else {
+    serviceForm.auth = { kind: "none" };
+    serviceForm.headerSetRows = [makeHeaderRow()];
+    serviceForm.headerRemove = "";
+    serviceForm.headersScript = "";
+    serviceForm.requestScript = "";
+    serviceForm.responseScript = "";
+    if (serviceForm.passthrough !== null) {
+      const { authArgs: _a, headersScriptArgs: _h, requestArgs: _r, responseArgs: _s, ...rest } =
+        serviceForm.passthrough;
+      serviceForm.passthrough = rest;
+    }
+  }
+}
+
+/** 预设模式脚本选择。 */
+export function setPresetScript(name: string): void {
+  serviceForm.presetScript = name;
 }
 
 /** 确保服务落进目标分组（新建 / 既有 setServices 增补）。 */

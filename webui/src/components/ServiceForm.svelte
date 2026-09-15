@@ -11,6 +11,7 @@
   高级选项（接收方建议端口 + match 域名，沉底）。
 -->
 <script lang="ts">
+  import { onMount } from "svelte";
   import Input from "$lib/ui/input";
   import NativeSelect from "$lib/ui/native-select";
   import PressButton from "$lib/ui/press-button";
@@ -34,16 +35,44 @@
     toInputFromPrefix,
     setStageScript,
     setAuthSel,
+    setLifecycleMode,
+    setPresetScript,
     authDraft,
     headersSummary,
   } from "../stores/service-form.svelte.ts";
-  import { hooksPanel } from "../stores/advanced.svelte.ts";
-  import { authSelSummary, scriptsForStage } from "$lib/lifecycle.ts";
+  import { hooksPanel, loadHooks } from "../stores/advanced.svelte.ts";
+  import {
+    authSelSummary,
+    coveredStagesOf,
+    presetEligibleScripts,
+    scriptsForStage,
+    STAGE_FN_NAMES,
+    STAGE_LABELS,
+  } from "$lib/lifecycle.ts";
+  /** 未覆盖阶段的缺省语义（UI delta「未覆盖阶段显示缺省语义」——复核 R1-P3）。 */
+  const STAGE_DEFAULTS: Record<string, string> = {
+    onRequestBearerAuthentication: "f.lifecycle.default.none",
+    onRequestHeaders: "f.lifecycle.default.none",
+    onRequest: "f.lifecycle.default.jsBackend",
+    onResponse: "f.lifecycle.default.none",
+  };
   import { t } from "$lib/i18n.svelte.ts";
 
   /** ③ request / ④ response 阶段可用脚本（stages 矩阵过滤）。 */
   const requestScripts = $derived(scriptsForStage(hooksPanel.scripts, "onRequest"));
   const responseScripts = $derived(scriptsForStage(hooksPanel.scripts, "onResponse"));
+  /** 预设模式候选（≥1 阶段导出）与当前覆盖阶段徽章。 */
+  const presetCandidates = $derived(presetEligibleScripts(hooksPanel.scripts));
+  const coveredStages = $derived(
+    serviceForm.presetScript === "" ? [] : coveredStagesOf(hooksPanel.scripts, serviceForm.presetScript),
+  );
+
+  // 挂载即拉取 hooks 清单（复核 R4-P1）：预设模式不渲染 AuthSourcePicker——
+  // 其 onMount 的 loadHooks() 是唯一装载点，干净会话（分享向导直达 codex 预设）
+  // 会拿到空候选与全未覆盖徽章。幂等（loaded 守卫），多入口重复调用无副作用。
+  onMount(() => {
+    void loadHooks();
+  });
 
   /** 连通测试的 auth 槽草稿（契约 services.test 输入——不再接受 secretName 单字段）。 */
   const testAuthDraft = $derived(authDraft());
@@ -183,12 +212,59 @@
     >{t("share.routes.add")}</PressButton>
   </div>
 
-  <!-- Request lifecycle：四阶段纵向管线（编号 + 左侧连接线；①②默认展开，
-       ③④折叠收纳——二八法则；执行顺序 auth → headers → request → response） -->
+  <!-- Request lifecycle（双模式——Owner 2026-09-15）：custom = 四阶段纵向管线
+       （编号 + 左侧连接线；①②默认展开，③④折叠收纳）；preset = 整段脚本绑定
+       （选择器 + 覆盖阶段徽章）。两模式互斥，切换清空另一侧。 -->
   <div class="flex flex-col gap-3">
-    <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-      {t("f.lifecycle.label")}
-    </span>
+    <div class="flex items-center gap-2">
+      <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
+        {t("f.lifecycle.label")}
+      </span>
+      <span class="ml-auto inline-flex overflow-hidden rounded-md border border-border">
+        <PressButton
+          variant="ghost"
+          class={serviceForm.lifecycleMode === "custom" ? "bg-primary/10 px-2 py-0.5 text-[11px]" : "px-2 py-0.5 text-[11px]"}
+          onclick={() => setLifecycleMode("custom")}
+        >{t("f.lifecycle.mode.custom")}</PressButton>
+        <PressButton
+          variant="ghost"
+          class={serviceForm.lifecycleMode === "preset" ? "bg-primary/10 px-2 py-0.5 text-[11px]" : "px-2 py-0.5 text-[11px]"}
+          onclick={() => setLifecycleMode("preset")}
+        >{t("f.lifecycle.mode.preset")}</PressButton>
+      </span>
+    </div>
+    {#if serviceForm.lifecycleMode === "preset"}
+      <!-- 预设模式：整段脚本 + 覆盖阶段徽章（未覆盖阶段走缺省语义——③ 缺省
+           js-backend-fetch 直连） -->
+      <div class="flex flex-col gap-1.5">
+        <NativeSelect
+          aria-label={t("f.lifecycle.mode.preset")}
+          value={serviceForm.presetScript}
+          onchange={(event) => setPresetScript(event.currentTarget.value)}
+        >
+          <option value="">{t("f.lifecycle.preset.none")}</option>
+          {#each presetCandidates as cand (cand.name)}
+            <option value={cand.name}>{cand.name}</option>
+          {/each}
+        </NativeSelect>
+        {#if serviceForm.presetScript !== ""}
+          <div class="flex flex-col gap-1">
+            {#each STAGE_FN_NAMES as stage (stage)}
+              {@const covered = coveredStages.includes(stage)}
+              <div class="flex items-center gap-1.5">
+                <span class="rounded-sm px-1.5 py-0.5 font-mono text-[11px] {covered ? 'bg-primary/15 text-foreground' : 'bg-muted text-muted-foreground'}">{STAGE_LABELS[stage]}</span>
+                {#if covered}
+                  <span class="text-[11px] text-muted-foreground">{t("f.lifecycle.preset.covered")}</span>
+                {:else}
+                  <span class="text-[11px] text-muted-foreground">{t(STAGE_DEFAULTS[stage])}</span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+        <p class="text-[11px] leading-relaxed text-muted-foreground">{t("f.lifecycle.preset.hint")}</p>
+      </div>
+    {:else}
     <div class="relative">
       <!-- 管线连接线（badge 列中垂线；badge 本身 z-10 压线） -->
       <span class="absolute bottom-3 left-3 top-3 w-px bg-border" aria-hidden="true"></span>
@@ -217,7 +293,7 @@
             </AccordionItem>
           </div>
         </div>
-        <!-- ③ request（折叠收纳；未绑定时明示原生 fetch 直连） -->
+        <!-- ③ request（折叠收纳；未绑定时明示 js-backend-fetch 直连） -->
         <div class="flex items-start gap-2.5">
           <span class="relative z-10 flex size-6 flex-none items-center justify-center rounded-full border border-border bg-card font-mono text-[11px] text-muted-foreground">3</span>
           <div class="min-w-0 flex-1">
@@ -263,6 +339,7 @@
         </div>
       </Accordion>
     </div>
+    {/if}
   </div>
 
   <TestConnection

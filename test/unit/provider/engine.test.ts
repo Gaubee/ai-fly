@@ -5,7 +5,7 @@
 
 import { createServer, type RequestListener, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -23,6 +23,7 @@ const PROVIDER_EP = "provider-ep-z32-1";
 const CONSUMER_EP = "consumer-ep-z32-1";
 
 let dir: string;
+let sandboxHome: string;
 let store: ProviderStore;
 let serviceId: string;
 let keyFriends: { keyId: string; key: string };
@@ -46,14 +47,36 @@ beforeEach(async () => {
       upstreamBodies.push(Buffer.concat(chunks).toString());
       if (req.url === "/stall") return; // 永不响应（并发限额用）
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ path: req.url, auth: req.headers.authorization ?? null }));
+      res.end(
+        JSON.stringify({
+          path: req.url,
+          auth: req.headers.authorization ?? null,
+          sandbox: req.headers["x-sandbox"] ?? null,
+        }),
+      );
     });
   };
   mockServer = createServer(handler);
   await new Promise<void>((resolve) => mockServer.listen(0, "127.0.0.1", resolve));
   mockPort = (mockServer.address() as AddressInfo).port;
 
-  store = ProviderStore.open(dir);
+  // 沙盒 HOME（复核 R2-P1-B）：仅存在于该 home 的用户 hook，验证 home 从
+  // ProviderStore.open 一致贯穿到 engine opts → forwardRequest 的运行时解析。
+  sandboxHome = mkdtempSync(join(tmpdir(), "aifly-engine-home-"));
+  const userHooksDir = join(sandboxHome, ".aifly", "hooks");
+  mkdirSync(userHooksDir, { recursive: true });
+  writeFileSync(
+    join(userHooksDir, "sandbox-preset.cjs"),
+    [
+      '"use strict";',
+      "module.exports = {",
+      "  onRequestHeaders: async () => ({ set: { 'x-sandbox': 'yes' } }),",
+      "};",
+      "",
+    ].join("\n"),
+  );
+
+  store = ProviderStore.open(dir, { home: sandboxHome });
   const svc = store.addService({
     name: "api",
     upstream: `http://127.0.0.1:${mockPort}`,
@@ -77,6 +100,7 @@ beforeEach(async () => {
       // $secret 解析走真实密钥库（无内存态：测试内 set/remove 即刻生效）。
       secrets: (name) => SecretsStore.open(dir).get(name),
       timeouts: { connectMs: 1_000, firstByteMs: 30_000, stallMs: 30_000, pingMs: 60_000 },
+      home: sandboxHome,
     },
   });
   await engine.start();
@@ -98,6 +122,7 @@ afterEach(async () => {
   await engine.shutdown();
   await new Promise<void>((resolve) => mockServer.close(() => resolve()));
   rmSync(dir, { recursive: true, force: true });
+  rmSync(sandboxHome, { recursive: true, force: true });
 });
 
 async function waitFor<T>(probe: () => T | undefined, ms = 3_000): Promise<T> {
@@ -183,6 +208,32 @@ describe("REQ 全链路", () => {
     expect(payload.path).toBe("/v1/echo");
     expect(payload.auth).toBe("sk-env-injected");
     expect(upstreamBodies[0]).toBe('{"q":"hi"}');
+  });
+
+  it("home 贯穿运行时（复核 R2-P1-B）：预设模式脚本从注入 home 解析并生效", async () => {
+    // 预设模式服务：sandbox-preset 仅存在于沙盒 HOME——engine opts.home 未贯穿
+    // 到 forwardRequest 时该脚本按真实 os.homedir() 解析失败（hook_failed）。
+    const svc = store.addService({
+      name: "sbx",
+      upstream: `http://127.0.0.1:${mockPort}`,
+      match: [{ type: "suffix", value: ".local" }],
+      hooks: { script: "sandbox-preset" },
+    });
+    store.addGroup("sbxgrp", ["sbx"]);
+    const key = store.issueKey("sbxgrp");
+    await connectAndAuth([key.key]);
+    await consumer.send(
+      FRAME_TYPE.REQ,
+      { v: 1, id: "h1", serviceId: svc.serviceId, method: "GET", path: "/sbx", bodyLen: 0 },
+    );
+    await waitFor(() => of(FRAME_TYPE.RESP_END, "h1")[0]);
+    const meta = of(FRAME_TYPE.RESP_META, "h1")[0]!.header as { status: number };
+    expect(meta.status).toBe(200);
+    const chunks = of(FRAME_TYPE.RESP_CHUNK, "h1");
+    const payload = JSON.parse(Buffer.concat(chunks.map((f) => bodyOf(f))).toString()) as {
+      sandbox: string | null;
+    };
+    expect(payload.sandbox).toBe("yes"); // ② onRequestHeaders 注入头到达上游
   });
 
   it("未授权/未知 serviceId 统一 unknown_service（防枚举）", async () => {

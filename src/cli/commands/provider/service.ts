@@ -4,7 +4,8 @@
 // hooks-lifecycle 6.1（正式 v2 旗标面）：--secret → auth.secret；--auth-script/
 // --auth-literal/--no-bearer 补齐 auth 三族 + bearer 开关；--header-set（值仅
 // 字面量与 $env:/$secret: 引用）/--header-remove/--headers-script → headers 槽；
-// --request-script/--response-script → ③④ 槽；--hooks 退役（传入即报错）。
+// --request-script/--response-script → ③④ 槽；--hooks 为预设模式整段绑定
+// （rust-fetch-sidecar 恢复：与逐槽旗标互斥，脚本须导出至少一个阶段函数）。
 // get/list humanize 按四阶段输出（CLI 面向 owner 本机——显示引用形态而非值）；
 // legacy（pre-v2）存储态列失效服务名 + 移除路径提示。
 
@@ -23,6 +24,7 @@ import {
   str,
 } from "./common.ts";
 import type { AuthSlot, ServiceConfig } from "../../../provider/store.ts";
+import { scriptHasStageExports } from "../../../provider/hook.ts";
 import { loadCuratedPresets } from "../../../../presets/models-dev.ts";
 
 const SPEC = {
@@ -45,7 +47,7 @@ const SPEC = {
   // ③④ 槽脚本绑定（onRequest / onResponse 导出）。
   "request-script": { type: "string" },
   "response-script": { type: "string" },
-  // 已退役（保留声明是为了给出定向错误提示而非裸 unknown option）。
+  // 预设模式整段绑定（rust-fetch-sidecar：脚本自带阶段导出；与逐槽旗标互斥）。
   hooks: { type: "string" },
   // cli-parity B1：路由参数（--route local=up[@forms] 前缀；--route-pattern
   // match=template 模式）+ --preset 预填
@@ -66,7 +68,8 @@ const USAGE = `usage:
                       [--match <exact|suffix|regex>:<value>]...
                       [--host <host>] [--strip <prefix>] [--append <prefix>]
                       [--header-set <name>=<value|$env:VAR|$secret:name>]... [--header-remove <name>]...
-                      [--headers-script <name>] [--request-script <name>] [--response-script <name>] [--data <dir>]
+                      [--headers-script <name>] [--request-script <name>] [--response-script <name>]
+                      [--hooks <name>] [--data <dir>]
   ai-fly service list [--data <dir>]
   ai-fly service get <name> [--data <dir>]
   ai-fly service remove <name> [--data <dir>]
@@ -77,12 +80,6 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
   try {
     const home = ctx.homedir ?? homedir();
     const { options, positionals } = parseArgv(argv, SPEC, { homedir: home });
-    if (options.hooks !== undefined) {
-      // --hooks 退役（hooks-lifecycle v2）：脚本绑定按阶段落槽（传入即报错）。
-      throw new UsageError(
-        "error: --hooks was removed (hooks-lifecycle v2); bind stage scripts per slot instead: --auth-script, --headers-script, --request-script, --response-script",
-      );
-    }
     const sub = positionals[0];
     if (sub === "add") return add(options, positionals, home);
     if (sub === "list") return list(options, home);
@@ -126,6 +123,38 @@ function add(options: Readonly<Record<string, OptionValue>>, positionals: readon
       : []),
   ];
   const headerSetSpecs = multi(options["header-set"]).map(parseHeaderSetSpec);
+  // 预设模式整段绑定（rust-fetch-sidecar）：--hooks > preset.hooks；与逐槽旗标
+  // 互斥（CLI 侧先拒，store 侧兜底）；脚本必须导出至少一个阶段函数。
+  const slotFlags = [
+    ["--secret", options.secret],
+    ["--auth-script", options["auth-script"]],
+    ["--auth-literal", options["auth-literal"]],
+    ["--headers-script", options["headers-script"]],
+    ["--request-script", options["request-script"]],
+    ["--response-script", options["response-script"]],
+  ] as const;
+  const slotFlagsDeclared =
+    slotFlags.some(([, v]) => v !== undefined) ||
+    options["header-set"] !== undefined ||
+    options["header-remove"] !== undefined;
+  // preset 的预设模式仅在用户未显式给任何逐槽配置时生效（显式旗标胜 preset
+  // ——沿用 CLI 惯例：codex 预设 + --secret = 切回自定义模式）。
+  const hooksName = str(options.hooks) ?? (preset?.hooks !== undefined && !slotFlagsDeclared ? preset.hooks.script : undefined);
+  if (hooksName !== undefined) {
+    const clash = slotFlags.filter(([, v]) => v !== undefined).map(([f]) => f);
+    const headerDeclared =
+      options["header-set"] !== undefined || options["header-remove"] !== undefined;
+    if (clash.length > 0 || headerDeclared) {
+      throw new UsageError(
+        `error: --hooks (preset mode) is mutually exclusive with per-stage flags: ${[...clash, ...(headerDeclared ? ["--header-set/--header-remove"] : [])].join(", ")}`,
+      );
+    }
+    if (!scriptHasStageExports(hooksName, { home })) {
+      throw new UsageError(
+        `error: hook script '${hooksName}' exports no lifecycle stage function (see: ai-fly hooks list)`,
+      );
+    }
+  }
   // ① auth 槽组装：显式旗标（三族互斥）> preset.auth（v2 直吐）> preset.keyEnv
   //  的 $env 引用兜底；--no-bearer 关 Bearer 前缀（显式旗标胜 preset 内开关）。
   const authSources = [
@@ -168,7 +197,7 @@ function add(options: Readonly<Record<string, OptionValue>>, positionals: readon
       : {}),
   });
   const dataDir = resolveDataDir(str(options.data), home);
-  const store = openStore(dataDir);
+  const store = openStore(dataDir, home); // home 同步传入（复核 R2-P1-B：与 preflight 同基准）
   const service = store.addService({
     name,
     upstream,
@@ -186,6 +215,7 @@ function add(options: Readonly<Record<string, OptionValue>>, positionals: readon
     ...(options["response-script"] !== undefined
       ? { response: { script: str(options["response-script"])! } }
       : {}),
+    ...(hooksName !== undefined ? { hooks: { script: hooksName } } : {}),
     rewrite: buildRewrite({
       host: str(options.host),
       strip: str(options.strip),
@@ -202,6 +232,7 @@ function add(options: Readonly<Record<string, OptionValue>>, positionals: readon
       ...(service.routes !== undefined && service.routes.length > 0
         ? [`  routes     : ${service.routes.map(routeSummary).join(" | ")}`]
         : []),
+      ...(service.hooks !== undefined ? [`  hooks      : ${service.hooks.script} (preset mode)`] : []),
       "",
     ].join("\n"),
   );
@@ -209,7 +240,7 @@ function add(options: Readonly<Record<string, OptionValue>>, positionals: readon
 }
 
 function list(options: Readonly<Record<string, OptionValue>>, home: string): number {
-  const store = openStore(resolveDataDir(str(options.data), home));
+  const store = openStore(resolveDataDir(str(options.data), home), home);
   // legacy（pre-v2）存储态：失效服务名清单 + 移除路径提示（hooks-lifecycle 2.3/6.1）。
   const legacy = store.legacy;
   if (legacy !== null) {
@@ -242,7 +273,7 @@ function list(options: Readonly<Record<string, OptionValue>>, home: string): num
 function remove(options: Readonly<Record<string, OptionValue>>, positionals: readonly string[], home: string): number {
   const name = positionals[1];
   if (name === undefined) throw new UsageError("error: service remove requires a <name> argument");
-  const store = openStore(resolveDataDir(str(options.data), home));
+  const store = openStore(resolveDataDir(str(options.data), home), home);
   store.removeService(name);
   process.stdout.write(`service removed: ${name}\n`);
   return 0;
@@ -252,7 +283,7 @@ function remove(options: Readonly<Record<string, OptionValue>>, positionals: rea
 function setRunning(options: Readonly<Record<string, OptionValue>>, positionals: readonly string[], home: string, running: boolean): number {
   const name = positionals[1];
   if (name === undefined) throw new UsageError(`error: service ${running ? "start" : "stop"} requires a <name> argument`);
-  const store = openStore(resolveDataDir(str(options.data), home));
+  const store = openStore(resolveDataDir(str(options.data), home), home);
   const svc = store.getServiceByName(name);
   if (svc === undefined) throw new UsageError(`error: unknown service '${name}'`);
   const { changed } = store.setServiceEnabled(svc.serviceId, running);
@@ -340,7 +371,7 @@ function parseRoutePatternSpec(raw: string): {
 function get(options: Readonly<Record<string, OptionValue>>, positionals: readonly string[], home: string): number {
   const name = positionals[1];
   if (name === undefined) throw new UsageError("error: service get requires a <name> argument");
-  const store = openStore(resolveDataDir(str(options.data), home));
+  const store = openStore(resolveDataDir(str(options.data), home), home);
   const service = store.getServiceByName(name);
   if (service === undefined) throw new UsageError(`error: service '${name}' not found`);
   const lines = [
@@ -379,6 +410,7 @@ function get(options: Readonly<Record<string, OptionValue>>, positionals: readon
   }
   if (service.request !== undefined) lines.push(`  request    : script ${service.request.script}`);
   if (service.response !== undefined) lines.push(`  response   : script ${service.response.script}`);
+  if (service.hooks !== undefined) lines.push(`  hooks      : ${service.hooks.script} (preset mode)`);
   process.stdout.write(`${lines.join("\n")}\n`);
   return 0;
 }
@@ -401,6 +433,7 @@ function lifecycleSummary(service: ServiceConfig): string | undefined {
   }
   if (service.request !== undefined) segments.push(`request:script ${service.request.script}`);
   if (service.response !== undefined) segments.push(`response:script ${service.response.script}`);
+  if (service.hooks !== undefined) segments.push(`hooks(preset):${service.hooks.script}`);
   return segments.length === 0 ? undefined : segments.join("; ");
 }
 
@@ -409,7 +442,7 @@ async function test(options: Readonly<Record<string, OptionValue>>, positionals:
   const name = positionals[1];
   if (name === undefined) throw new UsageError("error: service test requires a <name> argument");
   const dataDir = resolveDataDir(str(options.data), home);
-  const store = openStore(dataDir);
+  const store = openStore(dataDir, home);
   const service = store.getServiceByName(name);
   if (service === undefined) throw new UsageError(`error: service '${name}' not found`);
   // 缺省 form：命中路由（--local-prefix 或唯一路由）的首个形态——codex 等
@@ -450,6 +483,8 @@ async function test(options: Readonly<Record<string, OptionValue>>, positionals:
     ...(options.content !== undefined ? { content: str(options.content)! } : {}),
     // 密钥原样值（hooks-lifecycle 5.2：Bearer 前缀由 auth 槽在头链内拼）。
     secrets: (secretName: string) => secretsStore.get(secretName),
+    // home 贯穿（复核 R2-P1-B）：行内 test 与网关转发同一脚本库基准。
+    home,
   });
   const out = (line: string): void => {
     process.stdout.write(`${line}\n`);

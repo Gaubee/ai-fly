@@ -240,10 +240,11 @@ describe("orpc over ws", () => {
     expect(viaSecret.service.auth).toEqual({ secret: "openai-main" });
     expect(viaSecret.envHint).toBeUndefined();
 
-    // codex 预设：preset.auth {script, bearer} 原样透传为 v2 auth 槽
-    // （hooks-lifecycle 6.3：authHeader 退役，直吐 v2；无 keyEnv 故无 envHint）
+    // codex 预设（rust-fetch-sidecar）：走预设模式——hooks 整段绑定（脚本自带
+    // ①②③ 阶段导出），不再装配 auth 槽；无 keyEnv 故无 envHint
     const viaCodex = await client.presets.applyAsService({ presetId: "codex", name: "codex-main" });
-    expect(viaCodex.service.auth).toEqual({ script: "codex", bearer: true });
+    expect(viaCodex.service.hooks).toEqual({ script: "codex" });
+    expect(viaCodex.service.auth).toBeUndefined();
     expect(viaCodex.service.upstream).toBe("https://chatgpt.com/");
     expect(viaCodex.envHint).toBeUndefined();
 
@@ -341,6 +342,92 @@ describe("orpc over ws", () => {
     await client.provider.services.remove({ name: "stale-alpha" });
     const after = await client.provider.services.list({});
     expect(after.services).toEqual([{ name: "stale-beta", legacy: true }]);
+    ws.close();
+  });
+
+  it("lifecycle preset mode (rust-fetch-sidecar): hooks binding round-trip, mutual exclusion, no-stage rejection", async () => {
+    const { client, ws } = await connectRpcClient();
+
+    // 预设模式：内建 codex 脚本（现含 ①②③ 三个阶段导出）可整段绑定
+    const added = await client.provider.services.add({
+      name: "preset-svc",
+      upstream: "https://chatgpt.com",
+      match: [{ type: "suffix", value: "chatgpt.com" }],
+      defaultPort: 4306,
+      hooks: { script: "codex" },
+    });
+    expect(added.service.hooks).toEqual({ script: "codex" });
+    const got = await client.provider.services.get({ name: "preset-svc" });
+    expect(got.hooks).toEqual({ script: "codex" });
+
+    // 互斥：hooks + auth → INVALID_INPUT（store 层裁决经统一边界映射）
+    await expect(
+      client.provider.services.add({
+        name: "clash",
+        upstream: "https://api.example.com:8443",
+        match: [{ type: "suffix", value: "api.example.com" }],
+        hooks: { script: "codex" },
+        auth: { secret: "lib" },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+
+    // 无阶段导出的脚本 → INVALID_INPUT（入口校验）
+    await expect(
+      client.provider.services.add({
+        name: "no-stage",
+        upstream: "https://api.example.com:8443",
+        match: [{ type: "suffix", value: "api.example.com" }],
+        hooks: { script: "definitely-not-a-script" },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+
+    await client.provider.services.remove({ name: "preset-svc" });
+    ws.close();
+  });
+
+  it("preset mode home threading (复核 R2-P1-B): sandbox user hook saves via services.add", async () => {
+    const { client, ws } = await connectRpcClient();
+
+    // 沙盒 HOME 下安装一个仅存在于该 home 的用户 hook（导出 ② 阶段函数）
+    const userHooksDir = join(base, ".aifly", "hooks");
+    mkdirSync(userHooksDir, { recursive: true });
+    writeFileSync(
+      join(userHooksDir, "sandbox-preset.cjs"),
+      [
+        '"use strict";',
+        "module.exports = {",
+        "  onRequestHeaders: async () => ({ set: { 'x-sandbox': 'yes' } }),",
+        "};",
+        "",
+      ].join("\n"),
+    );
+
+    // 复现口径：RPC preflight（rpc-router 注入 home）通过后，store.addService 的
+    // 阶段导出校验曾回退真实 os.homedir() 而拒绝同一脚本——home 贯穿后应落库成功。
+    const added = await client.provider.services.add({
+      name: "sandbox-preset-svc",
+      upstream: "https://api.example.com:8443",
+      match: [{ type: "suffix", value: "api.example.com" }],
+      defaultPort: 4307,
+      hooks: { script: "sandbox-preset" },
+    });
+    expect(added.service.hooks).toEqual({ script: "sandbox-preset" });
+
+    // 磁盘往返（新开 store 视图同注入 home）：hooks 绑定保持
+    const got = await client.provider.services.get({ name: "sandbox-preset-svc" });
+    expect(got.hooks).toEqual({ script: "sandbox-preset" });
+
+    // 反例仍在：该沙盒 home 下不存在的脚本名照旧被拒
+    await expect(
+      client.provider.services.add({
+        name: "ghost",
+        upstream: "https://api.example.com:8443",
+        match: [{ type: "suffix", value: "api.example.com" }],
+        hooks: { script: "sandbox-ghost" },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+
+    await client.provider.services.remove({ name: "sandbox-preset-svc" });
     ws.close();
   });
 

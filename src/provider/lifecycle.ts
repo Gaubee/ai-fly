@@ -139,7 +139,7 @@ export const RESPONSE_SLOT_SCHEMA = z.strictObject({
 });
 
 // ---------------------------------------------------------------------------
-// 四槽合体（嵌入服务配置 / 服务视图的形状）
+// 四槽合体（嵌入服务配置 / 服务视图的形状）+ 预设模式整段绑定
 // ---------------------------------------------------------------------------
 
 /** 生命周期四槽（auth/headers/request/response；嵌入服务形状的 canonical 形）。 */
@@ -148,6 +148,17 @@ export const LIFECYCLE_SLOTS_SCHEMA = z.strictObject({
   headers: HEADERS_SLOT_SCHEMA.optional(),
   request: REQUEST_SLOT_SCHEMA.optional(),
   response: RESPONSE_SLOT_SCHEMA.optional(),
+});
+
+/**
+ * 预设模式整段绑定（Owner 2026-09-15 裁决，v1 `hooks: "<script>"` 回归）：
+ * 一个 hook-js 按 stages 矩阵导出的阶段函数构成整套生命周期——①缺导出即无
+ * auth 注入、②缺导出即无增量、③缺 `onRequest` 导出回退 js-backend-fetch
+ * （含连接期探测）、④缺导出即无变换。与四槽**互斥**（store 层裁决）。
+ */
+export const HOOKS_SLOT_SCHEMA = z.strictObject({
+  script: SCRIPT_NAME_SCHEMA,
+  args: SCRIPT_ARGS_SCHEMA.optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -163,13 +174,14 @@ export type HeadersSlot = z.infer<typeof HEADERS_SLOT_SCHEMA>;
 export type RequestSlot = z.infer<typeof REQUEST_SLOT_SCHEMA>;
 export type ResponseSlot = z.infer<typeof RESPONSE_SLOT_SCHEMA>;
 export type ServiceLifecycleSlots = z.infer<typeof LIFECYCLE_SLOTS_SCHEMA>;
+export type HooksSlot = z.infer<typeof HOOKS_SLOT_SCHEMA>;
 
 // ---------------------------------------------------------------------------
 // 出站归一形（upstream 转发循环的唯一消费形状）
 // ---------------------------------------------------------------------------
 
 /**
- * 归一出站响应：原生 fetch 结果与 ③ onRequest 脚本结果统一归一
+ * 归一出站响应：js-backend-fetch 结果与 ③ onRequest 脚本结果统一归一
  * `{status, headers, body: AsyncIterable<Uint8Array>}`；forwardHttp 消费循环
  * 只认归一形（脚本流被取消 = 引擎中止传播；headers 小写化、last-wins、经
  * RESP_META 白名单过滤由引擎投影层负责）。body 为异步字节迭代器（SSE MUST 逐块

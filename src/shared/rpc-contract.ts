@@ -15,6 +15,7 @@ import {
   AUTH_SCRIPT_SLOT_SCHEMA,
   AUTH_SLOT_SCHEMA,
   HEADERS_SLOT_SCHEMA,
+  HOOKS_SLOT_SCHEMA,
   REQUEST_SLOT_SCHEMA,
   RESPONSE_SLOT_SCHEMA,
   STAGE_FN_NAMES,
@@ -120,11 +121,13 @@ export const SERVICE_SCHEMA = z.strictObject({
   match: z.array(SERVICE_MATCH_SCHEMA).max(64),
   upstream: z.string().min(1).max(2048),
   rewrite: SERVICE_REWRITE_SCHEMA.optional(),
-  // hooks-lifecycle v2 四槽（canonical：provider/lifecycle.ts；顶层 hooks 字符串退役）。
+  // 生命周期双模式（canonical：provider/lifecycle.ts）：自定义四槽或预设 hooks
+  // 整段绑定（互斥校验在 store）。
   auth: AUTH_SLOT_SCHEMA.optional(),
   headers: HEADERS_SLOT_SCHEMA.optional(),
   request: REQUEST_SLOT_SCHEMA.optional(),
   response: RESPONSE_SLOT_SCHEMA.optional(),
+  hooks: HOOKS_SLOT_SCHEMA.optional(),
   routes: z.array(SERVICE_ROUTE_SCHEMA).max(3).optional(),
   defaultPort: z.number().int().min(1).max(65535),
   /** 停用开关（service-lifecycle）：false = 临时停暴露（目录排除、请求 404）。 */
@@ -149,6 +152,8 @@ export const SERVICE_INPUT_SCHEMA = z.strictObject({
   headers: HEADERS_SLOT_SCHEMA.optional(),
   request: REQUEST_SLOT_SCHEMA.optional(),
   response: RESPONSE_SLOT_SCHEMA.optional(),
+  /** 预设模式整段绑定（与四槽互斥——store 层裁决）。 */
+  hooks: HOOKS_SLOT_SCHEMA.optional(),
   routes: z.array(SERVICE_ROUTE_SCHEMA).max(3).optional(),
   /** 编辑重建（remove+add）保留原停用态；缺省 true（service-lifecycle）。 */
   enabled: z.boolean().optional(),
@@ -229,6 +234,8 @@ export const PRESET_SCHEMA = z.strictObject({
    *  {secret: 建议密钥名, bearer?} | {script, args?, bearer?}；canonical 单源
    *  provider/lifecycle.ts，preset 装配时原样透传）。 */
   auth: z.union([AUTH_SECRET_SLOT_SCHEMA, AUTH_SCRIPT_SLOT_SCHEMA]).optional(),
+  /** 预设模式整段绑定（rust-fetch-sidecar：脚本自带 ②③ 等阶段导出，如 codex）。 */
+  hooks: HOOKS_SLOT_SCHEMA.optional(),
   /** 使用方本地端口建议（避开 <1024 特权段）。 */
   defaultPort: z.number().int().min(1024).max(65535),
   /** 官方域名集（exact/suffix 建议的生成源）。 */

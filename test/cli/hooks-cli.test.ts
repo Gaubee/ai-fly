@@ -44,13 +44,20 @@ function installUser(home: string, name: string, content: string): void {
 }
 
 describe("ai-fly hooks list（阶段矩阵）", () => {
-  it("内建四脚本（codex/env/file/secret）归 ① onRequestBearerAuthentication", async () => {
+  it("内建脚本阶段矩阵（rust-fetch-sidecar）：codex 全生命周期 ①②③；rust-fetch 归 ③；env/file/secret 归 ①", async () => {
     const home = freshHome();
     const scripts = discoverHooks(home);
-    for (const name of ["codex", "env", "file", "secret"]) {
-      const found = scripts.find((s) => s.name === name && s.source === "builtin");
-      expect(found, `builtin ${name} should be discoverable`).toBeDefined();
-      expect(found?.stages).toEqual(["onRequestBearerAuthentication"]);
+    const stagesOf = (name: string): string[] =>
+      scripts.find((s) => s.name === name && s.source === "builtin")?.stages ?? [];
+    // codex 扩为全生命周期脚本（预设模式首消费者）：① token + ② codex 头集 + ③ rust-fetch
+    expect(stagesOf("codex")).toEqual([
+      "onRequestBearerAuthentication",
+      "onRequestHeaders",
+      "onRequest",
+    ]);
+    expect(stagesOf("rust-fetch")).toEqual(["onRequest"]);
+    for (const name of ["env", "file", "secret"]) {
+      expect(stagesOf(name)).toEqual(["onRequestBearerAuthentication"]);
     }
     lines.length = 0;
     expect(await run(["list"], { homedir: home })).toBe(0);

@@ -3,7 +3,8 @@
 // - 文件带 `version: 2`；服务生命周期四槽（auth/headers/request/response）形状
 //   从 provider/lifecycle.ts 单源 import（此处只做存储面投影，禁止镜像声明）；
 // - rewrite 瘦身为 {host, pathPrefixStrip, pathPrefixAppend}——头改写能力全部
-//   迁出至 headers 槽；顶层 `hooks: "<script>"` 字段退役；
+//   迁出至 headers 槽；v1 顶层 `hooks: "<script>"` 退役，v2 以 `hooks: {script,
+//   args?}` 整段绑定回归（rust-fetch-sidecar 预设模式，与逐槽互斥）；
 // - 版本门禁：open 先裸读 JSON 判版本，version 缺失或 ≠2 进入 legacy 模式
 //   （空视图 + legacy 元数据，不抛错、非 corrupt）；legacy 态除 removeService
 //   外一切写方法以 `legacy_readonly` 拒绝；原始 services 清空后重建干净 v2
@@ -34,15 +35,18 @@ import { ROUTE_LOCAL_PREFIX } from "../shared/rpc-contract.ts";
 import {
   AUTH_SLOT_SCHEMA,
   HEADERS_SLOT_SCHEMA,
+  HOOKS_SLOT_SCHEMA,
   LIFECYCLE_SLOTS_SCHEMA,
   REQUEST_SLOT_SCHEMA,
   RESPONSE_SLOT_SCHEMA,
   type AuthSlot,
   type HeadersSlot,
+  type HooksSlot,
   type RequestSlot,
   type ResponseSlot,
 } from "./lifecycle.ts";
 import { compileMatchPattern } from "./match-pattern.ts";
+import { scriptHasStageExports } from "./hook.ts";
 import { validateUriTemplate } from "./uri-template.ts";
 import { join } from "node:path";
 import { z } from "zod";
@@ -118,20 +122,36 @@ export const SERVICE_ROUTE_STORE_SCHEMA = z.strictObject({
   template: z.string().min(1).max(2048).optional(),
 });
 
-export const SERVICE_STORE_SCHEMA = z.strictObject({
+const SERVICE_STORE_BASE = z.strictObject({
   serviceId: z.string().min(1).max(128),
   name: z.string().min(1).max(256),
   match: z.array(SERVICE_MATCH_STORE_SCHEMA).max(64),
   upstream: z.string().min(1).max(2048),
   rewrite: SERVICE_REWRITE_STORE_SCHEMA.optional(),
-  // 生命周期四槽（hooks-lifecycle v2）：形状单源在 provider/lifecycle.ts
-  // （此处 spread 其 shape 做存储面投影；顶层 hooks 字符串字段已退役）。
+  // 生命周期双模式（rust-fetch-sidecar 变更）：自定义四槽 + 预设模式顶层
+  // hooks 整段绑定（互斥——superRefine 在加载层即拒；形状单源 provider/lifecycle.ts）。
   ...LIFECYCLE_SLOTS_SCHEMA.shape,
+  hooks: HOOKS_SLOT_SCHEMA.optional(),
   routes: z.array(SERVICE_ROUTE_STORE_SCHEMA).max(3).optional(),
   defaultPort: z.number().int().min(1).max(65535),
   /** 停用开关（service-lifecycle）：false = 临时停暴露（配置保留，目录同步
    *  排除该服务→消费端端口关停），请求按 unknown_service 拒。旧文件缺省 true。 */
   enabled: z.boolean().default(true),
+});
+
+/** 双模式互斥的 schema 级裁决（复核 R1-P2-2：store 是唯一门禁——手写 v2 文件
+ *  携带 hooks + 任一逐槽 → superRefine 失败 → open 判 corrupt，不进运行时）。 */
+export const SERVICE_STORE_SCHEMA = SERVICE_STORE_BASE.superRefine((service, ctx) => {
+  if (service.hooks === undefined) return;
+  const slots = ["auth", "headers", "request", "response"] as const;
+  const slot = slots.find((k) => service[k] !== undefined);
+  if (slot !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["hooks"],
+      message: `lifecycle 'hooks' (preset mode) and per-stage slot '${slot}' are mutually exclusive`,
+    });
+  }
 });
 
 export const GROUP_LIMITS_STORE_SCHEMA = z.strictObject({
@@ -214,6 +234,8 @@ export interface ServiceInput {
   request?: RequestSlot | undefined;
   /** ④ response 槽（响应后处理脚本绑定）。 */
   response?: ResponseSlot | undefined;
+  /** 预设模式整段绑定（与四槽互斥——Owner 2026-09-15 双模式裁决）。 */
+  hooks?: HooksSlot | undefined;
   routes?: ServiceRoute[] | undefined;
   /** 编辑重建（remove+add）时保留原停用态；缺省 true（service-lifecycle）。 */
   enabled?: boolean | undefined;
@@ -300,16 +322,24 @@ export class ProviderStore {
   private legacyInfo: LegacyStoreInfo | null;
   /** legacy 态的原始文件对象（按名移除时对象级透传写回；退出 legacy 后置空）。 */
   private legacyRaw: Record<string, unknown> | null;
+  /**
+   * ①②③④ 脚本库 home 基准（复核 R2-P1-B）：预设模式阶段导出校验的解析基准。
+   * undefined = 真实 os.homedir()（hook.ts 缺省）。必须与 RPC/daemon 注入的
+   * 同一 home 一致——否则沙盒 HOME 下 preflight 通过的脚本在落库时被拒。
+   */
+  private readonly home: string | undefined;
 
   private constructor(
     dataDir: string,
     data: StoreData,
     legacy: { info: LegacyStoreInfo; raw: Record<string, unknown> } | null,
+    home?: string | undefined,
   ) {
     this.dataDir = dataDir;
     this.data = data;
     this.legacyInfo = legacy === null ? null : { serviceNames: [...legacy.info.serviceNames] };
     this.legacyRaw = legacy === null ? null : legacy.raw;
+    this.home = home;
   }
 
   static filePath(dataDir: string): string {
@@ -338,11 +368,11 @@ export class ProviderStore {
    * legacy 模式（空视图 + legacy 元数据，不抛错）；services 非数组或 JSON
    * 非法维持既有 corrupt 报错；version=2 但 schema 不符同样 corrupt。
    */
-  static open(dataDir: string): ProviderStore {
+  static open(dataDir: string, opts: { home?: string | undefined } = {}): ProviderStore {
     ensurePrivateDir(dataDir);
     const path = ProviderStore.filePath(dataDir);
     if (!existsSync(path)) {
-      return new ProviderStore(dataDir, ProviderStore.emptyV2(0), null);
+      return new ProviderStore(dataDir, ProviderStore.emptyV2(0), null, opts.home);
     }
     let raw: string;
     try {
@@ -379,19 +409,20 @@ export class ProviderStore {
           ? { ...ProviderStore.emptyV2(revision + 1), meta: metaParsed.data }
           : ProviderStore.emptyV2(revision + 1);
         atomicWriteFileSync(path, `${JSON.stringify(clean, null, 2)}\n`);
-        return new ProviderStore(dataDir, clean, null);
+        return new ProviderStore(dataDir, clean, null, opts.home);
       }
       return new ProviderStore(
         dataDir,
         ProviderStore.emptyV2(revision),
         { info: { serviceNames: ProviderStore.legacyServiceNamesOf(record.services) }, raw: record },
+        opts.home,
       );
     }
     const result = STORE_FILE_SCHEMA.safeParse(parsed);
     if (!result.success) {
       throw new StoreError("corrupt", `error: ${path} failed validation: ${result.error.message}`);
     }
-    return new ProviderStore(dataDir, result.data, null);
+    return new ProviderStore(dataDir, result.data, null, opts.home);
   }
 
   /** 当前文件 revision（watcher 判重入用；legacy 态为原始文件 revision）。 */
@@ -480,6 +511,47 @@ export class ProviderStore {
     const headers = normalizeHeadersSlot(input.headers);
     const request = normalizeScriptSlot("request", REQUEST_SLOT_SCHEMA, input.request);
     const response = normalizeScriptSlot("response", RESPONSE_SLOT_SCHEMA, input.response);
+    // 预设模式互斥（Owner 2026-09-15 双模式裁决）：hooks 与任一逐槽同现拒绝——
+    // 杜绝「整段脚本 + 逐槽覆盖」的优先级歧义（阶段导出校验在 RPC/CLI 入口层）。
+    const hooks =
+      input.hooks === undefined
+        ? undefined
+        : (() => {
+            if (
+              auth !== undefined ||
+              headers !== undefined ||
+              request !== undefined ||
+              response !== undefined
+            ) {
+              throw new StoreError(
+                "invalid",
+                "error: lifecycle 'hooks' (preset mode) and per-stage slots are mutually exclusive",
+              );
+            }
+            const parsed = HOOKS_SLOT_SCHEMA.safeParse(input.hooks);
+            if (!parsed.success) {
+              throw new StoreError("invalid", `error: invalid hooks slot: ${parsed.error.message}`);
+            }
+            // 阶段导出校验下沉 store 单点（复核 R1-P2-2）：直接调用与手写装配同拒；
+            // home 基准取注入值（复核 R2-P1-B）——与 RPC/CLI/daemon 同一 home。
+            if (
+              !scriptHasStageExports(
+                parsed.data.script,
+                this.home === undefined ? {} : { home: this.home },
+              )
+            ) {
+              throw new StoreError(
+                "invalid",
+                `error: hook script '${parsed.data.script}' exports no lifecycle stage function`,
+              );
+            }
+            return {
+              script: parsed.data.script,
+              ...(parsed.data.args !== undefined
+                ? { args: { ...parsed.data.args } }
+                : {}),
+            };
+          })();
     const routes = normalizeRoutes(input.routes);
     let serviceId: string;
     do {
@@ -495,6 +567,7 @@ export class ProviderStore {
       ...(headers !== undefined ? { headers } : {}),
       ...(request !== undefined ? { request } : {}),
       ...(response !== undefined ? { response } : {}),
+      ...(hooks !== undefined ? { hooks } : {}),
       ...(routes !== undefined ? { routes } : {}),
       defaultPort,
       enabled: input.enabled ?? true,

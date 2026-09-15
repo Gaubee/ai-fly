@@ -314,7 +314,8 @@ export const SERVICE_RESPONSE_DETAIL_SCHEMA = RESPONSE_SLOT_SCHEMA.omit({ args: 
   script: MASK_LITERAL,
 });
 
-/** 服务完整配置的脱敏披露（v2 四槽；脚本/密钥/引用注入位显示 ●，名称与值不出）。 */
+/** 服务完整配置的脱敏披露（v2 双模式：自定义四槽 + 预设 hooks 位；脚本/密钥/
+ *  引用注入位显示 ●，名称与值不出）。 */
 export const SERVICE_DETAIL_SCHEMA = z.strictObject({
   upstream: z.string().min(1).max(2048),
   match: z.array(SERVICE_MATCH_SCHEMA).max(64),
@@ -326,6 +327,8 @@ export const SERVICE_DETAIL_SCHEMA = z.strictObject({
   headers: SERVICE_HEADERS_DETAIL_SCHEMA.optional(),
   request: SERVICE_REQUEST_DETAIL_SCHEMA.optional(),
   response: SERVICE_RESPONSE_DETAIL_SCHEMA.optional(),
+  /** 预设模式整段绑定披露（rust-fetch-sidecar：与脚本注入位同掩码 ●）。 */
+  hooks: z.strictObject({ script: MASK_LITERAL }).optional(),
   /** 路径路由披露（M3-r7：prefix/pattern 双模式；forms 为 AI 层标注，可为空）。 */
   routes: z
     .array(

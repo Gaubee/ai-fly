@@ -66,6 +66,13 @@ describe("curated presets", () => {
     for (const id of required) expect(ids.has(id), `missing preset: ${id}`).toBe(true);
   });
 
+  it("codex 预设走预设模式（rust-fetch-sidecar）：hooks 整段绑定、无 auth 槽", () => {
+    const codex = loadCuratedPresets().find((p) => p.id === "codex")!;
+    expect(codex.hooks).toEqual({ script: "codex" });
+    expect(codex.auth).toBeUndefined();
+    expect(codex.keyEnv).toBeUndefined(); // 凭据来自 ~/.codex/auth.json（脚本只读）
+  });
+
   it("hooks-lifecycle 冻结面形状：本地模板无 keyEnv；Kimi 双协议双路由；本地运行时走 http", () => {
     const curated = loadCuratedPresets();
     for (const id of ["ollama", "lmstudio"]) {
@@ -108,8 +115,11 @@ describe("curated presets", () => {
       const isLocalRuntime = /^http:\/\/(127\.0\.0\.1|localhost)/.test(preset.baseUrl);
       // hooks-lifecycle 6.3：凭据源为 preset.auth（v2 槽位直吐）或 keyEnv 建议
       expect(
-        isLocalRuntime || preset.keyEnv !== undefined || preset.auth !== undefined,
-        `${preset.id} should declare keyEnv or auth`,
+        isLocalRuntime ||
+          preset.keyEnv !== undefined ||
+          preset.auth !== undefined ||
+          preset.hooks !== undefined,
+        `${preset.id} should declare keyEnv, auth or hooks`,
       ).toBe(true);
     }
   });

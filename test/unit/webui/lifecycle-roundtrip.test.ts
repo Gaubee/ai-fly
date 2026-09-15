@@ -10,6 +10,53 @@ import type { ServiceConfigView } from "$shared/rpc-contract.ts";
 const serviceWithAuth = (auth: ServiceConfigView["auth"]): ServiceConfigView =>
   ({ serviceId: "s", name: "svc", match: [], upstream: "http://127.0.0.1:1", defaultPort: 1, enabled: true, auth });
 
+describe("预设模式 lib 助手（rust-fetch-sidecar）", () => {
+  it("presetEligibleScripts 仅列 ≥1 阶段导出的脚本；coveredStagesOf 返回覆盖阶段", async () => {
+    const { presetEligibleScripts, coveredStagesOf } = await import("../../../webui/src/lib/lifecycle.ts");
+    const rows = [
+      { name: "codex", source: "builtin" as const, stages: ["onRequestBearerAuthentication", "onRequestHeaders", "onRequest"] as never[] },
+      { name: "legacy", source: "user" as const, stages: [] as never[] },
+    ];
+    expect(presetEligibleScripts(rows).map((r) => r.name)).toEqual(["codex"]);
+    expect(coveredStagesOf(rows, "codex")).toHaveLength(3);
+    expect(coveredStagesOf(rows, "ghost")).toEqual([]);
+  });
+});
+
+describe("干净会话预设模式装载（复核 R4-P1）", () => {
+  // webui 无组件级测试跑器（root vitest 为 node 环境、无 svelte 插件）——按仓库
+  // 惯例拆两层：源级接线守卫（ServiceForm 挂载必须自载 hooks 清单）+ 派生组合
+  // （空清单 → 装载后 codex 入列与 ①②③ 徽章）。
+  it("ServiceForm 挂载即触发 loadHooks（源级接线守卫——预设模式不渲染 AuthSourcePicker）", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile(
+      new URL("../../../webui/src/components/ServiceForm.svelte", import.meta.url),
+      "utf8",
+    );
+    expect(src).toMatch(/onMount\(\(\) => \{\s*\n\s*void loadHooks\(\);/);
+    // 反向锚点：装载不得只依赖 AuthSourcePicker（其 onMount 是既有第二入口）
+    expect(src).toContain('import { hooksPanel, loadHooks }');
+  });
+
+  it("空清单（未装载）无候选；装载后 codex 入列且 ①②③ 徽章齐备", async () => {
+    const { presetEligibleScripts, coveredStagesOf } = await import("../../../webui/src/lib/lifecycle.ts");
+    // 干净会话初始态（advanced.svelte.ts hooksPanel.scripts = []）：
+    expect(presetEligibleScripts([])).toEqual([]);
+    // hooks.list 装载后的 stages-only 行形状（含 codex ①②③）：
+    const rows = [
+      {
+        name: "codex",
+        source: "builtin" as const,
+        stages: ["onRequestBearerAuthentication", "onRequestHeaders", "onRequest"] as never[],
+      },
+      { name: "none-stage", source: "user" as const, stages: [] as never[] },
+    ];
+    const candidates = presetEligibleScripts(rows);
+    expect(candidates.map((r) => r.name)).toEqual(["codex"]);
+    expect(coveredStagesOf(rows, "codex")).toHaveLength(3);
+  });
+});
+
 describe("auth 槽 bearer 往返（提交组装 ↔ 编辑回显）", () => {
   it("bearer:false 显式落库并经回显还原（三族）", () => {
     for (const sel of [

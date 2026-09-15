@@ -36,7 +36,7 @@ daemon SHALL 在 127.0.0.1 随机端口（可固定）提供：`/`（webui 静�
 
 ### Requirement: RPC 契约面（orpc，zod 共享契约）
 
-SHALL 以 orpc 契约（`src/shared/rpc-contract.ts`，前后端共享类型）暴露 M1 引擎能力的读写面：提供方（services/groups/keys/share/status/serve 控制，**服务形状为生命周期四槽 v2**）、使用方（import/join/key add/ports/status/forget/run 控制）、预设（list/detail/apply）、写手（preview/apply）、系统（主题偏好/设置）。`hooks.list` SHALL 返回各脚本的**可用阶段矩阵**（`stages` 为四阶段枚举数组，正式 schema）；提供方 status/store 面 SHALL 暴露 `legacy: { serviceNames: string[] } | null`，legacy 态下 `services.list` 返回最小失效壳（`{name, legacy: true}`——判别标记位，无其它字段，供移除列表渲染与联合类型运行时分拣），`services.remove` 按名可用。全部变更操作 SHALL 走引擎同款校验（复用 M1 模块，不另写逻辑）。错误 SHALL 经统一边界映射（DomainError→ORPCError），消息英文 ASCII。
+SHALL 以 orpc 契约（`src/shared/rpc-contract.ts`，前后端共享类型）暴露 M1 引擎能力的读写面：提供方（services/groups/keys/share/status/serve 控制，**服务形状为生命周期双模式 v2**（自定义四槽 `auth`/`headers`/`request`/`response` 或预设 `hooks` 整段绑定——互斥））、使用方（import/join/key add/ports/status/forget/run 控制）、预设（list/detail/apply）、写手（preview/apply）、系统（主题偏好/设置）。`hooks.list` SHALL 返回各脚本的**可用阶段矩阵**（`stages` 为四阶段枚举数组，正式 schema）；提供方 status/store 面 SHALL 暴露 `legacy: { serviceNames: string[] } | null`，legacy 态下 `services.list` 返回最小失效壳（`{name, legacy: true}`——判别标记位，无其它字段，供移除列表渲染与联合类型运行时分拣），`services.remove` 按名可用。全部变更操作 SHALL 走引擎同款校验（复用 M1 模块，不另写逻辑）。错误 SHALL 经统一边界映射（DomainError→ORPCError），消息英文 ASCII。
 
 #### Scenario: 契约驱动全类型
 

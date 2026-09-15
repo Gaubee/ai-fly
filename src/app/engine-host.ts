@@ -147,6 +147,7 @@ export class EngineHost {
     const start = this.opts.startProviderDaemonImpl ?? startProviderDaemon;
     this.daemonStarting = start({
       dataDir: this.providerDataDir,
+      ...(this.opts.home !== undefined ? { home: this.opts.home } : {}),
       ...(this.opts.relayUrls !== undefined ? { relayUrls: this.opts.relayUrls } : {}),
       ...(this.opts.env !== undefined ? { env: this.opts.env } : {}),
     })
@@ -218,7 +219,8 @@ export class EngineHost {
    */
   providerStore(): ProviderStore {
     if (this.daemon !== null) return this.daemon.engine.store;
-    const store = ProviderStore.open(this.providerDataDir);
+    // home 同步注入（复核 R2-P1-B）：与 RPC preflight / daemon 运行时同一基准。
+    const store = ProviderStore.open(this.providerDataDir, { home: this.opts.home });
     if (store.legacy !== null && !this.legacyNoticed) {
       this.legacyNoticed = true;
       process.stderr.write(
@@ -233,7 +235,7 @@ export class EngineHost {
   providerDiskRevision(): number {
     if (!existsSync(ProviderStore.filePath(this.providerDataDir))) return -1;
     try {
-      return ProviderStore.open(this.providerDataDir).revision;
+      return ProviderStore.open(this.providerDataDir, { home: this.opts.home }).revision;
     } catch {
       return -1;
     }

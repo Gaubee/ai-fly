@@ -44,7 +44,7 @@ function add(options: Readonly<Record<string, OptionValue>>, positionals: readon
   const services = multi(options.service);
   const maxConcurrency = options["max-concurrency"] === undefined ? undefined : parsePositiveInt(str(options["max-concurrency"])!, "max-concurrency");
   const dailyRequests = options["daily-requests"] === undefined ? undefined : parsePositiveInt(str(options["daily-requests"])!, "daily-requests");
-  const store = openStore(resolveDataDir(str(options.data), home));
+  const store = openStore(resolveDataDir(str(options.data), home), home);
   const group = store.addGroup(
     name,
     services,
@@ -68,7 +68,7 @@ function add(options: Readonly<Record<string, OptionValue>>, positionals: readon
 function setLimits(options: Readonly<Record<string, OptionValue>>, positionals: readonly string[], home: string): number {
   const name = positionals[1];
   if (name === undefined) throw new UsageError("error: group set-limits requires a <name> argument");
-  const store = openStore(resolveDataDir(str(options.data), home));
+  const store = openStore(resolveDataDir(str(options.data), home), home);
   if (store.listGroups().every((g) => g.name !== name)) {
     throw new UsageError(`error: group '${name}' not found`);
   }
@@ -103,7 +103,7 @@ function setServices(
   if (services.length === 0) {
     throw new UsageError("error: group set-services requires at least one --service <serviceName> (use the store API to empty a group)");
   }
-  const store = openStore(resolveDataDir(str(options.data), home));
+  const store = openStore(resolveDataDir(str(options.data), home), home);
   const group = store.setGroupServices(name, services);
   const names = group.serviceIds.map((id) => store.getService(id)?.name ?? id).join(", ");
   process.stdout.write(`group updated: ${group.name}\n  services: ${names}\n`);
@@ -117,14 +117,14 @@ function remove(
 ): number {
   const name = positionals[1];
   if (name === undefined) throw new UsageError("error: group remove requires a <name> argument");
-  const store = openStore(resolveDataDir(str(options.data), home));
+  const store = openStore(resolveDataDir(str(options.data), home), home);
   store.removeGroup(name);
   process.stdout.write(`group removed: ${name}\n`);
   return 0;
 }
 
 function list(options: Readonly<Record<string, OptionValue>>, home: string): number {
-  const store = openStore(resolveDataDir(str(options.data), home));
+  const store = openStore(resolveDataDir(str(options.data), home), home);
   const groups = store.listGroups();
   if (groups.length === 0) {
     process.stdout.write("no groups configured (see: ai-fly group add)\n");

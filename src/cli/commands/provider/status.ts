@@ -24,7 +24,7 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
     const { options } = parseArgv(argv, SPEC, { homedir: home });
     const verbose = options.verbose === true;
     const dataDir = resolveDataDir(str(options.data), home);
-    const store = openStore(dataDir);
+    const store = openStore(dataDir, home);
 
     const services = store.listServices();
     const groups = store.listGroups();

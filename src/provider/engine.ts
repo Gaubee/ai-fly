@@ -46,6 +46,12 @@ export interface ProviderEngineOptions {
   env?: EnvSource | undefined;
   /** $secret 解析源（密钥库读取面；缺省由 serve 装配为 dataDir 下的 SecretsStore）。 */
   secrets?: SecretSource | undefined;
+  /**
+   * ①②③④ 脚本库 home 基准（复核 R2-P1-B）：与 RPC/Store 同一注入 home 贯穿到
+   * forwardRequest——沙盒 HOME 下保存的 codex/用户 hook 在运行时也从同一 home
+   * 解析（缺省 os.homedir()）。
+   */
+  home?: string | undefined;
 }
 
 interface ActiveForward {
@@ -154,7 +160,12 @@ export class ProviderEngine {
 
   /** 服务变更/密钥撤销（CLI 写盘后由 watcher 触发）：重读存储并刷新在线会话。 */
   async reloadStore(): Promise<void> {
-    const fresh = ProviderStore.open(this.dataDir); // 失败抛出（保留旧存储，由调用方记录）
+    // home 透传（复核 R2-P1-B）：watcher 重读后的 store 保持同一脚本库基准，
+    // addService 的预设模式阶段导出校验不因重载退回真实 os.homedir()。
+    const fresh = ProviderStore.open(
+      this.dataDir,
+      this.opts.home === undefined ? {} : { home: this.opts.home },
+    ); // 失败抛出（保留旧存储，由调用方记录）
     if (fresh.revision === this.storeRef.revision) return;
     this.storeRef = fresh;
     this.limitsEnforcer.syncFromStore(fresh);
@@ -444,6 +455,7 @@ class ProviderPeerSession implements AuthSessionBinding {
       onUsage: this.engine.opts.logUsage === true ? (r) => this.engine.recordUsage(r) : undefined,
       env: this.engine.opts.env,
       secrets: this.engine.opts.secrets,
+      home: this.engine.opts.home,
       onWsRelay: (relay) => {
         act.ws = relay;
       },

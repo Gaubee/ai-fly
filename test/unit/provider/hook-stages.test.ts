@@ -430,6 +430,35 @@ describe("④ resolveStageResponse 契约", () => {
     expect(seen.homedir).toBeTypeOf("string");
   });
 
+  it("③④ 头集中继档（rust-fetch-sidecar 实证修正）：39 头放行（chatgpt.com 实测），>128 头/值 >16KiB 拒绝", async () => {
+    const reqCtx: RequestStageCtx = {
+      url: "https://u.example/x",
+      method: "GET",
+      headers: {},
+      body: new Uint8Array(0),
+      signal: AbortSignal.timeout(1_000),
+    };
+    const cdnish: Record<string, string> = {};
+    for (let i = 0; i < 39; i += 1) cdnish[`cf-ray-${i}`] = "v";
+    await expect(
+      resolveStageRequest({ name: "cdn" }, reqCtx, {
+        loader: loaderOf({ cdn: { onRequest: () => ({ status: 200, headers: cdnish }) } }),
+      }),
+    ).resolves.toMatchObject({ status: 200 });
+    const tooMany: Record<string, string> = {};
+    for (let i = 0; i <= 128; i += 1) tooMany[`x-h${i}`] = "v";
+    await expect(
+      resolveStageRequest({ name: "toomany" }, reqCtx, {
+        loader: loaderOf({ toomany: { onRequest: () => ({ status: 200, headers: tooMany }) } }),
+      }),
+    ).rejects.toBeInstanceOf(HookStageError);
+    await expect(
+      resolveStageRequest({ name: "toolong" }, reqCtx, {
+        loader: loaderOf({ toolong: { onRequest: () => ({ status: 200, headers: { "x-big": "v".repeat(16 * 1024 + 1) } }) } }),
+      }),
+    ).rejects.toBeInstanceOf(HookStageError);
+  });
+
   it("③④ 顶层键 strict（复核 R3-P2）：未知键（如 statuss 拼错）一律 HookStageError", async () => {
     const reqCtx: RequestStageCtx = {
       url: "https://u.example/x",

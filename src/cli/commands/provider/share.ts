@@ -39,7 +39,7 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
         : parseDurationMs(str(options.ttl)!, "ttl");
     assertDurationRange(ttlMs, SHARE_TTL_MIN_MS, SHARE_TTL_MAX_MS, "ttl", "1s..30d");
 
-    const store = openStore(dataDir);
+    const store = openStore(dataDir, home);
     // legacy 门禁前置（复核 R1-F6）：invite 是有外部副作用的资源，先于组网/
     // 签发拒绝，避免「invite 已消费但链接构建失败」。
     if (store.legacy !== null) {

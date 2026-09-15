@@ -24,6 +24,8 @@ export interface RouteTestInput {
   content?: string | undefined;
   env?: EnvSource | undefined;
   secrets?: SecretSource | undefined;
+  /** ①② 脚本库 home 基准（复核 R2-P1-B；缺省 os.homedir()）。 */
+  home?: string | undefined;
   fetchImpl?: typeof fetch | undefined;
   timeoutMs?: number | undefined;
   now?: (() => number) | undefined;
@@ -68,7 +70,13 @@ export async function testServiceRoute(input: RouteTestInput): Promise<RouteTest
     bodyLen: 0,
   };
   try {
-    const plan = await buildUpstreamRequest(input.service, req, input.env, input.secrets);
+    const plan = await buildUpstreamRequest(
+      input.service,
+      req,
+      input.env,
+      input.secrets,
+      input.home === undefined ? {} : { home: input.home },
+    );
     // UpstreamPlan.host（rewrite.hostHeader 覆盖）是网关职责；undici fetch 亦
     // 禁改 Host 头——测试请求用 URL 本身的主机（缺省即上游 host）
     const response = await fetchImpl(plan.url, {

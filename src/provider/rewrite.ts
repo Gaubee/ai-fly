@@ -32,7 +32,7 @@ import { compileMatchPattern, matchRequestPath } from "./match-pattern.ts";
 import { expandUriTemplate } from "./uri-template.ts";
 import { parseUpstreamUrl } from "./store.ts";
 import type { ServiceConfig } from "./store.ts";
-import { resolveStageAuth, resolveStageHeaders } from "./hook.ts";
+import { effectiveLifecycleSlots, resolveStageAuth, resolveStageHeaders } from "./hook.ts";
 import type { AuthSlot } from "./lifecycle.ts";
 
 import { ENV_REF_PREFIX, SECRET_REF_PREFIX } from "./lifecycle.ts";
@@ -520,9 +520,14 @@ export async function buildUpstreamRequest(
   if (req.contentType !== undefined && req.contentType !== "") {
     headers["content-type"] = req.contentType;
   }
-  // ① auth 值注入（secret_missing 族失效在此抛出：零上游请求）。
-  if (service.auth !== undefined) {
-    const authValue = await resolveAuthSlotValue(service.auth, {
+  // ① auth 值注入（secret_missing 族失效在此抛出：零上游请求）。双模式解析：
+  // 预设模式（service.hooks）下 auth = 该脚本的 ① 导出（缺导出即无注入）。
+  const eff = effectiveLifecycleSlots(service, {
+    ...(hooks?.home !== undefined ? { home: hooks.home } : {}),
+    ...(hooks?.loader !== undefined ? { loader: hooks.loader } : {}),
+  });
+  if (eff.auth !== undefined) {
+    const authValue = await resolveAuthSlotValue(eff.auth, {
       method: req.method,
       path: req.path,
       headers: { ...headers },
@@ -547,8 +552,9 @@ export async function buildUpstreamRequest(
     }
   }
   // ② 整段脚本增量（绑定声明但导出缺失/抛错/形状非法 → HookStageError，
-  // 上游 catch 映射 hook_failed）；脚本 remove 后 set——脚本胜。
-  const headersScript = service.headers?.script;
+  // 上游 catch 映射 hook_failed）；脚本 remove 后 set——脚本胜。预设模式下
+  // headersScript = 该脚本的 ② 导出（缺导出即无增量）。
+  const headersScript = eff.headersScript;
   if (headersScript !== undefined) {
     const increment = await resolveStageHeaders(
       { name: headersScript.name, ...(headersScript.args !== undefined ? { args: headersScript.args } : {}) },

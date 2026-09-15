@@ -38,7 +38,7 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
 function issue(options: Readonly<Record<string, OptionValue>>, home: string): number {
   const group = requireString(str(options.group), "group");
   const name = str(options.name) ?? "default";
-  const store = openStore(resolveDataDir(str(options.data), home));
+  const store = openStore(resolveDataDir(str(options.data), home), home);
   const issued = store.issueKey(group, name);
   process.stdout.write(
     [
@@ -55,7 +55,7 @@ function issue(options: Readonly<Record<string, OptionValue>>, home: string): nu
 }
 
 function list(options: Readonly<Record<string, OptionValue>>, home: string): number {
-  const store = openStore(resolveDataDir(str(options.data), home));
+  const store = openStore(resolveDataDir(str(options.data), home), home);
   const keys = store.listKeys();
   if (keys.length === 0) {
     process.stdout.write("no keys issued (see: ai-fly key issue --group <name>)\n");
@@ -74,7 +74,7 @@ function list(options: Readonly<Record<string, OptionValue>>, home: string): num
 function show(options: Readonly<Record<string, OptionValue>>, positionals: readonly string[], home: string): number {
   const keyId = positionals[1];
   if (keyId === undefined) throw new UsageError("error: key show requires a <keyId> argument");
-  const store = openStore(resolveDataDir(str(options.data), home));
+  const store = openStore(resolveDataDir(str(options.data), home), home);
   const material = store.getKeyMaterial(keyId);
   if (material === undefined) {
     process.stdout.write(
@@ -89,7 +89,7 @@ function show(options: Readonly<Record<string, OptionValue>>, positionals: reado
 function revoke(options: Readonly<Record<string, OptionValue>>, positionals: readonly string[], home: string): number {
   const keyId = positionals[1];
   if (keyId === undefined) throw new UsageError("error: key revoke requires a <keyId> argument");
-  const store = openStore(resolveDataDir(str(options.data), home));
+  const store = openStore(resolveDataDir(str(options.data), home), home);
   const record = store.revokeKey(keyId);
   process.stdout.write(
     record.revokedAt === undefined

@@ -107,9 +107,48 @@ ai-fly hooks run codex --stage onRequestBearerAuthentication
   read-only state (`ai-fly service list` and `status --verbose` show the stale
   names); remove them with `ai-fly service remove <name>`, then re-add services
   to rebuild a clean v2 store (groups and share keys are not carried over).
-- `--hooks` was removed; `--secret` now fills `auth.secret`; `--header-set`
+- The v1 string form `--hooks "<script>"` became an object slot in preset mode:
+  `--hooks <name>` binds one whole-script lifecycle (see below), mutually
+  exclusive with per-stage flags; `--secret` fills `auth.secret`; `--header-set`
   values accept literals and `$env:`/`$secret:` references only (per-header hook
   objects are gone — bind a stage script with `--headers-script` instead).
+
+## Lifecycle binding modes & rust-fetch
+
+Lifecycle config has two **mutually exclusive** modes (Owner ruling 2026-09-15):
+
+- **custom** — pick per-stage scripts or inline config (auth secret/literal,
+  header set/remove, …). The default.
+- **preset** — bind one hook-js with `hooks: {script}` (CLI `--hooks <name>`);
+  the script's stage exports form the whole lifecycle. Stages without an export
+  fall back to defaults (stage 3 unbound = js-backend-fetch — the current JS
+  runtime backend's fetch, Node/Deno/Bun alike).
+
+The `codex` preset runs in preset mode: the built-in `codex` script provides the
+complete lifecycle — ① auth token from `~/.codex/auth.json` (read-only), ② the
+codex CLI header set (`chatgpt-account-id`, `originator`, `openai-beta`,
+user-agent), ③ outbound via the **rust-fetch** sidecar.
+
+`rust-fetch` (rustls TLS + HTTP/2, a client stack distinct from
+js-backend-fetch) replaces the outbound HTTPS call — empirical A/B against
+chatgpt.com: GET /rate_limits via js-backend-fetch → 403 (Cloudflare, 0/13
+historically) vs rust-fetch → 404 (passes CF, reaches the backend); POST
+/responses with a real subscription → 200 + SSE through the full pipeline.
+
+Build & install the sidecar (not shipped in the repo):
+
+```bash
+cd sidecars/rust-fetch && cargo build --release
+mkdir -p ~/.aifly/sidecars/rust-fetch
+cp target/release/rust-fetch ~/.aifly/sidecars/rust-fetch/
+# or point AIFLY_RUST_FETCH_BIN at the binary when starting the daemon
+```
+
+Bind it per service (custom mode, stage 3 only) with `--request-script
+rust-fetch` (or the stage-3 selector in the WebUI); the codex preset carries it
+automatically. Per-request process spawn (no pooling yet); env proxies
+(HTTPS_PROXY/…) follow the Rust stack's defaults. stdio protocol is frozen in
+`openspec/changes/rust-fetch-sidecar`.
 
 ## Development
 

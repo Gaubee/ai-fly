@@ -525,6 +525,75 @@ const loaderOf = (mods: Record<string, Record<string, unknown>>) =>
   (name: string): Record<string, unknown> | undefined => mods[name];
 
 describe("③ onRequest 接管出站（归一层）", () => {
+  it("预设模式整段接管（rust-fetch-sidecar）：①②③ 均由整段脚本导出驱动、跳过 probe、零原生 fetch", async () => {
+    const upstream = await startUpstream((_req, res) => res.end("never"));
+    const mods = {
+      full3: {
+        onRequestBearerAuthentication: () => "tok-preset",
+        onRequestHeaders: () => ({ set: { "x-from-preset": "yes" } }),
+        onRequest: async () => ({
+          status: 202,
+          headers: { "content-type": "text/plain" },
+          body: (async function* () {
+            yield ENC.encode("pre");
+            yield ENC.encode("set");
+          })(),
+        }),
+        // 无 onResponse 导出：④ 走缺省直通
+      },
+    };
+    let probeCalls = 0;
+    let fetchCalls = 0;
+    const h = makeHarness();
+    const service = makeService(upstream.port, { hooks: { script: "full3" } });
+    const fh = forward(h, service, makeReq("rp1"), new Uint8Array(0), {
+      loader: loaderOf(mods),
+      probeConnect: (_url, _ms) => {
+        probeCalls += 1;
+        return Promise.resolve();
+      },
+      fetchImpl: (async (...args: Parameters<typeof fetch>) => {
+        fetchCalls += 1;
+        return fetch(...args);
+      }) as typeof fetch,
+    });
+    await fh.done;
+    expect(probeCalls).toBe(0); // ③ 由整段脚本接管 → 跳过连接期探测
+    expect(fetchCalls).toBe(0); // 零原生 fetch
+    const meta = h.consumerEvents.find((f) => f.type === FRAME_TYPE.RESP_META);
+    expect((meta?.header as { status?: number }).status).toBe(202);
+    expect(fh.usage).toEqual([{ status: 202, bytes: 6 }]);
+    // 上游 mock 未被触达（无真实出站）
+    expect(upstream.requests).toHaveLength(0);
+    void probeCalls;
+  });
+
+  it("预设模式部分覆盖：仅 ①② 导出时 ③ 回退 js-backend-fetch（含探测）", async () => {
+    const upstream = await startUpstream((req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(`auth=${req.headers.authorization ?? "?"}`);
+    });
+    const mods = {
+      authOnly: {
+        onRequestBearerAuthentication: () => "tok-custom",
+        onRequestHeaders: () => ({ set: { "x-h": "1" } }),
+      },
+    };
+    let probeCalls = 0;
+    const h = makeHarness();
+    const service = makeService(upstream.port, { hooks: { script: "authOnly" } });
+    const fh = forward(h, service, makeReq("rp2"), new Uint8Array(0), {
+      loader: loaderOf(mods),
+      probeConnect: (_url, _ms) => {
+        probeCalls += 1;
+        return Promise.resolve();
+      },
+    });
+    await fh.done;
+    expect(probeCalls).toBe(1); // ③ 无导出 → 原生路径含探测
+    expect(upstream.requests[0]?.headers.authorization).toBe("Bearer tok-custom"); // ① 生效
+  });
+
   it("整体接管：跳过 probeConnect、零原生 fetch；脚本收 ctx{url,method,headers,body,signal}；③ 头小写化白名单投影", async () => {
     const upstream = await startUpstream((_req, res) => res.end("never"));
     let seen: Record<string, unknown> = {};

@@ -43,7 +43,14 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { STAGE_FN_NAMES, type StageFnName } from "./lifecycle.ts";
+import {
+  STAGE_FN_NAMES,
+  type AuthSlot,
+  type HeadersScriptSlot,
+  type RequestSlot,
+  type ResponseSlot,
+  type StageFnName,
+} from "./lifecycle.ts";
 
 // ---------------------------------------------------------------------------
 // 阶段名（re-export 维持单源；消费方不重复声明）
@@ -51,6 +58,85 @@ import { STAGE_FN_NAMES, type StageFnName } from "./lifecycle.ts";
 
 export { STAGE_FN_NAMES };
 export type { StageFnName };
+
+// ---------------------------------------------------------------------------
+// 预设模式解析（Owner 2026-09-15 双模式裁决）
+// ---------------------------------------------------------------------------
+
+/** 预设模式/自定义模式解析后的有效阶段绑定（消费面：rewrite ①② / upstream ③④）。 */
+export interface EffectiveLifecycleSlots {
+  /** ① auth 槽（自定义模式三族原样；预设模式为 {script, args?}——bearer 缺省 true）。 */
+  auth: AuthSlot | undefined;
+  /** ② headers 整段脚本绑定。 */
+  headersScript: HeadersScriptSlot | undefined;
+  /** ③ request 接管绑定（undefined = js-backend-fetch 原生路径，含连接期探测）。 */
+  request: RequestSlot | undefined;
+  /** ④ response 变换绑定。 */
+  response: ResponseSlot | undefined;
+}
+
+/** effectiveLifecycleSlots 的服务形状参数（结构化——不引 store 类型防环）。 */
+export interface LifecycleSlotsSource {
+  auth?: AuthSlot | undefined;
+  headers?: { script?: HeadersScriptSlot | undefined } | undefined;
+  request?: RequestSlot | undefined;
+  response?: ResponseSlot | undefined;
+  /** 预设模式整段绑定（与逐槽互斥——store 层校验；同现时此处取逐槽作防御）。 */
+  hooks?: { script: string; args?: Record<string, string> | undefined } | undefined;
+}
+
+/**
+ * 生命周期双模式解析：自定义模式（逐槽）原样透传；预设模式（service.hooks）
+ * 按 stages 矩阵逐阶段取该脚本导出——①缺导出即无 auth 注入、②缺导出即无
+ * 增量、③缺 `onRequest` 导出回退 js-backend-fetch（返回 undefined，调用方走
+ * 原生路径含探测）、④缺导出即无变换。脚本加载经 require 缓存（每请求廉价）。
+ */
+export function effectiveLifecycleSlots(
+  service: LifecycleSlotsSource,
+  opts: { home?: string; loader?: StageResolveBase["loader"] } = {},
+): EffectiveLifecycleSlots {
+  const preset = service.hooks;
+  if (preset === undefined) {
+    return {
+      auth: service.auth,
+      headersScript: service.headers?.script,
+      request: service.request,
+      response: service.response,
+    };
+  }
+  const loader = opts.loader ?? loadHookScript;
+  const home = opts.home ?? homedir();
+  const mod = loader(preset.script, home);
+  const stages = mod === undefined ? [] : stageFnsOf(mod);
+  const args = preset.args;
+  return {
+    // 双模式同现（数据面不应出现——store 互斥校验）：逐槽优先（防御）。
+    auth:
+      service.auth !== undefined
+        ? service.auth
+        : stages.includes("onRequestBearerAuthentication")
+          ? { script: preset.script, ...(args !== undefined ? { args } : {}) }
+          : undefined,
+    headersScript:
+      service.headers?.script !== undefined
+        ? service.headers.script
+        : stages.includes("onRequestHeaders")
+          ? { name: preset.script, ...(args !== undefined ? { args } : {}) }
+          : undefined,
+    request:
+      service.request !== undefined
+        ? service.request
+        : stages.includes("onRequest")
+          ? { script: preset.script, ...(args !== undefined ? { args } : {}) }
+          : undefined,
+    response:
+      service.response !== undefined
+        ? service.response
+        : stages.includes("onResponse")
+          ? { script: preset.script, ...(args !== undefined ? { args } : {}) }
+          : undefined,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // ctx 与错误
@@ -244,6 +330,19 @@ export function discoverHooks(home = homedir()): HookScriptInfo[] {
     seen.set(name, { name, source: "builtin", fns: exportedHookFns(mod), stages: stageFnsOf(mod) });
   }
   return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * 预设模式绑定校验（RPC/CLI 入口调用）：脚本必须导出至少一个阶段函数——
+ * 否则整段绑定无意义（所有阶段回退缺省）。返回 false = 不可绑定。
+ */
+export function scriptHasStageExports(
+  name: string,
+  opts: { home?: string; loader?: StageResolveBase["loader"] } = {},
+): boolean {
+  const loader = opts.loader ?? loadHookScript;
+  const mod = loader(name, opts.home ?? homedir());
+  return mod !== undefined && stageFnsOf(mod).length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -558,18 +657,25 @@ export async function resolveStageHeaders(
   return out;
 }
 
-/** 头记录形状校验（③④ 返回的 headers：Record<string,string> + 上限）。 */
+/**
+ * 头记录形状校验（③④ 返回的 headers：Record<string,string>）。限额分档
+ * （rust-fetch-sidecar 实证修正）：③④ 是**上游响应/变换的投影**（引擎仅消费
+ * RESP_META 白名单三头 + content-type，其余忽略），真实 CDN 头集天然超过 ②
+ * 的注入预算（chatgpt.com 实测 39 头）——中继档放宽为 ≤128 头 / 值 ≤16KiB。
+ */
+const RELAY_HEADER_LIMITS = { maxCount: 128, valueMaxBytes: 16 * 1024 } as const;
+
 function validateStageHeaders(headers: unknown): Record<string, string> {
   if (!isPlainObject(headers)) throw new HookStageError();
   const entries = Object.entries(headers);
-  if (entries.length > STAGE_HEADER_LIMITS.maxCount) throw new HookStageError();
+  if (entries.length > RELAY_HEADER_LIMITS.maxCount) throw new HookStageError();
   const out: Record<string, string> = {};
   for (const [name, value] of entries) {
     if (
       name === "" ||
       byteLen(name) > STAGE_HEADER_LIMITS.nameMaxBytes ||
       typeof value !== "string" ||
-      byteLen(value) > STAGE_HEADER_LIMITS.valueMaxBytes
+      byteLen(value) > RELAY_HEADER_LIMITS.valueMaxBytes
     ) {
       throw new HookStageError();
     }

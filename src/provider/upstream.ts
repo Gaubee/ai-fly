@@ -3,13 +3,13 @@
 // 建立，探测失败/超时回 upstream_unreachable；绑定 ③ request 脚本时跳过——连接
 // 语义归脚本）、首字节 600s（fetch resolve / ③ 脚本返回 = 响应头到达）、流停滞
 // 120s（分片间）、首字节等待期每 30s PING(id) 并挂起提供方侧空闲计时。
-// hooks-lifecycle v2 出站归一层（任务 4.2/4.3）：原生 fetch 结果与 ③ onRequest
+// hooks-lifecycle v2 出站归一层（任务 4.2/4.3）：js-backend-fetch 结果与 ③ onRequest
 // 脚本结果统一归一为 {status, headers, body: AsyncIterable<Uint8Array>}，转发
 // 循环只消费归一形（SSE 逐块、禁止缓冲攒齐；waitOutboundQueue 背压门控保留）；
 // ③ 返回 headers 小写化/last-wins/经 RESP_META 白名单过滤（content-type 独立
 // 投影 contentType）；④ onResponse 在归一后、RESP_META 下发前插入（局部覆盖
 // status/白名单内头/流式 body）；引擎中止 cancel 归一迭代器（ReadableStream 走
-// cancel、AsyncIterable 调 return()）传播到脚本流。fetchImpl 测试注入缝在原生
+// cancel、AsyncIterable 调 return()）传播到脚本流。fetchImpl 测试注入缝在 js-backend
 // 路径保留。错误分族：HookStageError（②③④ 缺席/抛错/形状非法/流中途失败）→
 // ERROR(hook_failed)；① HookMissingError 与 $secret 缺失 → secret_missing。
 // 正交意图（本文件不实现）：
@@ -27,6 +27,7 @@ import type { WireSession } from "../wire/mux.ts";
 import type { ServiceConfig } from "./store.ts";
 import type { UsageRecord } from "./limits.ts";
 import {
+  effectiveLifecycleSlots,
   HookMissingError,
   HookStageError,
   resolveStageRequest,
@@ -230,7 +231,7 @@ async function sendError(
 }
 
 // ---------------------------------------------------------------------------
-// 出站归一层（hooks-lifecycle v2）：原生 fetch 与 ③ 脚本结果统一为
+// 出站归一层（hooks-lifecycle v2）：js-backend-fetch 与 ③ 脚本结果统一为
 // {status, headers, body: AsyncIterable}，转发循环只消费归一形。
 // ---------------------------------------------------------------------------
 
@@ -368,7 +369,14 @@ async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeo
     return;
   }
 
-  const requestSlot = ctx.service.request; // ③ 绑定（整体接管出站；跳过 probeConnect）
+  // ③ 绑定（整体接管出站；跳过 probeConnect）。双模式解析：预设模式
+  // （service.hooks）下 request = 该脚本的 ③ 导出；缺导出 → undefined →
+  // js-backend-fetch 原生路径（含连接期探测）。
+  const effSlots = effectiveLifecycleSlots(ctx.service, {
+    ...(ctx.home !== undefined ? { home: ctx.home } : {}),
+    ...(ctx.loader !== undefined ? { loader: ctx.loader } : {}),
+  });
+  const requestSlot = effSlots.request;
   const ctrl = new AbortController();
   let firstByteTimer: ReturnType<typeof setTimeout> | null = null;
   let stallTimer: ReturnType<typeof setTimeout> | null = null;
@@ -454,7 +462,7 @@ async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeo
     };
   };
 
-  /** 原生路径：连接期探测 + fetch（fetchImpl 测试注入缝保留于此）。 */
+  /** js-backend-fetch 路径：连接期探测 + fetch（fetchImpl 测试注入缝保留于此）。 */
   const nativeResponse = async (): Promise<EngineNormalizedResponse> => {
     const probe = ctx.probeConnect ?? defaultProbeConnect;
     try {
@@ -512,8 +520,9 @@ async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeo
   try {
     // ④ onResponse：上游响应归一后、RESP_META 下发前——局部覆盖 status/headers/
     // body（头键小写化 last-wins；白名单外头由投影层忽略；body 变换流式——脚本
-    // 返回新 body 则消费之，未返回则透传原归一流）。
-    const responseSlot = ctx.service.response;
+    // 返回新 body 则消费之，未返回则透传原归一流）。预设模式下 response =
+    // service.hooks 脚本的 ④ 导出（缺导出即无变换）。
+    const responseSlot = effSlots.response;
     if (responseSlot !== undefined) {
       let override: Awaited<ReturnType<typeof resolveStageResponse>>;
       try {
@@ -611,7 +620,7 @@ async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeo
       else settled = true;
       return;
     }
-    // 流中途失败分族：脚本产出（③ 返回 / ④ 变换）→ hook_failed；原生上游流
+    // 流中途失败分族：脚本产出（③ 返回 / ④ 变换）→ hook_failed；js-backend 上游流
     // → upstream_unreachable（既有语义）。
     await finishWithError(
       normalized.fromScript ? ERROR_CODE.hook_failed : ERROR_CODE.upstream_unreachable,

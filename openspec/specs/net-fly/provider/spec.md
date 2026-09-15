@@ -13,11 +13,12 @@
 z-base-32）、`name`（人可读、提供方内唯一）、`match`（域名匹配数组，元素为
 `{type: exact|suffix|regex, value}`——**纯展示元数据**：用于目录披露与 UI 归属
 说明，无任何运行时路由语义，代理模式已取消）、`upstream`（上游 URL：
-scheme/host/port/基础路径）、生命周期四槽（`auth` / `headers` / `request` /
-`response`，形状见 hooks 生命周期管线条款）、`rewrite`（可选：host 头覆盖、
+scheme/host/port/基础路径）、生命周期绑定（**双模式互斥**——见 hooks 生命周期管线条款：自定义模式四槽
+`auth` / `headers` / `request` / `response`，或预设模式顶层 `hooks =
+{script, args?}` 整段绑定；两者同现 SHALL 拒绝保存）、`rewrite`（可选：host 头覆盖、
 路径前缀剥离/追加——头改写能力已迁出至 headers 槽）、`defaultPort`（使用方本地
-默认端口，缺省取上游端口；上游端口 < 1024 时 MUST 显式声明）。服务可属多个
-分组。正则规则 MUST 在保存时通过编译检查（语法合法即可——match 无运行时执行面，
+默认端口，缺省取上游端口；上游端口 < 1024 时 MUST 显式声明）。`hooks` 为可选字段——对既有 version: 2 文件向后兼容（缺省即自定义模式），
+store 版本维持 2 不变。服务可属多个分组。正则规则 MUST 在保存时通过编译检查（语法合法即可——match 无运行时执行面，
 无 ReDoS 暴露）。
 
 **版本门禁与 legacy 模式（Owner 裁决 2026-09-15：无迁移）**：store 加载 SHALL
@@ -49,6 +50,7 @@ legacy store 以空 services/groups/keys 视图运行（daemon 不崩、日志 N
 
 - **WHEN** 数据目录中的 services.json 为 v1 形状（无 version 字段或 ≠2）且含 3 个旧服务
 - **THEN** daemon 正常启动、不服务任何旧服务、日志 NOTICE；legacy 元数据含 3 个旧服务名；逐一移除后原始条目减少，最后一个移除时文件重建为 v2 空库
+
 ### Requirement: 分组与密钥
 
 提供方 SHALL 将服务编入**分组**（分组含 `name` 与服务引用列表；一服务可属多组），
@@ -73,8 +75,9 @@ rejected）。密钥校验 MUST 常数时间比较（哈希后比较）。密钥
 提供者 SHALL 按 wire-protocol 处理 AUTH（多密钥集合）：逐钥校验 → 定位分组 →
 AUTH_OK（`alias`、`relayUrls`（当前生效 relay 入口，随目录刷新同步）、每有效密钥
 的 `{keyId, group, limits, services}` 视图、`rejected` 列表）。服务视图含**完整
-脱敏披露 `detail`**（upstream、match 全集、rewrite 规则；`$env` 注入头值仅显示
-`●`，变量名不显示）——除凭据值外无隐藏。`limits` 结构 SHALL 为
+脱敏披露 `detail`**（upstream、match 全集、rewrite 规则、生命周期绑定——
+自定义模式四槽与预设模式 `hooks` 槽，脚本注入位显示 `●`；`$env` 注入头值仅
+显示 `●`，变量名不显示）——除凭据值外无隐藏。`limits` 结构 SHALL 为
 `{maxConcurrency?: number, dailyRequests?: number}`（分组级，可选、缺省不限）。
 REQ 的 `serviceId` 不在授权视图内时统一回送 `unknown_service`（不区分不存在与
 无权，防枚举）。服务或密钥变更时 SHALL 向已授权在线会话推送 `refresh: true` 的
@@ -281,7 +284,7 @@ CLI 同步提供 `group set-services` / `group remove`。
   SHALL 返回 `{ status: number(200–599), headers: Record<string,string>,
   body?: ReadableStream<Uint8Array> | AsyncIterable<Uint8Array> }`；body 缺省 =
   空流（204/304 等无正文状态合法）。绑定 request 脚本时 SHALL 跳过连接期探测
-  （连接语义归脚本）。无绑定时为原生 fetch。
+  （连接语义归脚本）。无绑定时为 **js-backend-fetch**（当前 JS 运行时后端——Node/Deno/Bun——的 fetch 实现；命名 Owner 2026-09-15 冻结，不再用「原生 fetch」措辞）。
 - **④ response（onResponse）**：配置槽 `service.response`（`{script, args?}`），
   ctx 为 `{ status, headers, body: AsyncIterable<Uint8Array>, signal }`，返回
   `{ status?, headers?, body? }` 局部覆盖；头键小写化、last-wins，可写范围限
@@ -289,7 +292,7 @@ CLI 同步提供 `group set-services` / `group remove`。
   字段；status 204/304 时 contentType 归一为空；③ 返回 headers 中的
   `content-type` 同样投影）；调用时机为上游响应归一后、RESP_META 下发前。
 
-**出站归一层**：原生 fetch 结果与 ③ 脚本结果 SHALL 统一归一为
+**出站归一层**：js-backend-fetch 结果与 ③ 脚本结果 SHALL 统一归一为
 `{ status, headers, body: AsyncIterable<Uint8Array> }`，转发循环只消费归一形；
 ③ 返回的 headers 统一小写化、last-wins、经 RESP_META 白名单过滤（非白名单头
 忽略，`content-type` 独立投影至 contentType 字段——与 ④ 同规则）；SSE MUST
@@ -330,3 +333,64 @@ Promise）；`{}` 为合法 no-op；绑定声明但导出缺失 / 抛错 / 返�
 
 - **WHEN** auth 阶段脚本抛错 → 该请求以 `secret_missing` 拒绝；request 脚本返回形状非法 → 以 `hook_failed` 回送
 - **THEN** 两者错误消息均不含脚本路径与返回值，且前者零上游请求
+
+**双模式绑定（Owner 2026-09-15 裁决）**：生命周期配置 SHALL 支持两种互斥模式——
+**自定义模式**（逐槽 `auth`/`headers`/`request`/`response` 各自挑选脚本或直接
+配置）与**预设模式**（顶层 `service.hooks = {script, args?}` 整段绑定一个
+hook-js，其按 stages 矩阵导出的阶段函数构成该服务的生命周期：①缺导出即无
+auth 注入；②缺导出即无增量；③缺 `onRequest` 导出回退 js-backend-fetch（含
+连接期探测）；④缺导出即无变换）。`hooks` 与任一逐槽同现 SHALL 校验拒绝；
+绑定未导出任何阶段函数的脚本 SHALL 校验拒绝（绑定无意义）。逐槽契约与错误
+分族对两模式一致适用（预设模式下脚本失效同分族归置）。**资源上限（分档——
+本变更实证修正）**：② 注入头集 ≤32 头 / 键 ≤1KiB / 值 ≤8KiB；③④ 返回
+headers 为上游响应/变换的投影（引擎仅消费 RESP_META 白名单 + content-type，
+其余忽略），中继档 ≤128 头 / 值 ≤16KiB——真实 CDN 头集实测超 ② 注入预算
+（chatgpt.com 39 头）；③ status 域 200–599；非法形状 → `hook_failed`。
+
+#### Scenario: 预设模式整段接管
+
+- **WHEN** 服务配置 `hooks: {script: "codex"}`，该脚本导出 ①②③ 三个阶段函数
+- **THEN** 请求经 ① 脚本注入 token、② 脚本注入头集、③ 脚本接管出站；脚本未导出 ④ 则响应直通
+
+#### Scenario: 预设模式与逐槽互斥
+
+- **WHEN** 保存同时携带 `hooks` 与 `auth`（或任一逐槽）的服务
+- **THEN** 保存被拒绝并说明两种模式互斥，既有服务不受影响
+
+#### Scenario: 顶层键 strict
+
+- **WHEN** ②③④ 脚本返回对象携带未知顶层键（如 `{sets: …}` 拼错）
+- **THEN** 该请求以 `hook_failed` 终结，不静默忽略
+
+### Requirement: 内建出站接管器 rust-fetch
+
+提供方 SHALL 内建 ③ 阶段脚本 `rust-fetch`（`hooks/rust-fetch.cjs`，导出
+`onRequest`），把出站 HTTPS 请求交给 Rust sidecar 二进制发起（rustls TLS +
+HTTP/2 ALPN——客户端栈不同于 js-backend-fetch，Owner 2026-09-15 裁决）：
+
+- **stdio 协议（冻结）**：sidecar 每请求一进程。stdin = JSON 元信息行
+  `{url, method, headers}` + `\n` + 原始请求体字节（EOF 为止）；stdout =
+  JSON 元信息行 `{status, headers}`（头键小写化、同名头值逗号连接）+ `\n` +
+  响应体字节（stdout 即流、逐块 flush、EOF = 体结束）；失败信息走 stderr、
+  进程 exit≠0。SSE MUST 逐块透传（禁止缓冲攒齐）。
+- **二进制发现顺序**：环境变量 `AIFLY_RUST_FETCH_BIN` > `~/.aifly/sidecars/
+  rust-fetch/rust-fetch` > PATH。二进制不随仓库产物分发——源码位于
+  `sidecars/rust-fetch/`，`cargo build --release` 交付（README 指引）。
+- **失败语义**：二进制缺失（spawn 失败）/ exit≠0 / 元信息行解析失败 → ③
+  脚本失效（`hook_failed` 固定脱敏文案——沿用生命周期管线既有分族，不新增
+  错误码）。
+- **中止语义**：ctx.signal（引擎 ctrl.signal——外部中止与本地超时均经此）
+  触发时 SHALL SIGKILL 子进程；body 迭代器随进程终止而结束（流中挂起按既有
+  中止竞速条款退出）。
+- **代理**：沿用 sidecar HTTP 栈的环境代理默认（HTTPS_PROXY/HTTP_PROXY/
+  NO_PROXY）。
+
+#### Scenario: 经 rust-fetch 转发流式请求
+
+- **WHEN** 服务 ③ 绑定 rust-fetch 且 sidecar 二进制可发现，使用方发起 SSE 请求
+- **THEN** 上游由 Rust 进程发起（rustls 客户端栈），响应体逐块回传使用方；使用方中止或本地超时触发 ctx.signal 时 sidecar 进程被 SIGKILL，转发按中止语义终结
+
+#### Scenario: 二进制缺失或协议失败
+
+- **WHEN** AIFLY_RUST_FETCH_BIN 指向不存在的路径，或 sidecar exit≠0 / 输出元信息行非法
+- **THEN** 该请求以 `hook_failed` 固定脱敏文案终结，零信息泄漏（不含路径与 stderr 内容）

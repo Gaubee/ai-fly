@@ -83,6 +83,7 @@ const checkAddInput: AssertEqual<
       | undefined;
     request?: { script: string; args?: Record<string, string> | undefined } | undefined;
     response?: { script: string; args?: Record<string, string> | undefined } | undefined;
+    hooks?: { script: string; args?: Record<string, string> | undefined } | undefined;
     routes?:
       | Array<{
           forms: Array<"openai-chat" | "openai-responses" | "anthropic">;

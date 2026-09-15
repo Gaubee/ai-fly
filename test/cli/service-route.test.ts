@@ -106,8 +106,9 @@ describe("ai-fly service add --preset codex（cli-codex）", () => {
       localPrefix: "/codex",
       upstreamPrefix: "/backend-api/codex",
     });
-    // hooks-lifecycle 6.3：preset.auth {script, bearer} 原样透传为 v2 auth 槽
-    expect(svc?.auth).toEqual({ script: "codex", bearer: true });
+    // rust-fetch-sidecar：codex 预设走预设模式（hooks 整段绑定，脚本自带 ①②③）
+    expect(svc?.hooks).toEqual({ script: "codex" });
+    expect(svc?.auth).toBeUndefined();
     expect(svc?.rewrite).toBeUndefined();
     const text = lines.join("");
     expect(text).toContain("/codex=/backend-api/codex");
@@ -124,13 +125,13 @@ describe("ai-fly service add --preset codex（cli-codex）", () => {
     expect(svc?.auth).toEqual({ secret: "ck" });
   });
 
-  it("--no-bearer 覆盖 preset.auth 的 bearer 开关", async () => {
+  it("--no-bearer 对预设模式 codex：无 auth 源可关 → 显式报错（①由整段脚本承担，前缀不可逐槽关闭）", async () => {
     const home = mkdtempSync(join(tmpdir(), `aifly-codex3-${process.pid}`));
     const data = join(home, "provider");
     const code = await run(["add", "codex3", "--preset", "codex", "--no-bearer", "--data", data], { homedir: home });
-    expect(code).toBe(0);
-    const svc = ProviderStore.open(data).listServices().find((s) => s.name === "codex3");
-    expect(svc?.auth).toEqual({ script: "codex", bearer: false });
+    expect(code).toBe(2);
+    expect(errLines.join("")).toContain("--no-bearer requires an auth source");
+    expect(ProviderStore.open(data).listServices()).toHaveLength(0);
   });
 });
 
@@ -205,17 +206,17 @@ describe("ai-fly service add 生命周期旗标（v2）", () => {
     expect(errLines.join("")).toContain("--headers-script");
   });
 
-  it("--hooks 已退役：传入即报错并给阶段槽指引", async () => {
+  it("--hooks 预设模式（rust-fetch-sidecar 回归）：整段绑定落库（互斥/无导出用例见 service-hooks.test）", async () => {
     const home = freshHome();
     const data = join(home, "provider");
     const code = await run(
-      ["add", "old", "--upstream", "https://api.example.com/", "--match", "suffix:api.example.com", "--port", "4324", "--data", data, "--hooks", "codex"],
+      ["add", "presetsvc", "--upstream", "https://chatgpt.com/", "--match", "suffix:chatgpt.com", "--port", "4324", "--data", data, "--hooks", "codex"],
       { homedir: home },
     );
-    expect(code).toBe(2);
-    expect(errLines.join("")).toContain("--hooks was removed");
-    expect(errLines.join("")).toContain("--auth-script");
-    expect(ProviderStore.open(data).listServices()).toHaveLength(0);
+    expect(code).toBe(0);
+    const svc = ProviderStore.open(data).getServiceByName("presetsvc");
+    expect(svc?.hooks).toEqual({ script: "codex" });
+    expect(svc?.auth).toBeUndefined();
   });
 
   it("service get/list 按四槽阶段 humanize（显示引用形态，auth 三族 + bearer）", async () => {

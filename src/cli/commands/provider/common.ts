@@ -141,6 +141,8 @@ export function buildHeadersSlot(
   return slot;
 }
 
-export function openStore(dataDir: string): ProviderStore {
-  return ProviderStore.open(dataDir);
+export function openStore(dataDir: string, home?: string): ProviderStore {
+  // home 透传（复核 R2-P1-B）：CLI 的 addService 预设模式校验与 service.ts 的
+  // 入口 preflight 使用同一脚本库基准（缺省 = 真实 os.homedir()）。
+  return ProviderStore.open(dataDir, home === undefined ? {} : { home });
 }

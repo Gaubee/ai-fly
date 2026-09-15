@@ -193,7 +193,9 @@ export function legacyStoreNotice(dataDir: string, serviceNames: readonly string
 }
 
 export async function startProviderDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
-  const store = ProviderStore.open(opts.dataDir); // 0700/0600 由 store 保障
+  // home 贯穿（复核 R2-P1-B）：store（预设模式落库校验）与 engine（forwardRequest
+  // 运行时脚本解析）共用同一注入 home——沙盒 HOME 下两层面行为一致。
+  const store = ProviderStore.open(opts.dataDir, { home: opts.home }); // 0700/0600 由 store 保障
   // legacy 态（hooks-lifecycle 版本门禁）：NOTICE 日志 + 启动期 alias 写入跳过
   // （不影响启动；watch 语义保留——CLI 进程的 legacy remove 仍能热传导）。
   if (store.legacy !== null) {
@@ -224,6 +226,7 @@ export async function startProviderDaemon(opts: DaemonOptions): Promise<RunningD
       timeouts: opts.timeouts,
       env: opts.env,
       secrets,
+      home: opts.home,
     },
   });
   await engine.start();

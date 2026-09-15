@@ -1,5 +1,5 @@
-// 服务脱敏披露视图（hooks-lifecycle v2 四槽）：把服务配置投影为 wire 目录载荷
-// （AUTH_OK 与分享链接共用）的 ServiceEntry / ServiceDetail。
+// 服务脱敏披露视图（v2 双模式：自定义四槽 + 预设 hooks 位）：把服务配置投影为
+// wire 目录载荷（AUTH_OK 与分享链接共用）的 ServiceEntry / ServiceDetail。
 // 正交意图：
 // - 只做"披露投影"，不校验、不落盘（schema 形状由 wire/frames.ts 锁定，槽位语义
 //   由 provider/lifecycle.ts 单源冻结）；
@@ -40,7 +40,7 @@ export const ENV_VALUE_MASK = SERVICE_VALUE_MASK;
  */
 export type ServiceDisclosureSource = Pick<ServiceConfig, "upstream" | "match"> &
   Partial<Pick<ServiceConfig, "rewrite" | "routes">> &
-  ServiceLifecycleSlots;
+  ServiceLifecycleSlots & { hooks?: { script: string; args?: Record<string, string> | undefined } | undefined };
 
 /** 前缀重写规则的披露形态：strip:/a 与 append:/b 的组合标记。 */
 function prefixDisclosure(rewrite: NonNullable<ServiceConfig["rewrite"]>): string | undefined {
@@ -74,7 +74,7 @@ function maskHeadersSlot(slot: HeadersSlot): NonNullable<ServiceDetail["headers"
   return out;
 }
 
-/** 服务完整配置的脱敏披露（v2 四槽：脚本/密钥/引用注入位 → ●）。 */
+/** 服务完整配置的脱敏披露（v2 双模式：自定义四槽 + 预设 hooks 位——脚本/密钥/引用注入位 → ●）。 */
 export function buildServiceDetail(service: ServiceDisclosureSource): ServiceDetail {
   // wire schema 中 rewrite 为必填对象（子字段可选）：无重写配置时输出空 rewrite。
   const rewrite: NonNullable<ServiceDetail["rewrite"]> = {};
@@ -105,6 +105,8 @@ export function buildServiceDetail(service: ServiceDisclosureSource): ServiceDet
   if (service.headers !== undefined) detail.headers = maskHeadersSlot(service.headers);
   if (service.request !== undefined) detail.request = { script: SERVICE_VALUE_MASK };
   if (service.response !== undefined) detail.response = { script: SERVICE_VALUE_MASK };
+  // 预设模式整段绑定（rust-fetch-sidecar）：与脚本注入位同掩码规则（无脚本名与 args）。
+  if (service.hooks !== undefined) detail.hooks = { script: SERVICE_VALUE_MASK };
   return detail;
 }
 
@@ -160,5 +162,6 @@ export function detailDisplayLines(detail: ServiceDetail): string[] {
   }
   if (detail.request !== undefined) lines.push(`request: script <hidden>`);
   if (detail.response !== undefined) lines.push(`response: script <hidden>`);
+  if (detail.hooks !== undefined) lines.push(`hooks: preset <hidden>`);
   return lines;
 }

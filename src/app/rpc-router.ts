@@ -27,6 +27,7 @@ import {
   installUserHook,
   readHookScript,
   removeUserHook,
+  scriptHasStageExports,
 } from "../provider/hook.ts";
 import {
   deriveModels,
@@ -69,6 +70,8 @@ function keyView(key: KeyRecord): {
  * - 显式 secretName → auth.secret；
  * - preset.auth（{secret,bearer?} | {script,args?,bearer?}）原样透传为 auth 槽；
  * - 无 preset.auth 时 keyEnv 兜底 → auth.literal 的 `$env:<VAR>` 间接引用。
+ * rust-fetch-sidecar（预设模式）：preset.hooks（{script, args?}）原样透传为
+ * service.hooks 整段绑定（与 auth/逐槽互斥——preset.hooks 存在时不做 auth 装配）。
  * envHint 仅在 auth 实际走 keyEnv 路径时给出（$secret/脚本路径的值不在环境变量）。 */
 export function presetToServiceInput(
   preset: Preset,
@@ -80,9 +83,13 @@ export function presetToServiceInput(
   },
 ): { serviceInput: ServiceInput; envHint?: string } {
   const keyEnv = input.keyEnv ?? preset.keyEnv;
-  const viaKeyEnv = input.secretName === undefined && preset.auth === undefined && keyEnv !== undefined;
+  const presetMode = preset.hooks !== undefined;
+  const viaKeyEnv =
+    !presetMode && input.secretName === undefined && preset.auth === undefined && keyEnv !== undefined;
   let auth: ServiceInput["auth"];
-  if (input.secretName !== undefined) {
+  if (presetMode) {
+    // 预设模式：auth 由整段脚本的 ① 导出承担（若有）——不做槽位装配。
+  } else if (input.secretName !== undefined) {
     auth = { secret: input.secretName };
   } else if (preset.auth !== undefined) {
     auth = { ...preset.auth };
@@ -96,6 +103,7 @@ export function presetToServiceInput(
     ...(preset.routes !== undefined && preset.routes.length > 0 ? { routes: preset.routes } : {}),
     ...(input.port !== undefined ? { defaultPort: input.port } : { defaultPort: preset.defaultPort }),
     ...(auth !== undefined ? { auth } : {}),
+    ...(presetMode ? { hooks: { ...preset.hooks! } } : {}),
   };
   const envHint = viaKeyEnv
     ? `export ${keyEnv}='Bearer <your-api-key>' (full header value; the provider injects it upstream)`
@@ -205,6 +213,14 @@ export function createRpcRouter(deps: RpcRouterDeps) {
           return service;
         }),
         add: rpc.provider.services.add.handler(({ input }) => {
+          // 预设模式绑定校验（rust-fetch-sidecar）：整段脚本必须导出至少一个
+          // 阶段函数（否则所有阶段回退缺省——绑定无意义）。
+          if (input.hooks !== undefined && !scriptHasStageExports(input.hooks.script, { home: home() })) {
+            throw new DomainError(
+              "INVALID_INPUT",
+              `error: hook script '${input.hooks.script}' exports no lifecycle stage function`,
+            );
+          }
           const service = host.providerStore().addService(input);
           return { service };
         }),
@@ -242,6 +258,8 @@ export function createRpcRouter(deps: RpcRouterDeps) {
             ...(input.content !== undefined ? { content: input.content } : {}),
             // 密钥原样值（Bearer 前缀由 auth 槽在 buildUpstreamRequest 头链内拼）。
             secrets: (name: string) => secretsStore.get(name),
+            // home 贯穿（复核 R2-P1-B）：行内 test 与网关转发同一脚本库基准。
+            home: home(),
           });
           return { ...result, ...(modelSource !== "none" ? { modelSource } : {}) };
         }),

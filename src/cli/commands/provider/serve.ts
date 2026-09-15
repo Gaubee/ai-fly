@@ -40,6 +40,9 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
     );
     const daemon = await startProviderDaemon({
       dataDir,
+      // home 贯穿（复核 R3-P1）：与 daemon.ts 启动路径同基准——store 落库校验、
+      // engine 运行时脚本解析、watcher reloadStore 都不回退真实 os.homedir()。
+      home,
       relayUrls,
       alias: str(options.alias),
       logUsage: options["log-usage"] === true,

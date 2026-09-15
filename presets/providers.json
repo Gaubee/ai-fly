@@ -94,11 +94,10 @@
      "upstreamPrefix": "/backend-api/codex"
     }
    ],
-   "auth": {
-    "script": "codex",
-    "bearer": true
+   "hooks": {
+    "script": "codex"
    },
-   "notes": "ChatGPT Codex backend (Responses API). Auth reads ~/.codex/auth.json per request (codex CLI login state; no key needed). Point agents at OPENAI_BASE_URL=http://127.0.0.1:<port>/codex with wire_api=responses. WS clients: ws://127.0.0.1:<port>/codex/responses upgrades to wss upstream.",
+   "notes": "ChatGPT Codex backend (Responses API), preset mode: the codex script provides the full lifecycle (auth token + codex CLI header set from ~/.codex/auth.json, outbound via the rust-fetch sidecar). Requires cargo build of sidecars/rust-fetch (see README). Point agents at OPENAI_BASE_URL=http://127.0.0.1:<port>/codex with wire_api=responses. WS clients: ws://127.0.0.1:<port>/codex/responses upgrades to wss upstream.",
    "source": "https://github.com/openai/codex (~/.codex/auth.json login state)"
   },
   {

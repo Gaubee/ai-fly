@@ -187,7 +187,7 @@ function info(infoArgv: readonly string[], home: string): number {
     ? resolve(home, last.args[last.args.indexOf("--data") + 1] ?? "")
     : resolve(home, ".aifly", "provider");
   try {
-    const store = openStore(isAbsolute(dataDir) ? dataDir : resolve(process.cwd(), dataDir));
+    const store = openStore(isAbsolute(dataDir) ? dataDir : resolve(process.cwd(), dataDir), home);
     const services = store.listServices();
     const groups = store.listGroups();
     const keys = store.listKeys();
