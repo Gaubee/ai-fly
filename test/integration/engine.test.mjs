@@ -403,7 +403,9 @@ test.before(async () => {
   svcIds.slowmo = add("slowmo", { defaultPort: await freePort() }).serviceId;
   svcIds.secret = add("secret", {
     defaultPort: await freePort(),
-    rewrite: { pathPrefixAppend: "/pfx", headerSet: { authorization: `$env:${ENV_VAR_NAME}` } },
+    // hooks-lifecycle v2：头改写迁出 rewrite——$env 注入落 headers.set
+    rewrite: { pathPrefixAppend: "/pfx" },
+    headers: { set: { authorization: `$env:${ENV_VAR_NAME}` } },
   }).serviceId;
   svcIds.echo = add("echo", { defaultPort: await freePort() }).serviceId;
   svcIds.flood = add("flood", { defaultPort: await freePort() }).serviceId;
@@ -491,12 +493,13 @@ test("AUTH matrix: multi-key, detail masking, mix-flow, unauth drop, AUTH_ERR, r
     assert.equal(groupsByName.get("secretgrp").limits.maxConcurrency, undefined);
 
     // Scenario「detail 披露脱敏」：$env 头值 → ●，变量名与值都不出现
+    // （hooks-lifecycle v2：头槽位投影为 detail.headers.set，引用型值掩码 ●）
     const secretEntry = groupsByName.get("secretgrp").services[0];
     assert.ok(secretEntry.detail, "服务视图应携带 detail 披露");
     const json = JSON.stringify(ok.header);
     assert.ok(!json.includes(ENV_VAR_NAME), "AUTH_OK 不得泄漏 env 变量名");
     assert.ok(!json.includes(ENV_VAR_VALUE), "AUTH_OK 不得泄漏 env 值");
-    assert.ok(secretEntry.detail.rewrite.headerSet.some((h) => h.name === "authorization" && h.value === "●"));
+    assert.equal(secretEntry.detail.headers?.set?.authorization, "●");
 
     // Scenario「混流共存」+「未知帧类型前向兼容」：噪声不影响在途请求
     await fabric.send(ctx.p1.endpointId, Buffer.from("not-an-aifly-envelope"));
@@ -1122,6 +1125,8 @@ test("seq gap poisons connection and triggers rebuild; reverse frames silently d
     keys: [{ keyId: "k1", key: "sk-aifly-" + "d".repeat(52), group: "main" }],
     services: [modelsEntry],
     ports: {},
+    actualPorts: {},
+    disabledServices: [],
   };
   let sessions = 0;
   /** @type {any} */

@@ -9,8 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FRAME_TYPE } from "../../../src/wire/frames.ts";
-import type { AuthOkHeader } from "../../../src/wire/frames.ts";
+import { FRAME_TYPE, SERVICE_DETAIL_SCHEMA, type AuthOkHeader } from "../../../src/wire/frames.ts";
 import { FabricWireAdapter } from "../../../src/wire/fabric-adapter.ts";
 import { WireSession, type InboundFrame } from "../../../src/wire/mux.ts";
 import { ProviderEngine } from "../../../src/provider/engine.ts";
@@ -59,7 +58,8 @@ beforeEach(async () => {
     name: "api",
     upstream: `http://127.0.0.1:${mockPort}`,
     match: [{ type: "suffix", value: ".local" }],
-    rewrite: { headerSet: { authorization: { hook: "authHeader", args: { var: "TEST_UPSTREAM_KEY" } } } },
+    // hooks-lifecycle v2：$env 字面量间接引用落 headers.set（请求期解析）。
+    headers: { set: { authorization: "$env:TEST_UPSTREAM_KEY" } },
   });
   serviceId = svc.serviceId;
   store.addGroup("friends", ["api"], { maxConcurrency: 1 });
@@ -138,9 +138,13 @@ describe("AUTH 与目录", () => {
     expect(group.group).toBe("friends");
     expect(group.limits).toEqual({ maxConcurrency: 1 });
     expect(group.services[0]?.serviceId).toBe(serviceId);
-    const masked = group.services[0]?.detail?.rewrite?.headerSet?.find((h) => h.name === "authorization");
-    expect(masked?.value).toBe("\u25cf");
+    // v2 四槽 detail：形状经严格 schema 校验；store v1 过渡期的 headerSet 改写
+    // 不再进 detail（头改写能力迁出 rewrite，运行期语义由引擎任务切换）。
+    const detail = group.services[0]?.detail;
+    expect(SERVICE_DETAIL_SCHEMA.safeParse(detail).success).toBe(true);
+    expect((detail as { upstream?: string }).upstream).toBe(`http://127.0.0.1:${mockPort}/`);
     expect(JSON.stringify(header)).not.toContain("TEST_UPSTREAM_KEY");
+    expect(JSON.stringify(header)).not.toContain("sk-env-injected");
     expect(engine.sessionCount()).toBe(1);
   });
 
@@ -227,7 +231,8 @@ describe("REQ 全链路", () => {
       name: "sec-api",
       upstream: `http://127.0.0.1:${mockPort}`,
       match: [{ type: "suffix", value: ".local" }],
-      rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: "test-key" } } } },
+      // hooks-lifecycle v2：$secret 字面量间接引用（未命中 → secret_missing）。
+      headers: { set: { authorization: "$secret:test-key" } },
     });
     store.addGroup("secret-holders", ["sec-api"]);
     const keySecret = store.issueKey("secret-holders");
@@ -312,7 +317,10 @@ describe("横幅与空 $env 警告（纯函数）", () => {
     const services = [
       {
         ...store.getService(serviceId)!,
-        rewrite: { headerSet: { a: { hook: "authHeader", args: { var: "SET_VAR" } }, b: { hook: "authHeader", args: { var: "EMPTY_VAR" } }, c: { hook: "authHeader", args: { var: "UNSET_VAR" } } } },
+        // hooks-lifecycle v2：$env 声明位 = headers.set / auth.literal 的引用值。
+        headers: {
+          set: { a: "$env:SET_VAR", b: "$env:EMPTY_VAR", c: "$env:UNSET_VAR" },
+        },
       },
     ];
     const refs = findEmptyEnvRefs(services, { SET_VAR: "x", EMPTY_VAR: "" });

@@ -17,6 +17,8 @@ import {
   REQ_HEADER_SCHEMA,
   RESP_META_HEADER_SCHEMA,
   REJECTED_CODE,
+  SERVICE_DETAIL_SCHEMA,
+  SERVICE_ENTRY_SCHEMA,
   WS_HANDSHAKE_HEADER_NAMES,
   classifySchemaFailure,
 } from "../../../src/wire/frames.ts";
@@ -152,7 +154,15 @@ describe("AUTH / AUTH_OK / AUTH_ERR schemas", () => {
               detail: {
                 upstream: "https://api.upstream/v1",
                 match: [{ type: "exact", value: "api.example.com" }],
-                rewrite: { host: "api.upstream", prefix: "/v1", headerSet: [{ name: "x-key", value: "●" }] },
+                rewrite: { host: "api.upstream", prefix: "/v1" },
+                auth: { secret: "●", bearer: true },
+                headers: {
+                  remove: ["x-drop"],
+                  set: { "x-key": "●", "x-literal": "keep-me" },
+                  script: { name: "●" },
+                },
+                request: { script: "●" },
+                response: { script: "●" },
               },
             },
           ],
@@ -166,6 +176,19 @@ describe("AUTH / AUTH_OK / AUTH_ERR schemas", () => {
     bad(AUTH_OK_HEADER_SCHEMA, { ...full, rejected: [{ code: "aborted" }] }); // rejected 码仅两值
     bad(AUTH_OK_HEADER_SCHEMA, { ...full, refresh: false }); // 仅字面 true
     bad(AUTH_OK_HEADER_SCHEMA, { ...full, unknown: 1 });
+    // 帧级（第一阶段）对 detail 宽松承载：v1 形状 detail / 顶层 hooks 条目不在
+    // 帧级拒绝——交由 mux 二阶段按 SERVICE_DETAIL_SCHEMA 复核（catalogDropped）。
+    const v1Style = JSON.parse(JSON.stringify(full)) as Record<string, unknown>;
+    (v1Style.groups as Array<{ services: Array<Record<string, unknown>> }>)[0]!.services[0]!.hooks = "env";
+    (
+      (v1Style.groups as Array<{ services: Array<{ detail: Record<string, unknown> }> }>)[0]!.services[0]!.detail
+        .rewrite as Record<string, unknown>
+    ).headerSet = [{ name: "authorization", value: "●" }];
+    ok(AUTH_OK_HEADER_SCHEMA, v1Style);
+    // 条目身份字段仍严格：serviceId 缺失在帧级即拒（schemaDropped 路径）。
+    const noId = JSON.parse(JSON.stringify(full)) as Record<string, unknown>;
+    delete (noId.groups as Array<{ services: Array<Record<string, unknown>> }>)[0]!.services[0]!.serviceId;
+    bad(AUTH_OK_HEADER_SCHEMA, noId);
   });
 
   it("AUTH_ERR is key_all_invalid with optional message", () => {
@@ -183,10 +206,73 @@ describe("ERROR schema", () => {
     }
   });
 
+  it("hook_failed 已登记（②③④ 生命周期脚本失效；穷举 enum 强制消费侧同步映射）", () => {
+    expect(ERROR_CODE.hook_failed).toBe("hook_failed");
+    ok(ERROR_HEADER_SCHEMA, { id: ID, code: ERROR_CODE.hook_failed, message: "lifecycle script failed" });
+  });
+
   it("rejects rejected-only codes and missing message", () => {
     bad(ERROR_HEADER_SCHEMA, { code: REJECTED_CODE.key_invalid, message: "m" });
     bad(ERROR_HEADER_SCHEMA, { code: REJECTED_CODE.key_revoked, message: "m" });
     bad(ERROR_HEADER_SCHEMA, { code: "protocol_error" });
+  });
+});
+
+describe("SERVICE_DETAIL / SERVICE_ENTRY（v2 四槽投影）", () => {
+  const MASK = "\u25cf";
+  const detail = {
+    upstream: "https://api.upstream/v1",
+    match: [{ type: "suffix", value: ".local" }],
+    rewrite: {},
+    auth: { secret: MASK, bearer: true },
+    headers: { remove: ["x-drop"], set: { "x-a": MASK, "x-literal": "keep" }, script: { name: MASK } },
+    request: { script: MASK },
+    response: { script: MASK },
+  };
+
+  it("四槽掩码投影往返（掩码位仅 ●、bearer 可见、字面量原样）", () => {
+    const parsed = SERVICE_DETAIL_SCHEMA.safeParse(detail);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.auth).toEqual({ secret: MASK, bearer: true });
+  });
+
+  it("敏感位仅接受掩码字面量：明文 secret/script/literal 一律拒绝", () => {
+    bad(SERVICE_DETAIL_SCHEMA, { ...detail, auth: { secret: "openai" } });
+    bad(SERVICE_DETAIL_SCHEMA, { ...detail, auth: { script: "codex" } });
+    bad(SERVICE_DETAIL_SCHEMA, { ...detail, auth: { literal: "sk-plain" } });
+    bad(SERVICE_DETAIL_SCHEMA, { ...detail, headers: { ...detail.headers, script: { name: "hdr" } } });
+    bad(SERVICE_DETAIL_SCHEMA, { ...detail, request: { script: "relay" } });
+    bad(SERVICE_DETAIL_SCHEMA, { ...detail, response: { script: "transform" } });
+  });
+
+  it("headers.set 引用型值（$env:/$secret:）不得裸上 wire（掩码纪律入 schema）", () => {
+    bad(SERVICE_DETAIL_SCHEMA, { ...detail, headers: { set: { "x-a": "$env:KEY" } } });
+    bad(SERVICE_DETAIL_SCHEMA, { ...detail, headers: { set: { "x-a": "$secret:openai" } } });
+  });
+
+  it("旧 v1 形状拒绝：rewrite.headerSet / detail 未知槽字段", () => {
+    bad(
+      SERVICE_DETAIL_SCHEMA,
+      { ...detail, rewrite: { host: "h", headerSet: [{ name: "authorization", value: MASK }] } as never },
+    );
+    bad(SERVICE_DETAIL_SCHEMA, { ...detail, hooks: "env" });
+  });
+
+  it("SERVICE_ENTRY：v2 无 hooks 字段（退役）、旧顶层 hooks 拒绝", () => {
+    ok(SERVICE_ENTRY_SCHEMA, {
+      serviceId: "svc123",
+      name: "api",
+      match: [{ type: "suffix", value: ".local" }],
+      defaultPort: 11434,
+      detail,
+    });
+    bad(SERVICE_ENTRY_SCHEMA, {
+      serviceId: "svc123",
+      name: "api",
+      match: [{ type: "suffix", value: ".local" }],
+      defaultPort: 11434,
+      hooks: "env",
+    });
   });
 });
 

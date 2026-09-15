@@ -1,6 +1,8 @@
 // `ai-fly secret set|list|remove`（cli-parity B2）：provider 侧密钥库的 CLI 面
 // （与 GUI 密钥库同源 SecretsStore）。法则：值永不出库——没有 get 子命令；
 // set 缺 --value/--stdin 且在 TTY 上时隐藏交互输入（回显 *）。
+// hooks-lifecycle 5.2：bearerPrefix 退役——值原样存储，Bearer 前缀由服务的
+// auth 槽 bearer 开关决定（--no-bearer 旗标已删除）。
 
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
@@ -15,14 +17,14 @@ const SPEC = {
   data: { type: "string", tilde: true },
   value: { type: "string" },
   stdin: { type: "boolean" },
-  "no-bearer": { type: "boolean" },
 } as const;
 
 const USAGE = `usage:
-  ai-fly secret set <name> [--value <v> | --stdin] [--no-bearer] [--data <dir>]
+  ai-fly secret set <name> [--value <v> | --stdin] [--data <dir>]
   ai-fly secret list [--data <dir>]
   ai-fly secret remove <name> [--data <dir>]
-(the raw value is never displayed or returned - there is no 'secret get')`;
+(the raw value is never displayed or returned - there is no 'secret get';
+ the Bearer prefix is decided by each service's auth slot, not the store)`;
 
 export async function run(argv: string[], ctx: { homedir?: string } = {}): Promise<number> {
   try {
@@ -69,9 +71,9 @@ async function set(options: Readonly<Record<string, unknown>>, positionals: read
   }
   if (value === "") throw new UsageError("error: secret value must not be empty");
   const store = SecretsStore.open(resolveDataDir(str(options.data as string | undefined), home));
-  const entry = store.set(name, value, { bearerPrefix: options["no-bearer"] !== true });
+  const entry = store.set(name, value);
   process.stdout.write(
-    `secret set: ${entry.name} (bearer prefix ${entry.bearerPrefix ? "on" : "off"}) - inject with service add --secret ${entry.name}\n`,
+    `secret set: ${entry.name} - inject with service auth slot {secret: ${entry.name}} (Bearer prefix per auth.bearer)\n`,
   );
   return 0;
 }
@@ -94,7 +96,7 @@ function list(options: Readonly<Record<string, unknown>>, home: string): number 
   for (const entry of secrets) {
     const created = new Date(entry.createdAt).toISOString().slice(0, 16).replace("T", " ");
     const updated = entry.updatedAt === entry.createdAt ? "" : ` updated ${new Date(entry.updatedAt).toISOString().slice(0, 16).replace("T", " ")}`;
-    out(`  ${entry.name.padEnd(24)} ${created}${updated}  bearer:${entry.bearerPrefix ? "on" : "off"}`);
+    out(`  ${entry.name.padEnd(24)} ${created}${updated}`);
   }
   return 0;
 }

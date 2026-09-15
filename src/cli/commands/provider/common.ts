@@ -9,7 +9,7 @@ import { loadConfig, resolveRelayUrls } from "../../config.ts";
 import { loadSettings } from "../../../app/settings.ts";
 import type { ConfigFile } from "../../config.ts";
 import { ProviderStore } from "../../../provider/store.ts";
-import type { ServiceMatchRule, ServiceRewrite } from "../../../provider/store.ts";
+import type { HeadersSlot, ServiceMatchRule, ServiceRewrite } from "../../../provider/store.ts";
 
 export function resolveDataDir(flag: string | undefined, home = homedir()): string {
   if (flag === undefined || flag === "") return join(home, ".aifly", "provider");
@@ -85,56 +85,60 @@ export function parseMatchSpec(raw: string): ServiceMatchRule {
   return { type, value };
 }
 
-/** "Name=value"（首个 = 分割；Name 小写化）。 */
-type HeaderValueInput = string | { hook: string; args?: Record<string, string> | undefined; bearer?: boolean | undefined };
-
-export function parseHeaderSetSpec(raw: string): { name: string; value: HeaderValueInput } {
+/** "Name=value"（首个 = 分割；Name 小写化）。hooks-lifecycle v2：值只收字面量
+ *  与 $env:/$secret: 间接引用——v1 的逐头钩子对象 JSON 协议已删除（脚本绑定
+ *  落 headers.script，正式 CLI 面归 6.1/Agent D）。 */
+export function parseHeaderSetSpec(raw: string): { name: string; value: string } {
   const idx = raw.indexOf("=");
   if (idx <= 0) {
     throw new UsageError(
-      `error: invalid --header-set value: ${raw} (expected <name>=<value> or <name>={"hook":...}; value is a literal or hook invocation JSON)`,
+      `error: invalid --header-set value: ${raw} (expected <name>=<value>; value is a literal or $env:/$secret: reference)`,
     );
   }
   const name = raw.slice(0, idx).trim().toLowerCase();
   const rawValue = raw.slice(idx + 1);
   if (rawValue.startsWith("{")) {
-    // 钩子调用对象（两协议之二）：值以 { 开头按 JSON 解析
-    try {
-      const parsed: unknown = JSON.parse(rawValue);
-      if (
-        parsed === null ||
-        typeof parsed !== "object" ||
-        typeof (parsed as { hook?: unknown }).hook !== "string"
-      ) {
-        throw new Error("not a hook invocation");
-      }
-      return { name, value: parsed as { hook: string; args?: Record<string, string>; bearer?: boolean } };
-    } catch {
-      throw new UsageError(`error: invalid --header-set hook JSON for '${name}' (expected {"hook":"authHeader",...})`);
-    }
+    throw new UsageError(
+      `error: per-header hook objects were removed (hooks-lifecycle v2); use a literal, $env:/$secret: reference, or --headers-script <name>`,
+    );
   }
   return { name, value: rawValue };
 }
 
-/** 各命令的 rewrite 组装（仅在存在任一重写选项时构造）。 */
+/** 各命令的 rewrite 组装（v2 瘦身：host/strip/append——头改写迁出至 headers 槽）。
+ *  仅在存在任一重写选项时构造。 */
 export function buildRewrite(input: {
   host?: string | undefined;
   strip?: string | undefined;
   append?: string | undefined;
-  headerSet: Array<{ name: string; value: HeaderValueInput }>;
-  headerRemove: string[];
 }): ServiceRewrite | undefined {
   const rewrite: ServiceRewrite = {};
-  if (input.host !== undefined) rewrite.hostHeader = input.host;
+  if (input.host !== undefined) rewrite.host = input.host;
   if (input.strip !== undefined) rewrite.pathPrefixStrip = input.strip;
   if (input.append !== undefined) rewrite.pathPrefixAppend = input.append;
-  if (input.headerSet.length > 0) {
-    const headerSet: Record<string, HeaderValueInput> = {};
-    for (const h of input.headerSet) headerSet[h.name] = h.value;
-    rewrite.headerSet = headerSet as ServiceRewrite["headerSet"];
-  }
-  if (input.headerRemove.length > 0) rewrite.headerRemove = input.headerRemove;
   return Object.keys(rewrite).length === 0 ? undefined : rewrite;
+}
+
+/** ② headers 槽组装（--header-set/--header-remove/--headers-script 的 v2 落点）。 */
+export function buildHeadersSlot(
+  input: {
+    headerSet: Array<{ name: string; value: string }>;
+    headerRemove: string[];
+    headersScript?: string | undefined;
+  },
+): HeadersSlot | undefined {
+  if (input.headerSet.length === 0 && input.headerRemove.length === 0 && input.headersScript === undefined) {
+    return undefined;
+  }
+  const slot: HeadersSlot = {};
+  if (input.headerRemove.length > 0) slot.remove = [...new Set(input.headerRemove.map((n) => n.toLowerCase()))];
+  if (input.headerSet.length > 0) {
+    const set: Record<string, string> = {};
+    for (const h of input.headerSet) set[h.name] = h.value;
+    slot.set = set;
+  }
+  if (input.headersScript !== undefined) slot.script = { name: input.headersScript };
+  return slot;
 }
 
 export function openStore(dataDir: string): ProviderStore {

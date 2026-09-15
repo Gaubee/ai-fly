@@ -14,6 +14,9 @@ export interface EngineOptions {
   strictPorts?: boolean;
   pollIntervalMs?: number;
   backoff?: { baseMs?: number; capMs?: number };
+  /** 目录同步失败（AUTH_OK 二阶段 detail 投影解析失败）回调——生产装配转
+   *  通知事件驱动 UI 重拉/呈现（hooks-lifecycle 复核 R3-F1）。 */
+  onCatalogError?: (providerId: string, message: string) => void;
   onNotice?: (line: string) => void;
   onLog?: (line: string) => void;
 }
@@ -40,6 +43,7 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     onCatalog: (providerId, alias, services, ports) => {
       void gateway.syncProviderServices(providerId, alias, services, ports);
     },
+    ...(opts.onCatalogError !== undefined ? { onCatalogError: opts.onCatalogError } : {}),
   });
   managerRef.current = manager;
   // 先物化既有目录的监听（离线 503 语义），再启动连接（AUTH_OK 后再全量同步刷新）；

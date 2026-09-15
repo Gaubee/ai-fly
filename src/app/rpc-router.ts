@@ -11,7 +11,7 @@ import type { Preset } from "../shared/rpc-contract.ts";
 import { DomainError, toDomainError } from "./errors.ts";
 import type { EngineHost } from "./engine-host.ts";
 import { buildShareLink, previewShareLink, SHARE_TTL_DEFAULT_MS } from "../provider/link.ts";
-import { parseUpstreamUrl } from "../provider/store.ts";
+import { parseUpstreamUrl, StoreError } from "../provider/store.ts";
 import type { KeyRecord, ServiceConfig, ServiceInput } from "../provider/store.ts";
 import { SecretsStore } from "../provider/secrets.ts";
 import { probeUpstreamModels, testUpstream, pickDefaultModel } from "../provider/upstream-test.ts";
@@ -64,9 +64,12 @@ function keyView(key: KeyRecord): {
   };
 }
 
-/** 预设 → 服务输入展开（applyAsService 核心：match 从 matchDomains 派生 suffix 规则；
- * 密钥注入 secretName 优先——rewrite 写 `$secret:<name>`；否则 keyEnv 建议 `$env:<VAR>`）。
- * envHint 仅在走 $env 时给出（$secret 路径的值在密钥库，无环境变量导出建议）。 */
+/** 预设 → 服务输入展开（applyAsService 核心：match 从 matchDomains 派生 suffix 规则）。
+ * hooks-lifecycle 6.3（v2 直吐，删除临时映射）：
+ * - 显式 secretName → auth.secret；
+ * - preset.auth（{secret,bearer?} | {script,args?,bearer?}）原样透传为 auth 槽；
+ * - 无 preset.auth 时 keyEnv 兜底 → auth.literal 的 `$env:<VAR>` 间接引用。
+ * envHint 仅在 auth 实际走 keyEnv 路径时给出（$secret/脚本路径的值不在环境变量）。 */
 export function presetToServiceInput(
   preset: Preset,
   input: {
@@ -77,25 +80,26 @@ export function presetToServiceInput(
   },
 ): { serviceInput: ServiceInput; envHint?: string } {
   const keyEnv = input.keyEnv ?? preset.keyEnv;
+  const viaKeyEnv = input.secretName === undefined && preset.auth === undefined && keyEnv !== undefined;
+  let auth: ServiceInput["auth"];
+  if (input.secretName !== undefined) {
+    auth = { secret: input.secretName };
+  } else if (preset.auth !== undefined) {
+    auth = { ...preset.auth };
+  } else if (viaKeyEnv) {
+    auth = { literal: `$env:${keyEnv}` };
+  }
   const serviceInput: ServiceInput = {
     name: input.name ?? preset.id,
     upstream: preset.baseUrl,
     match: preset.matchDomains.map((domain) => ({ type: "suffix" as const, value: domain })),
     ...(preset.routes !== undefined && preset.routes.length > 0 ? { routes: preset.routes } : {}),
     ...(input.port !== undefined ? { defaultPort: input.port } : { defaultPort: preset.defaultPort }),
-    ...(preset.hooks !== undefined ? { hooks: preset.hooks } : {}),
-    ...(input.secretName !== undefined
-      ? { hooks: "secret", rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: input.secretName } } } } }
-      : preset.authHeader !== undefined
-        ? { rewrite: { headerSet: { authorization: preset.authHeader } } }
-        : keyEnv !== undefined
-          ? { hooks: "env", rewrite: { headerSet: { authorization: { hook: "authHeader", args: { var: keyEnv } } } } }
-          : {}),
+    ...(auth !== undefined ? { auth } : {}),
   };
-  const envHint =
-    input.secretName === undefined && keyEnv !== undefined
-      ? `export ${keyEnv}='Bearer <your-api-key>' (full header value; the provider injects it upstream)`
-      : undefined;
+  const envHint = viaKeyEnv
+    ? `export ${keyEnv}='Bearer <your-api-key>' (full header value; the provider injects it upstream)`
+    : undefined;
   return { serviceInput, ...(envHint !== undefined ? { envHint } : {}) };
 }
 
@@ -176,15 +180,23 @@ export function createRpcRouter(deps: RpcRouterDeps) {
           return testUpstream({
             upstream: input.upstream,
             ...(input.apiForm !== undefined ? { apiForm: input.apiForm } : {}),
-            ...(input.secretName !== undefined ? { secretName: input.secretName } : {}),
+            ...(input.auth !== undefined ? { auth: input.auth } : {}),
             ...(input.model !== undefined ? { model: input.model } : {}),
             secretsStore: SecretsStore.open(host.providerDataDir),
             modelsRaw: readModelsDevRaw(modelsDevCachePath(home())),
           });
         }),
-        list: rpc.provider.services.list.handler(() => ({
-          services: host.providerStore().listServices(),
-        })),
+        list: rpc.provider.services.list.handler(() => {
+          const store = host.providerStore();
+          // legacy（pre-v2）态：最小失效壳（仅 name + legacy 标记，供移除列表渲染；
+          // hooks-lifecycle 2.3）。写操作经 store 单点门禁自然拒绝（INVALID_STATE）。
+          if (store.legacy !== null) {
+            return {
+              services: store.legacy.serviceNames.map((name) => ({ name, legacy: true as const })),
+            };
+          }
+          return { services: store.listServices() };
+        }),
         get: rpc.provider.services.get.handler(({ input }) => {
           const service = host.providerStore().getServiceByName(input.name);
           if (service === undefined) {
@@ -228,7 +240,8 @@ export function createRpcRouter(deps: RpcRouterDeps) {
             ...(input.localPrefix !== undefined ? { localPrefix: input.localPrefix } : {}),
             ...(model !== undefined ? { model } : {}),
             ...(input.content !== undefined ? { content: input.content } : {}),
-            secrets: (name: string) => secretsStore.resolve(name)?.headerValue,
+            // 密钥原样值（Bearer 前缀由 auth 槽在 buildUpstreamRequest 头链内拼）。
+            secrets: (name: string) => secretsStore.get(name),
           });
           return { ...result, ...(modelSource !== "none" ? { modelSource } : {}) };
         }),
@@ -267,8 +280,10 @@ export function createRpcRouter(deps: RpcRouterDeps) {
       },
       // hooks 脚本资源域（provider-local ~ ：管理面同 group/secret）。
       hooks: {
+        // stages-only（codex R6 裁决）：阶段矩阵按导出的阶段函数名归类——旧导出名
+        // （如 v1 authHeader）不在矩阵内，UI 按阶段过滤自然排除并提示重写。
         list: rpc.provider.hooks.list.handler(() => ({
-          hooks: discoverHooks(home()).map((h) => ({ name: h.name, source: h.source, fns: h.fns })),
+          hooks: discoverHooks(home()).map((h) => ({ name: h.name, source: h.source, stages: h.stages })),
         })),
         get: rpc.provider.hooks.get.handler(({ input }) => {
           const found = readHookScript(input.name, home());
@@ -280,7 +295,7 @@ export function createRpcRouter(deps: RpcRouterDeps) {
         add: rpc.provider.hooks.add.handler(({ input }) => {
           try {
             const installed = installUserHook(input.name, input.content, home());
-            return { name: installed.name, path: installed.path, fns: installed.fns };
+            return { name: installed.name, path: installed.path, stages: installed.stages };
           } catch (err) {
             throw new DomainError("INVALID_INPUT", (err as Error).message);
           }
@@ -299,15 +314,15 @@ export function createRpcRouter(deps: RpcRouterDeps) {
         }),
       },
       // 密钥库（provider-local；直连 SecretsStore——无内存态，daemon 运行时写入即刻
-      // 生效。remove 未命中 StoreError(not-found) -> NOT_FOUND；list 投影名称/开关/时间戳）。
+      // 生效。remove 未命中 StoreError(not-found) -> NOT_FOUND；list 精确形状
+      // {secrets:[{name,createdAt,updatedAt}],count}——值与 bearerPrefix 绝不出现）。
       secrets: {
-        list: rpc.provider.secrets.list.handler(() => ({
-          secrets: SecretsStore.open(host.providerDataDir).list(),
-        })),
+        list: rpc.provider.secrets.list.handler(() => {
+          const secrets = SecretsStore.open(host.providerDataDir).list();
+          return { secrets, count: secrets.length };
+        }),
         set: rpc.provider.secrets.set.handler(({ input }) => ({
-          secret: SecretsStore.open(host.providerDataDir).set(input.name, input.value, {
-            ...(input.bearerPrefix !== undefined ? { bearerPrefix: input.bearerPrefix } : {}),
-          }),
+          secret: SecretsStore.open(host.providerDataDir).set(input.name, input.value),
         })),
         remove: rpc.provider.secrets.remove.handler(({ input }) => {
           SecretsStore.open(host.providerDataDir).remove(input.name);
@@ -316,6 +331,15 @@ export function createRpcRouter(deps: RpcRouterDeps) {
       },
       share: {
         create: rpc.provider.share.create.handler(async ({ input }) => {
+          // legacy 门禁前置（复核 R1-F6）：invite 是有外部副作用的资源（fabric
+          // 配额/中继可达性），必须先于 store 拒绝——否则 key 签发失败时 invite
+          // 已被消费。
+          if (host.providerStore().legacy !== null) {
+            throw new StoreError(
+              "legacy_readonly",
+              "error: provider store is legacy (pre-v2); remove legacy services and re-add before sharing",
+            );
+          }
           const daemon = host.requireProviderDaemon();
           const ttlMs = input.ttlMs ?? SHARE_TTL_DEFAULT_MS;
           // invite 语义同 CLI：无 relay 时 SDK 抛错（UI 明确报错优于静默降级）
@@ -353,6 +377,8 @@ export function createRpcRouter(deps: RpcRouterDeps) {
           groups: store.listGroups().length,
           activeKeys: keys.filter((k) => k.revokedAt === undefined).length,
           revokedKeys: keys.filter((k) => k.revokedAt !== undefined).length,
+          // legacy（pre-v2）存储态暴露（hooks-lifecycle 2.3；正式契约面归 5.1）。
+          legacy: store.legacy,
         };
       }),
       daemon: {

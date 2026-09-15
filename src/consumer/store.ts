@@ -7,7 +7,10 @@
 // - 合并语义以 (提供者, keyId) 为幂等键（重复 keyId 更新而非追加）；裸密钥（key add）
 //   无 keyId/group 元数据，以 keyId="" 占位入环，待 AUTH_OK 目录回填（providers.ts）；
 // - keyring 的服务视图（services 含 detail）由 AUTH_OK 全量替换刷新；import 链接
-//   携带的初始视图按 serviceId 并入（不覆盖既有 AUTH_OK 视图中其它分组的服务）。
+//   携带的初始视图按 serviceId 并入（不覆盖既有 AUTH_OK 视图中其它分组的服务）；
+// - 加载期按提供者记录逐条过滤（hooks-lifecycle v2）：services 内不合当前
+//   SERVICE_ENTRY 的陈旧条目丢弃（记录与密钥保留）、发生丢弃即原子写回（失败仅
+//   日志不阻断内存视图）；下轮 AUTH_OK 目录同步全量重建（自愈，无迁移）。
 
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -125,6 +128,12 @@ export function saveKeyring(root: string, ring: Keyring): string {
   const dir = keyringDir(root, ring.endpointId);
   ensureDirMode(root);
   ensureDirMode(dir);
+  writeRingAt(dir, ring);
+  return join(dir, "keyring.json");
+}
+
+/** 原子写核心（陈旧条目过滤的自愈写回与 saveKeyring 共用；目录须已存在）。 */
+function writeRingAt(dir: string, ring: Keyring): void {
   const finalPath = join(dir, "keyring.json");
   const tmpPath = join(dir, `.keyring.json.tmp-${randomZ32(4)}`);
   writeFileSync(tmpPath, `${JSON.stringify(ring, null, 2)}\n`, { mode: FILE_MODE });
@@ -134,7 +143,27 @@ export function saveKeyring(root: string, ring: Keyring): string {
     // 同上：尽力而为
   }
   renameSync(tmpPath, finalPath);
-  return finalPath;
+}
+
+/**
+ * 钥环服务条目逐条预过滤（hooks-lifecycle v2 自愈）：services 数组内不合当前
+ * SERVICE_ENTRY 的陈旧条目（旧版本形状）剔除，提供者记录与密钥保留；非 services
+ * 数组形状原样透出（交给 KEYRING_SCHEMA 整体报错——文件级语义不变）。
+ */
+function prefilterStaleServices(parsed: unknown): { value: unknown; dropped: number } {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { value: parsed, dropped: 0 };
+  }
+  const services = (parsed as { services?: unknown }).services;
+  if (!Array.isArray(services)) return { value: parsed, dropped: 0 };
+  const kept: unknown[] = [];
+  let dropped = 0;
+  for (const entry of services) {
+    if (SERVICE_ENTRY_SCHEMA.safeParse(entry).success) kept.push(entry);
+    else dropped++;
+  }
+  if (dropped === 0) return { value: parsed, dropped: 0 };
+  return { value: { ...parsed, services: kept }, dropped };
 }
 
 function readRingAt(dir: string): Keyring | undefined {
@@ -142,9 +171,22 @@ function readRingAt(dir: string): Keyring | undefined {
   if (!existsSync(p)) return undefined; // 目录存在但钥环未写（join/import 中间态）
   const raw = readFileSync(p, "utf8");
   const parsed: unknown = JSON.parse(raw);
-  const result = KEYRING_SCHEMA.safeParse(parsed);
+  // 逐条过滤先于整体校验：陈旧服务条目丢弃（提供者记录与密钥保留），下轮
+  // AUTH_OK 目录同步全量重建该提供者服务视图（自愈，无迁移）。
+  const { value, dropped } = prefilterStaleServices(parsed);
+  const result = KEYRING_SCHEMA.safeParse(value);
   if (!result.success) {
     throw new CliError(`error: keyring ${p} failed validation: ${result.error.message}`);
+  }
+  if (dropped > 0) {
+    // 发生丢弃即原子写回；写回失败仅日志、不阻断内存视图。
+    try {
+      writeRingAt(dir, result.data);
+    } catch (err) {
+      console.error(
+        `[aifly] keyring ${p}: dropped ${dropped} stale service entry(ies) but write-back failed: ${(err as Error).message}`,
+      );
+    }
   }
   return result.data;
 }

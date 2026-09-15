@@ -40,6 +40,14 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
     assertDurationRange(ttlMs, SHARE_TTL_MIN_MS, SHARE_TTL_MAX_MS, "ttl", "1s..30d");
 
     const store = openStore(dataDir);
+    // legacy 门禁前置（复核 R1-F6）：invite 是有外部副作用的资源，先于组网/
+    // 签发拒绝，避免「invite 已消费但链接构建失败」。
+    if (store.legacy !== null) {
+      process.stderr.write(
+        "error: provider store is legacy (pre-v2); remove legacy services and re-add before sharing\n",
+      );
+      return 1;
+    }
     const resolvedRelay = resolvedRelayUrls(options, home);
     if (resolvedRelay === undefined) {
       // 实机踩坑（2026-09-09）：serve --relay <自定> 而 share 未带 --relay 时，链接

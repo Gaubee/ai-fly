@@ -59,6 +59,13 @@ export const LINK_PAYLOAD_SCHEMA = z.strictObject({
 
 export type LinkPayload = z.infer<typeof LINK_PAYLOAD_SCHEMA>;
 
+/**
+ * 旧格式链接的用户面报错（hooks-lifecycle v2：payload schema 不合当前形状即过期
+ * ——无迁移路径；英文 ASCII，保持仓库错误风格）。与 provider/link.ts 同文案例。
+ */
+export const SHARE_LINK_OUTDATED_MESSAGE =
+  "error: this share link uses an outdated format - ask the provider to generate a new one";
+
 /** 解码 aifly1.<base64url(payload JSON)>；任何坏形态以 CliError（退出码 1）报出。 */
 export function decodeShareLink(link: string): LinkPayload {
   if (!link.startsWith(SHARE_LINK_PREFIX)) {
@@ -76,9 +83,9 @@ export function decodeShareLink(link: string): LinkPayload {
   }
   const parsed = LINK_PAYLOAD_SCHEMA.safeParse(json);
   if (!parsed.success) {
-    const first = parsed.error.issues[0];
-    const where = first?.path.length ? ` at ${first.path.join(".")}` : "";
-    throw new CliError(`error: share link payload failed validation${where}: ${first?.message ?? "unknown"}`);
+    // v2 破坏性变更：payload 不合当前 schema（含 v1 旧条目形状）→ 明确报过期
+    //（无迁移路径，让提供方重新生成）；不残留半初始化状态（本函数零副作用）。
+    throw new CliError(SHARE_LINK_OUTDATED_MESSAGE);
   }
   return parsed.data;
 }

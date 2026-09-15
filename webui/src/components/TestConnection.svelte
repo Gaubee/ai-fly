@@ -3,6 +3,7 @@
      价格升序 chat 优先）；custom 路径 upstream 成形后探测一次
      c.presets.models({ upstream, secretName })（{upstream}/models 实时探测）；
      探测失败 → model 手填 Input（默认空 = 不传 model，服务端自选）。
+     认证注入走 auth 槽草稿（hooks-lifecycle 5.2：services.test 输入）。
      结果：成功 ok · 耗时 · 模型 · via {modelSource}；失败给出 error 全文
      （含上游正文摘录）+ 请求详情 POST {url}（长 URL 中间省略）。loading
      防重入；provider-local、不落盘。 -->
@@ -14,15 +15,19 @@
   import { toRpcError, type RpcClient } from "$lib/rpc-client";
   import { call } from "../stores/rpc.svelte.ts";
 import { t } from "$lib/i18n.svelte.ts";
+  import type { AuthSlot } from "$lib/lifecycle.ts";
   import type { ApiForm } from "$shared/rpc-contract.ts";
 
   interface Props {
     upstream: string;
     apiForm?: ApiForm;
+    /** auth 槽草稿（hooks-lifecycle 5.2：services.test 输入——{secret}|{script}|{literal} + bearer）。 */
+    auth?: AuthSlot;
+    /** 模型探测的密钥库引用（presets.models 输入仍为 secretName）。 */
     secretName?: string;
     presetId?: string;
   }
-  let { upstream, apiForm, secretName, presetId }: Props = $props();
+  let { upstream, apiForm, auth, secretName, presetId }: Props = $props();
 
   /** 契约 test 输出（request/modelSource 为 M3-acceptance ④ 新增，单源推导）。 */
   type TestOutput = Awaited<ReturnType<RpcClient["provider"]["services"]["test"]>>;
@@ -127,7 +132,7 @@ import { t } from "$lib/i18n.svelte.ts";
         c.provider.services.test({
           upstream: upstream.trim(),
           ...(apiForm !== undefined ? { apiForm } : {}),
-          ...(secretName !== undefined ? { secretName } : {}),
+          ...(auth !== undefined ? { auth } : {}),
           ...(chosenModel !== undefined ? { model: chosenModel } : {}),
         }),
       );

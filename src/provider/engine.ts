@@ -34,6 +34,7 @@ import {
   type KeyGrant,
 } from "./auth.ts";
 import { forwardRequest, UpstreamAbortError, type UpstreamTimeouts } from "./upstream.ts";
+import { HookMissingError, HookStageError } from "./hook.ts";
 import type { WsRelayHandle } from "./ws-upstream.ts";
 import type { EnvSource, SecretSource } from "./rewrite.ts";
 
@@ -446,10 +447,22 @@ class ProviderPeerSession implements AuthSessionBinding {
       onWsRelay: (relay) => {
         act.ws = relay;
       },
-    }).catch(async () => {
+    }).catch(async (err: unknown) => {
       // 兜底：转发意外抛出时终结该 id（正常路径由 onTerminate 清理）。
+      // 脚本失败类先于 internal 识别（hooks-lifecycle 4.4）：②③④ HookStageError
+      // → hook_failed；① HookMissingError → secret_missing（消息均为固定脱敏文案）。
       if (this.active.has(req.id)) {
-        this.sendError(req.id, ERROR_CODE.internal, "internal forward failure");
+        const code =
+          err instanceof HookStageError
+            ? ERROR_CODE.hook_failed
+            : err instanceof HookMissingError
+              ? ERROR_CODE.secret_missing
+              : ERROR_CODE.internal;
+        const message =
+          err instanceof HookStageError || err instanceof HookMissingError
+            ? err.message
+            : "internal forward failure";
+        this.sendError(req.id, code, message);
       }
     });
   }

@@ -1,6 +1,8 @@
 // rewrite 单测（表驱动）：URL 拼接（base path + strip/append）、双重断言（//host
 // origin 逃逸与 /../../admin 回溯越界 -> RewriteError）、$env 头链矩阵（设置/空串/
-// 未设置）、Host 缺省与覆盖、headerRemove/headerSet、凭据头纵深剥离、WS 升级识别。
+// 未设置）、Host 缺省与覆盖、headerRemove/headerSet、凭据头纵深剥离、WS 升级识别、
+// hooks-lifecycle 4.1 管道固定顺序（①auth 注入三族+bearer → remove → set → ②脚本
+// 增量脚本胜 → 防护头再过滤；$secret 缺失 secret_missing）。
 
 import { afterEach, describe, expect, it } from "vitest";
 import type { ReqHeader } from "../../../src/wire/frames.ts";
@@ -11,6 +13,7 @@ import {
   SecretMissingError,
   PathNotOfferedError,
 } from "../../../src/provider/rewrite.ts";
+import { HookMissingError, HookStageError } from "../../../src/provider/hook.ts";
 import type { ServiceConfig } from "../../../src/provider/store.ts";
 
 function makeService(over: Partial<ServiceConfig> = {}): ServiceConfig {
@@ -77,8 +80,8 @@ describe("URL 构造", () => {
     expect((await buildUpstreamRequest(service, makeReq(), {})).host).toBe("api.example.com");
   });
 
-  it("hostHeader 覆盖 Host", async () => {
-    const service = makeService({ rewrite: { hostHeader: "internal.alias" } });
+  it("rewrite.host 覆盖 Host（v2 瘦身后字段名）", async () => {
+    const service = makeService({ rewrite: { host: "internal.alias" } });
     expect((await buildUpstreamRequest(service, makeReq(), {})).host).toBe("internal.alias");
   });
 });
@@ -299,113 +302,231 @@ describe("路由顺序命中与 pattern 模式（M3-r7）", () => {
 });
 
 // ---------------------------------------------------------------------------
-// $file: 文件型凭据（cli-codex：~/.codex/auth.json#.tokens.access_token?bearer）
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// $script: 脚本型凭据（Owner 裁决 2026-09-12：Node 脚本统一跨平台，无 VM）
+// headers 槽（hooks-lifecycle v2 最小平移：remove → set 字面量间接引用）
 // ---------------------------------------------------------------------------
 
-
-// ---------------------------------------------------------------------------
-// 头值两协议（Owner 2026-09-12 终态）：literal | { hook, args?, bearer? }
-// 内建脚本 env/secret/file 经 args 形态推导；自定义脚本注入 loader。
-// ---------------------------------------------------------------------------
-describe("头值两协议（literal | hook）", () => {
-  afterEach(async () => {
-    const { disposeHookSubscriptions } = await import("../../../src/provider/hook.ts");
-    await disposeHookSubscriptions();
+describe("headers 槽（remove → set 字面量）", () => {
+  it("headers.remove 删除帧内头；headers.set 字面量原样覆盖", async () => {
+    const service = makeService({
+      headers: { remove: ["x-drop"], set: { "x-literal": "abc", "x-override": "declared" } },
+    });
+    const plan = await buildUpstreamRequest(
+      service,
+      makeReq({ headers: { "x-drop": "1", "x-override": "frame", "x-keep": "k" } }),
+      {},
+    );
+    expect(plan.headers["x-drop"]).toBeUndefined();
+    expect(plan.headers["x-literal"]).toBe("abc");
+    expect(plan.headers["x-override"]).toBe("declared");
+    expect(plan.headers["x-keep"]).toBe("k");
   });
 
-  const loaderOf = (mods: Record<string, Record<string, unknown>>) =>
-    (name: string): Record<string, unknown> | undefined => mods[name];
-
-  it("literal 原样；空串省略", async () => {
-    const { resolveHeaderEntry } = await import("../../../src/provider/rewrite.ts");
-    expect(await resolveHeaderEntry("v", {})).toBe("v");
-    expect(await resolveHeaderEntry("", {})).toBeUndefined();
+  it("$env: 命中取值；空串/未设置 → 该头省略（v2 语义）", async () => {
+    const service = makeService({
+      headers: { set: { authorization: "$env:UPSTREAM_KEY", "x-lit": "v" } },
+    });
+    const hit = await buildUpstreamRequest(service, makeReq(), { UPSTREAM_KEY: "sk-1" });
+    expect(hit.headers["authorization"]).toBe("sk-1");
+    const empty = await buildUpstreamRequest(service, makeReq(), { UPSTREAM_KEY: "" });
+    expect(empty.headers["authorization"]).toBeUndefined();
+    expect(empty.headers["x-lit"]).toBe("v");
+    const unset = await buildUpstreamRequest(service, makeReq(), {});
+    expect(unset.headers["authorization"]).toBeUndefined();
   });
 
-  it("内建 env：命中取值；未设置 fail-fast（SecretMissingError，语义收紧）", async () => {
-    const { resolveHeaderEntry } = await import("../../../src/provider/rewrite.ts");
-    const entry = { hook: "authHeader", args: { var: "K" } } as const;
-    expect(await resolveHeaderEntry(entry, { env: { K: "v1" } })).toBe("v1");
-    await expect(resolveHeaderEntry(entry, { env: {} })).rejects.toThrow();
-  });
-
-  it("内建 secret：经注入 secrets 取值；bearer 拼前缀", async () => {
-    const { resolveHeaderEntry } = await import("../../../src/provider/rewrite.ts");
-    expect(
-      await resolveHeaderEntry({ hook: "authHeader", args: { name: "k1" }, bearer: true }, { secrets: (n) => (n === "k1" ? "sk-1" : undefined) }),
-    ).toBe("Bearer sk-1");
-    await expect(resolveHeaderEntry({ hook: "authHeader", args: { name: "ghost" } }, { secrets: () => undefined })).rejects.toThrow();
-  });
-
-  it("内建 file：路径 + 点径（tmp home 隔离）", async () => {
-    const { resolveHeaderEntry } = await import("../../../src/provider/rewrite.ts");
-    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const home = mkdtempSync(join(tmpdir(), "aifly-hv-"));
+  it("$secret: 命中注入完整头值；未命中 -> SecretMissingError（消息不含名字）", async () => {
+    const service = makeService({
+      headers: { set: { authorization: "$secret:openai" } },
+    });
+    const hit = await buildUpstreamRequest(service, makeReq(), {}, (name) =>
+      name === "openai" ? "Bearer sk-lib" : undefined,
+    );
+    expect(hit.headers["authorization"]).toBe("Bearer sk-lib");
     try {
-      writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: { access_token: "t1" } }));
-      const entry = { hook: "authHeader", args: { path: "~/auth.json", jsonPath: ".tokens.access_token" } } as const;
-      expect(await resolveHeaderEntry(entry, { home })).toBe("t1");
-      await expect(
-        resolveHeaderEntry({ hook: "authHeader", args: { path: "~/auth.json", jsonPath: ".tokens.missing" } }, { home }),
-      ).rejects.toThrow();
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-
-  it("自定义脚本（loader 注入）：同步串 / Promise / AsyncIterable 订阅动态更新", async () => {
-    const { resolveHeaderEntry } = await import("../../../src/provider/rewrite.ts");
-    const mods: Record<string, Record<string, unknown>> = {
-      s: { authHeader: () => "sync-v" },
-      p: { authHeader: async () => "promise-v" },
-    };
-    expect(await resolveHeaderEntry({ hook: "authHeader" }, { script: "s", loader: loaderOf(mods) })).toBe("sync-v");
-    expect(await resolveHeaderEntry({ hook: "authHeader" }, { script: "p", loader: loaderOf(mods) })).toBe("promise-v");
-    // AsyncIterable 订阅：首请求等待首个 yield；后续 push 动态更新 latest（零重启）
-    const queue: string[] = ["tok-1"];
-    let resolver: (() => void) | undefined;
-    const push = (v: string): void => {
-      queue.push(v);
-      resolver?.();
-      resolver = undefined;
-    };
-    const stream: AsyncIterable<string> = {
-      [Symbol.asyncIterator]: () => ({
-        next: async () => {
-          if (queue.length === 0) {
-            await new Promise<void>((r) => {
-              resolver = r;
-            });
-          }
-          return { value: queue.shift()!, done: false };
-        },
-        return: async () => ({ value: undefined, done: true }),
-      }),
-    };
-    const w = { authHeader: () => stream } as unknown as Record<string, unknown>;
-    expect(await resolveHeaderEntry({ hook: "authHeader" }, { script: "w", loader: loaderOf({ w }) })).toBe("tok-1");
-    push("tok-2");
-    await new Promise((r) => setTimeout(r, 20));
-    expect(await resolveHeaderEntry({ hook: "authHeader" }, { script: "w", loader: loaderOf({ w }) })).toBe("tok-2");
-    push("tok-3");
-    await new Promise((r) => setTimeout(r, 20));
-    expect(await resolveHeaderEntry({ hook: "authHeader", bearer: true }, { script: "w", loader: loaderOf({ w }) })).toBe("Bearer tok-3");
-  });
-
-  it("脚本/函数缺席、调用抛错 -> SecretMissingError（不泄脚本名与值）", async () => {
-    const { resolveHeaderEntry } = await import("../../../src/provider/rewrite.ts");
-    const bad = loaderOf({ e: { other: () => "x" }, t: { authHeader: () => { throw new Error("boom"); } } });
-    await expect(resolveHeaderEntry({ hook: "authHeader" }, { script: "e", loader: bad })).rejects.toThrow();
-    try {
-      await resolveHeaderEntry({ hook: "authHeader" }, { script: "t", loader: bad });
+      await buildUpstreamRequest(service, makeReq(), {}, () => undefined);
       expect.unreachable();
     } catch (err) {
-      expect((err as Error).message).not.toContain("boom");
+      expect(err).toBeInstanceOf(SecretMissingError);
+      expect((err as Error).message).not.toContain("openai");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hooks-lifecycle 4.1：生命周期头链固定顺序（①auth → remove → set → ②脚本 → 防护再过滤）
+// ---------------------------------------------------------------------------
+
+const loaderOf = (mods: Record<string, Record<string, unknown>>) =>
+  (name: string): Record<string, unknown> | undefined => mods[name];
+
+describe("① auth 槽注入（三族 + bearer 单源）", () => {
+  it("{secret}：密钥库原样值；bearer 默认拼（已带 Bearer 不重复）；bearer:false 原样；缺失 -> SecretMissingError", async () => {
+    const secrets = (name: string): string | undefined => (name === "lib" ? "sk-raw" : undefined);
+    const bare = await buildUpstreamRequest(
+      makeService({ auth: { secret: "lib" } }),
+      makeReq(),
+      {},
+      secrets,
+    );
+    expect(bare.headers["authorization"]).toBe("Bearer sk-raw");
+    const prefilled = await buildUpstreamRequest(
+      makeService({ auth: { secret: "lib", bearer: true } }),
+      makeReq(),
+      {},
+      (name) => (name === "lib" ? "Bearer sk-raw" : undefined),
+    );
+    expect(prefilled.headers["authorization"]).toBe("Bearer sk-raw");
+    const off = await buildUpstreamRequest(
+      makeService({ auth: { secret: "lib", bearer: false } }),
+      makeReq(),
+      {},
+      secrets,
+    );
+    expect(off.headers["authorization"]).toBe("sk-raw");
+    await expect(
+      buildUpstreamRequest(makeService({ auth: { secret: "ghost" } }), makeReq(), {}, secrets),
+    ).rejects.toBeInstanceOf(SecretMissingError);
+  });
+
+  it("{script}：resolveStageAuth 裸值 + bearer 拼；ctx 携 method/path/headers；失效 -> HookMissingError", async () => {
+    let seen: Record<string, unknown> = {};
+    const mods = {
+      a: {
+        onRequestBearerAuthentication: (ctx: Record<string, unknown>) => {
+          seen = ctx;
+          return "tok-1";
+        },
+      },
+      broken: { onRequestBearerAuthentication: () => { throw new Error("x"); } },
+    };
+    const loader = loaderOf(mods);
+    const plan = await buildUpstreamRequest(
+      makeService({ auth: { script: "a" } }),
+      makeReq({ headers: { "x-keep": "k" } }),
+      {},
+      undefined,
+      { loader },
+    );
+    expect(plan.headers["authorization"]).toBe("Bearer tok-1");
+    expect(seen.method).toBe("POST");
+    expect(seen.path).toBe("/v1/chat");
+    expect(seen.headers).toEqual({ "x-keep": "k" }); // 入站剥离后的当前头态
+    await expect(
+      buildUpstreamRequest(makeService({ auth: { script: "broken" } }), makeReq(), {}, undefined, { loader }),
+    ).rejects.toBeInstanceOf(HookMissingError);
+  });
+
+  it("{literal}：原样 / $env:（空=省略）/ $secret:（缺失 -> SecretMissingError）；bearer 同规则", async () => {
+    const lit = await buildUpstreamRequest(
+      makeService({ auth: { literal: "tok-lit", bearer: false } }),
+      makeReq(),
+      {},
+    );
+    expect(lit.headers["authorization"]).toBe("tok-lit");
+    const env = await buildUpstreamRequest(
+      makeService({ auth: { literal: "$env:AUTH_KEY" } }),
+      makeReq(),
+      { AUTH_KEY: "env-tok" },
+    );
+    expect(env.headers["authorization"]).toBe("Bearer env-tok");
+    const envEmpty = await buildUpstreamRequest(
+      makeService({ auth: { literal: "$env:AUTH_KEY" } }),
+      makeReq(),
+      { AUTH_KEY: "" },
+    );
+    expect(envEmpty.headers["authorization"]).toBeUndefined(); // $env 空 = 省略该头
+    await expect(
+      buildUpstreamRequest(makeService({ auth: { literal: "$secret:nope" } }), makeReq(), {}, () => undefined),
+    ).rejects.toBeInstanceOf(SecretMissingError);
+  });
+});
+
+describe("头链固定顺序与 ② 脚本增量", () => {
+  it("顺序：①auth 注入可被声明 remove 移除、被声明 set 覆盖；②脚本 remove 后 set（脚本胜）", async () => {
+    const mods = { s: { onRequestHeaders: () => ({ set: { "X-A": "script" }, remove: ["x-declared"] }) } };
+    const service = makeService({
+      auth: { literal: "auth-tok", bearer: false },
+      headers: {
+        remove: ["authorization"], // 声明 remove 移除 ① 注入的 authorization
+        set: { "x-a": "declared", "x-declared": "will-be-script-removed" },
+        script: { name: "s" },
+      },
+    });
+    const plan = await buildUpstreamRequest(service, makeReq({ headers: { "x-frame": "f" } }), {}, undefined, {
+      loader: loaderOf(mods),
+    });
+    expect(plan.headers["authorization"]).toBeUndefined(); // ① 被 remove 移除
+    expect(plan.headers["x-a"]).toBe("script"); // 脚本胜过声明 set
+    expect(plan.headers["x-declared"]).toBeUndefined(); // 脚本 remove 对声明 set 生效
+    expect(plan.headers["x-frame"]).toBe("f"); // 帧内头存活
+  });
+
+  it("② 脚本 ctx 携带管线当前头态（含 ① 注入与声明 set 的结果）", async () => {
+    let seen: Record<string, unknown> = {};
+    const mods = {
+      s: {
+        onRequestHeaders: (ctx: Record<string, unknown>) => {
+          seen = ctx;
+          return {};
+        },
+      },
+    };
+    await buildUpstreamRequest(
+      makeService({
+        auth: { literal: "tok" },
+        headers: { set: { "x-decl": "d" }, script: { name: "s" } },
+      }),
+      makeReq({ headers: { "x-keep": "k" } }),
+      {},
+      undefined,
+      { loader: loaderOf(mods) },
+    );
+    expect(seen.method).toBe("POST");
+    expect(seen.headers).toEqual({
+      "x-keep": "k",
+      authorization: "Bearer tok",
+      "x-decl": "d",
+    });
+  });
+
+  it("防护头再过滤：脚本/声明引入的 host/hop-by-hop/content-length 一律剥离；authorization 存活", async () => {
+    const mods = {
+      s: {
+        onRequestHeaders: () => ({
+          set: { host: "evil.example", connection: "keep-alive", "content-length": "999", "x-ok": "1" },
+        }),
+      },
+    };
+    const service = makeService({
+      auth: { literal: "tok" },
+      headers: { set: { "transfer-encoding": "chunked" }, script: { name: "s" } },
+    });
+    const plan = await buildUpstreamRequest(service, makeReq(), {}, undefined, { loader: loaderOf(mods) });
+    expect(plan.headers["host"]).toBeUndefined();
+    expect(plan.headers["connection"]).toBeUndefined();
+    expect(plan.headers["content-length"]).toBeUndefined();
+    expect(plan.headers["transfer-encoding"]).toBeUndefined();
+    expect(plan.headers["x-ok"]).toBe("1");
+    expect(plan.headers["authorization"]).toBe("Bearer tok"); // ① 产物不受防护再过滤影响
+  });
+
+  it("② 脚本失效（缺席/抛错/形状非法）-> HookStageError（上游映射 hook_failed）", async () => {
+    const mods = {
+      absent: { other: () => "x" },
+      throws: { onRequestHeaders: () => { throw new Error("boom"); } },
+      badShape: { onRequestHeaders: () => "not-an-object" },
+    };
+    const loader = loaderOf(mods);
+    for (const name of ["absent", "throws", "badShape"]) {
+      await expect(
+        buildUpstreamRequest(
+          makeService({ headers: { script: { name } } }),
+          makeReq(),
+          {},
+          undefined,
+          { loader },
+        ),
+      ).rejects.toBeInstanceOf(HookStageError);
     }
   });
 });

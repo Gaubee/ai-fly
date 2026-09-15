@@ -1,16 +1,25 @@
 // 上游请求构造：REQ 帧 -> 最终上游 URL + 转发头集 + Host 值。
-// 正交意图（本文件不实现）：
-// - 网络转发（upstream.ts / ws-upstream.ts）；本文件只做纯构造与断言，零 IO；
+// hooks-lifecycle v2 管线化（任务 4.1；顺序冻结见 proposal「onRequestHeaders
+// 顺序冻结」）：头链固定顺序 = 入站剥离（DEFENSIVE_STRIP）→ ① auth 值注入
+// （service.auth 三族：secret 经密钥库 / script 走 resolveStageAuth / literal
+// 间接引用；bearer 开关拼 Bearer 前缀且已带不重复）→ headers.remove（声明）
+// → headers.set（声明，字面量 $env:/$secret: 间接引用）→ ② 整段脚本增量
+// （resolveStageHeaders，脚本 remove 后 set、脚本胜）→ 防护头再过滤
+// （host/hop-by-hop/content-length 规则重放；contentType 折叠规则沿用）。
+// 同名头 last-wins（字典语义）。WS 路径共享本 plan——①② 对 WS 生效。
+// 本文件其余职责不变：
+// - 纯构造与断言，零网络 IO（转发在上游模块；①② 脚本调用是宿主 IO，归
+//   hook.ts 契约层）；
 // - SSRF 防线：上游 URL 目标仅来自本地服务配置，帧内任何字段不影响 origin；
 //   拼接规范化后双重断言（origin 一致 + 基础路径前缀），任一不成立抛
 //   RewriteError（protocol_error 语义，调用方回送 ERROR 帧且零上游请求）；
-// - Host 头由服务配置决定（缺省上游 host，rewrite.hostHeader 覆盖），MUST NOT
-//   来自帧内（wire schema 已拒绝 host 头，此处纵深防御同样剥离）；
+// - Host 头由服务配置决定（缺省上游 host，rewrite.host 覆盖），MUST NOT
+//   来自帧内（wire schema 已拒绝 host 头，此处纵深防御同样剥离）。
 // - $env:VAR 每请求解析（空串与未设置同义 -> 该头省略）；解析时机为每请求，
 //   不做启动期缓存（env 可变）。
 // - $secret:<name> 每请求从密钥库解析（SecretSource 注入；未命中抛
 //   SecretMissingError -> secret_missing，不回退空值、不带引用名出网）；与
-//   $env 可并存于不同头。
+//   $env 可并存于不同头。密钥值为原样字符串（Bearer 前缀只由 auth.bearer 拼）。
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -20,14 +29,15 @@ import { FORBIDDEN_REQ_HEADER_NAMES } from "../wire/frames.ts";
 import type { ReqHeader } from "../wire/frames.ts";
 import { routeLocalPrefix } from "../shared/rpc-contract.ts";
 import { compileMatchPattern, matchRequestPath } from "./match-pattern.ts";
-import { resolveHookValue, type HeaderValue } from "./hook.ts";
 import { expandUriTemplate } from "./uri-template.ts";
 import { parseUpstreamUrl } from "./store.ts";
 import type { ServiceConfig } from "./store.ts";
+import { resolveStageAuth, resolveStageHeaders } from "./hook.ts";
+import type { AuthSlot } from "./lifecycle.ts";
 
-import { SECRET_REF_PREFIX } from "./detail.ts";
+import { ENV_REF_PREFIX, SECRET_REF_PREFIX } from "./lifecycle.ts";
 
-export { ENV_REF_PREFIX, SECRET_REF_PREFIX, isEnvRef, isSecretRef } from "./detail.ts";
+export { ENV_REF_PREFIX, SECRET_REF_PREFIX, isEnvRef, isSecretRef } from "./lifecycle.ts";
 
 /** 拼接/断言失败（protocol_error 语义）。 */
 export class RewriteError extends Error {
@@ -73,12 +83,66 @@ export type FileCredentialSource = (path: string, jsonPath: string) => string | 
 export interface UpstreamPlan {
   /** 最终上游 URL（已过双重断言；含查询串）。 */
   url: URL;
-  /** 经 headerRemove/headerSet 链处理后的帧内头集（凭据类纵深剥离；含 contentType 折叠）。 */
+  /** 经生命周期头链（剥离→①auth→remove→set→②脚本增量→防护再过滤）后的出站头集。 */
   headers: Record<string, string>;
   /** Host 头值（服务配置决定）。 */
   host: string;
   /** 请求是否携带 WS 升级握手头（分流到 ws-upstream）。 */
   isWebSocketUpgrade: boolean;
+}
+
+/** ①② 脚本阶段的加载面（home 基准 + 测试注入缝；缺省真实加载用户/内建库）。 */
+export interface LifecycleHookOptions {
+  home?: string | undefined;
+  loader?: ((name: string, home: string) => Record<string, unknown> | undefined) | undefined;
+}
+
+/** Bearer 前缀拼接（auth 槽 bearer 唯一来源；默认 true；已带 Bearer 不重复）。 */
+export function applyBearerPrefix(value: string, bearer: boolean | undefined): string {
+  if (bearer === false) return value;
+  return /^Bearer\s/i.test(value) ? value : `Bearer ${value}`;
+}
+
+/**
+ * ① auth 槽取值（三族单选）：secret → 密钥库原样值（未命中/空 →
+ * SecretMissingError，secret_missing 族）；script → resolveStageAuth 三态契约
+ * （失效抛 HookMissingError，secret_missing 族）；literal → $env:/$secret:
+ * 间接引用解析（$env 空串/未设置 → undefined = 省略该头；$secret 未命中 →
+ * SecretMissingError）。返回值已按 bearer 开关拼前缀。
+ */
+export async function resolveAuthSlotValue(
+  auth: AuthSlot,
+  ctx: {
+    method: string;
+    path: string;
+    headers: Record<string, string>;
+    env?: EnvSource | undefined;
+    secrets?: SecretSource | undefined;
+  } & LifecycleHookOptions,
+): Promise<string | undefined> {
+  let value: string | undefined;
+  if ("secret" in auth) {
+    value = ctx.secrets?.(auth.secret);
+    if (value === undefined || value === "") throw new SecretMissingError();
+  } else if ("script" in auth) {
+    value = await resolveStageAuth(
+      { script: auth.script, ...(auth.args !== undefined ? { args: auth.args } : {}) },
+      {
+        request: { method: ctx.method, path: ctx.path, headers: ctx.headers },
+        ...(ctx.secrets !== undefined ? { secrets: (n) => ctx.secrets!(n) } : {}),
+        ...(ctx.env !== undefined ? { env: (n) => ctx.env![n] } : {}),
+        ...(ctx.home !== undefined ? { home: ctx.home } : {}),
+        ...(ctx.loader !== undefined ? { loader: ctx.loader } : {}),
+      },
+    );
+  } else {
+    value = resolveLiteralHeaderValue(auth.literal, {
+      ...(ctx.env !== undefined ? { env: ctx.env } : {}),
+      ...(ctx.secrets !== undefined ? { secrets: ctx.secrets } : {}),
+    });
+    if (value === undefined) return undefined; // $env 空/未设置：省略 authorization
+  }
+  return applyBearerPrefix(value, auth.bearer);
 }
 
 // ---------------------------------------------------------------------------
@@ -202,66 +266,43 @@ export const defaultFileCredentialSource: FileCredentialSource = (path, jsonPath
 };
 
 /**
- * 头值解析（两协议，Owner 裁决 2026-09-12 最终形态）：
- * - string 字面量：原样（空串 = 省略该头）
- * - 对象 = 钩子调用：{ hook: <函数名>, args?, bearer? }——脚本取
- *   ctx.script（service.hooks），缺席时按 args 形态推导内建
- *   （var→env / name→secret / path→file）；经 resolveHookValue 三态取值
- *   （string/Promise 每请求拉取；AsyncIterable 订阅 latest）；bearer 拼
- *   前缀。未命中抛 SecretMissingError（零上游请求；不泄脚本路径与值）。
+ * headers.set 字面量值解析（hooks-lifecycle v2 最小平移；正式管线顺序归 4.1）：
+ * - `$env:<VAR>`：每请求解析（空串/未设置 → 该头省略）；
+ * - `$secret:<name>`：每请求从密钥库解析（未命中 → SecretMissingError =
+ *   secret_missing，不回退空值、不带引用名出网）；
+ * - 其余字面量原样（空串 = 省略该头）。
+ * v1 的逐头钩子对象协议（{hook, args?, bearer?}）已随 rewrite 头字段退役；
+ * 动态值改走 ② 整段脚本（onRequestHeaders）或 ① auth 槽。
  */
-export async function resolveHeaderEntry(
-  entry: HeaderValue,
-  ctx: {
-    script?: string | undefined;
-    env?: EnvSource;
-    secrets?: SecretSource | undefined;
-    home?: string;
-    loader?: (name: string, home: string) => Record<string, unknown> | undefined;
-  },
-): Promise<string | undefined> {
-  if (typeof entry === "string") return entry === "" ? undefined : entry;
-  const args = entry.args ?? {};
-  let script = ctx.script;
-  if (script === undefined || script === "") {
-    if (args.var !== undefined) script = "env";
-    else if (args.name !== undefined) script = "secret";
-    else if (args.path !== undefined) script = "file";
-    else throw new SecretMissingError();
+export function resolveLiteralHeaderValue(
+  value: string,
+  ctx: { env?: EnvSource; secrets?: SecretSource | undefined },
+): string | undefined {
+  if (value === "") return undefined;
+  if (value.startsWith(ENV_REF_PREFIX)) {
+    const resolved = ctx.env?.[value.slice(ENV_REF_PREFIX.length)];
+    return resolved === undefined || resolved === "" ? undefined : resolved;
   }
-  let raw: string;
-  try {
-    raw = await resolveHookValue(
-      entry.hook,
-      {
-        script,
-        ...(ctx.home !== undefined ? { home: ctx.home } : {}),
-        ...(Object.keys(args).length > 0 ? { args } : {}),
-        ...(ctx.secrets !== undefined ? { secrets: ctx.secrets } : {}),
-        ...(ctx.env !== undefined ? { env: (n: string) => ctx.env?.[n] } : {}),
-        ...(ctx.loader !== undefined ? { loader: ctx.loader } : {}),
-      },
-    );
-  } catch {
-    throw new SecretMissingError();
+  if (value.startsWith(SECRET_REF_PREFIX)) {
+    const resolved = ctx.secrets?.(value.slice(SECRET_REF_PREFIX.length));
+    if (resolved === undefined || resolved === "") throw new SecretMissingError();
+    return resolved;
   }
-  return entry.bearer === true ? `Bearer ${raw}` : raw;
+  return value;
 }
 
-/** 服务声明的 env 钩子变量名（启动横幅 WARNING 用：声明而未设置）。 */
+/** 服务声明的 $env 变量名（启动横幅 WARNING 用：声明而未设置）。v2 来源 =
+ *  headers.set 与 auth.literal 的 `$env:` 引用值。 */
 export function collectEnvVarNames(service: ServiceConfig): string[] {
   const names = new Set<string>();
-  const headerSet = service.rewrite?.headerSet;
-  if (headerSet === undefined) return [];
-  for (const entry of Object.values(headerSet)) {
-    if (
-      typeof entry === "object" &&
-      entry.args?.var !== undefined &&
-      (service.hooks === undefined || service.hooks === "env")
-    ) {
-      names.add(entry.args.var);
+  const collect = (value: string | undefined): void => {
+    if (value !== undefined && value.startsWith(ENV_REF_PREFIX)) {
+      const name = value.slice(ENV_REF_PREFIX.length);
+      if (name !== "") names.add(name);
     }
-  }
+  };
+  for (const value of Object.values(service.headers?.set ?? {})) collect(value);
+  if (service.auth !== undefined && "literal" in service.auth) collect(service.auth.literal);
   return [...names];
 }
 
@@ -282,6 +323,13 @@ const DEFENSIVE_STRIP = new Set<string>([
   ...HOP_BY_HOP_HEADER_NAMES,
   "content-length",
 ]);
+
+/**
+ * 防护头再过滤集（头链末段重放）：host（服务配置决定，绝不出自头链产物）、
+ * hop-by-hop、content-length（fetch/上游自管分帧）。注意不含 authorization——
+ * ① auth 注入的产物必须存活到出站。
+ */
+const GUARD_STRIP = new Set<string>([...HOP_BY_HOP_HEADER_NAMES, "host", "content-length"]);
 
 // ---------------------------------------------------------------------------
 // 路径处理
@@ -378,6 +426,7 @@ export async function buildUpstreamRequest(
   req: ReqHeader,
   env: EnvSource = process.env,
   secrets?: SecretSource | undefined,
+  hooks?: LifecycleHookOptions | undefined,
 ): Promise<UpstreamPlan> {
   const upstream = parseUpstreamUrl(service.upstream);
 
@@ -456,31 +505,76 @@ export async function buildUpstreamRequest(
     throw new RewriteError("upstream base path prefix assertion failed");
   }
 
-  // 3) 头链：帧内头（凭据/hop-by-hop 纵深剥离）-> headerRemove -> headerSet($secret/$env)。
+  // 3) 头链（hooks-lifecycle 固定顺序）：入站剥离（DEFENSIVE_STRIP）→ ① auth
+  //    值注入（三族 + bearer 单源）→ headers.remove（声明）→ headers.set（声明，
+  //    字面量 $secret/$env 间接引用）→ ② 整段脚本增量（脚本 remove 后 set，
+  //    脚本胜）→ 防护头再过滤（host/hop-by-hop/content-length 重放）。同名头
+  //    last-wins（字典语义）；①② 脚本 ctx 携请求级 method/path/headers。
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(req.headers ?? {})) {
     if (DEFENSIVE_STRIP.has(name)) continue;
     headers[name] = value;
   }
+  // contentType 折叠（沿用：帧内独立字段 → content-type 头；后续 remove/set/
+  // 脚本增量可覆盖或移除）。
   if (req.contentType !== undefined && req.contentType !== "") {
     headers["content-type"] = req.contentType;
   }
-  for (const name of service.rewrite?.headerRemove ?? []) {
+  // ① auth 值注入（secret_missing 族失效在此抛出：零上游请求）。
+  if (service.auth !== undefined) {
+    const authValue = await resolveAuthSlotValue(service.auth, {
+      method: req.method,
+      path: req.path,
+      headers: { ...headers },
+      env,
+      secrets,
+      ...(hooks?.home !== undefined ? { home: hooks.home } : {}),
+      ...(hooks?.loader !== undefined ? { loader: hooks.loader } : {}),
+    });
+    if (authValue !== undefined) headers["authorization"] = authValue;
+  }
+  for (const name of service.headers?.remove ?? []) {
     delete headers[name];
   }
-  const headerSet = service.rewrite?.headerSet;
+  const headerSet = service.headers?.set;
   if (headerSet !== undefined) {
     for (const [name, value] of Object.entries(headerSet)) {
       // $secret 未命中在此抛 SecretMissingError（上游 catch 映射 secret_missing）；
       // $env 空串/未设置 = 省略。
-      const resolved = await resolveHeaderEntry(value, { script: service.hooks, env, secrets });
+      const resolved = resolveLiteralHeaderValue(value, { env, secrets });
       if (resolved === undefined) continue;
       headers[name] = resolved;
     }
   }
+  // ② 整段脚本增量（绑定声明但导出缺失/抛错/形状非法 → HookStageError，
+  // 上游 catch 映射 hook_failed）；脚本 remove 后 set——脚本胜。
+  const headersScript = service.headers?.script;
+  if (headersScript !== undefined) {
+    const increment = await resolveStageHeaders(
+      { name: headersScript.name, ...(headersScript.args !== undefined ? { args: headersScript.args } : {}) },
+      { method: req.method, path: req.path, headers: { ...headers } },
+      {
+        ...(secrets !== undefined ? { secrets } : {}),
+        ...(env !== undefined ? { env: (n) => env[n] } : {}),
+        ...(hooks?.home !== undefined ? { home: hooks.home } : {}),
+        ...(hooks?.loader !== undefined ? { loader: hooks.loader } : {}),
+      },
+    );
+    for (const name of increment.remove ?? []) {
+      delete headers[name.toLowerCase()];
+    }
+    for (const [name, value] of Object.entries(increment.set ?? {})) {
+      headers[name.toLowerCase()] = value;
+    }
+  }
+  // 防护头再过滤：任何链段（声明 set/脚本增量）都不得引入 host/hop-by-hop/
+  // content-length（规则重放；authorization 不在此列——① 的产物存活）。
+  for (const name of Object.keys(headers)) {
+    if (GUARD_STRIP.has(name)) delete headers[name];
+  }
 
   // 4) Host：缺省上游 host（URL.host 已按缺省端口省略端口），rewrite 覆盖。
-  const host = service.rewrite?.hostHeader ?? upstream.host;
+  const host = service.rewrite?.host ?? upstream.host;
 
   return { url, headers, host, isWebSocketUpgrade: isWebSocketUpgradeRequest(req.headers ?? {}) };
 }

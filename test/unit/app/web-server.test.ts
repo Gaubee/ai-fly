@@ -216,31 +216,36 @@ describe("orpc over ws", () => {
     const settings = await client.system.settings.get({});
     expect(settings.theme).toBe("dark");
 
-    // 预设 → 服务（展开走 services.add 同一校验路径）
+    // 预设 → 服务（展开走 services.add 同一校验路径；hooks-lifecycle v2：keyEnv
+    // → auth.literal 的 $env 间接引用）
     const applied = await client.presets.applyAsService({ presetId: "openai" });
     expect(applied.service.name).toBe("openai");
     // M3-r4：openai 预设 base 去掉 /v1（路由模型接管版本段），href 规范化带尾斜杠
     expect(applied.service.upstream).toBe("https://api.openai.com/");
     expect(applied.service.defaultPort).toBe(4300);
     expect(applied.service.match).toEqual([{ type: "suffix", value: "api.openai.com" }]);
-    expect(applied.service.rewrite).toEqual({
-      headerSet: { authorization: { hook: "authHeader", args: { var: "OPENAI_API_KEY" } } },
-    });
+    expect(applied.service.auth).toEqual({ literal: "$env:OPENAI_API_KEY" });
+    expect(applied.service.rewrite).toBeUndefined();
     expect(applied.service.routes).toEqual([
       { forms: ["openai-chat", "openai-responses"], localPrefix: "/v1", upstreamPrefix: "/v1" },
     ]);
     expect(applied.envHint).toContain("OPENAI_API_KEY");
 
-    // secretName 优先于 keyEnv：rewrite 写 $secret:<name>，不给 envHint
+    // secretName 优先于 keyEnv：auth 落 secret 引用，不给 envHint
     const viaSecret = await client.presets.applyAsService({
       presetId: "openai",
       name: "openai-via-secret",
       secretName: "openai-main",
     });
-    expect(viaSecret.service.rewrite).toEqual({
-      headerSet: { authorization: { hook: "authHeader", args: { name: "openai-main" } } },
-    });
+    expect(viaSecret.service.auth).toEqual({ secret: "openai-main" });
     expect(viaSecret.envHint).toBeUndefined();
+
+    // codex 预设：preset.auth {script, bearer} 原样透传为 v2 auth 槽
+    // （hooks-lifecycle 6.3：authHeader 退役，直吐 v2；无 keyEnv 故无 envHint）
+    const viaCodex = await client.presets.applyAsService({ presetId: "codex", name: "codex-main" });
+    expect(viaCodex.service.auth).toEqual({ script: "codex", bearer: true });
+    expect(viaCodex.service.upstream).toBe("https://chatgpt.com/");
+    expect(viaCodex.envHint).toBeUndefined();
 
     // 写手两段式（preview → confirm → apply）
     const writerPreview = await client.writers.preview({ agent: "codex", target: { port: 8787 } });
@@ -278,6 +283,153 @@ describe("orpc over ws", () => {
         match: [{ type: "suffix", value: "api.example.com" }],
       }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
+    ws.close();
+  });
+
+  it("legacy (pre-v2) store face: status exposes legacy, list returns shells, writes rejected, secrets unaffected", async () => {
+    // 预置 v1 services.json（无 version 字段）——engine-host 打开即进入 legacy 态
+    mkdirSync(join(base, "provider"), { recursive: true });
+    writeFileSync(
+      join(base, "provider", "services.json"),
+      JSON.stringify({
+        revision: 3,
+        services: [
+          { serviceId: "old1", name: "stale-alpha", match: [], upstream: "http://127.0.0.1:9001", defaultPort: 29001 },
+          { serviceId: "old2", name: "stale-beta", match: [], upstream: "http://127.0.0.1:9002", defaultPort: 29002 },
+        ],
+        groups: [],
+        keys: [],
+      }),
+    );
+    const { client, ws } = await connectRpcClient();
+
+    const status = await client.provider.status({});
+    expect(status.legacy).toEqual({ serviceNames: ["stale-alpha", "stale-beta"] });
+    expect(status.services).toBe(0); // 空视图计数
+
+    const listed = await client.provider.services.list({});
+    expect(listed.services).toEqual([
+      { name: "stale-alpha", legacy: true },
+      { name: "stale-beta", legacy: true },
+    ]);
+
+    // services/groups/keys 写操作经 store 单点门禁 → INVALID_STATE
+    await expect(
+      client.provider.services.add({
+        name: "new",
+        upstream: "https://api.example.com:8443",
+        match: [{ type: "suffix", value: "api.example.com" }],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_STATE" });
+    await expect(client.provider.groups.add({ name: "g", serviceNames: [] })).rejects.toMatchObject({
+      code: "INVALID_STATE",
+    });
+    await expect(client.provider.keys.issue({ group: "g" })).rejects.toMatchObject({ code: "INVALID_STATE" });
+
+    // share.create 门禁前置（复核 R1-F6）：INVALID_STATE 且不发起 invite——
+    // handler 在 requireProviderDaemon/fabric.invite 之前拒绝，provider daemon
+    // 未运行时同样命中本门禁（若门禁缺失则会以 daemon 缺席类错误先行暴露）。
+    await expect(
+      client.provider.share.create({ group: "g", ttlMs: 60_000 }),
+    ).rejects.toMatchObject({ code: "INVALID_STATE" });
+
+    // secrets.json 为独立文件：不受 legacy 门禁
+    const secret = await client.provider.secrets.set({ name: "kk", value: "sk-xyz" });
+    expect(secret.secret.name).toBe("kk");
+
+    // services.remove 按名可用（legacy 唯一写路径）且名册刷新
+    await client.provider.services.remove({ name: "stale-alpha" });
+    const after = await client.provider.services.list({});
+    expect(after.services).toEqual([{ name: "stale-beta", legacy: true }]);
+    ws.close();
+  });
+
+  it("hooks-lifecycle 5.1/5.2 contract face: hooks.list stages-only, secrets.list exact shape, services.test auth draft", async () => {
+    const { client, ws } = await connectRpcClient();
+
+    // hooks.list：stages-only（codex R6 裁决）——输出无 fns 字段；旧导出名脚本
+    // stages 为空数组仍列出（供管理面提示重写）。
+    const hooks = await client.provider.hooks.list({});
+    expect(hooks.hooks.length).toBeGreaterThan(0);
+    for (const h of hooks.hooks) {
+      expect(Object.keys(h).sort()).toEqual(["name", "source", "stages"]);
+      for (const stage of h.stages) {
+        expect([
+          "onRequestBearerAuthentication",
+          "onRequestHeaders",
+          "onRequest",
+          "onResponse",
+        ]).toContain(stage);
+      }
+    }
+    const anyScript = hooks.hooks[0]!;
+    expect(typeof anyScript.name).toBe("string");
+
+    // secrets.list 精确形状：{secrets:[{name,createdAt,updatedAt}], count}——值与
+    // bearerPrefix 绝不出现；set 输入不再接受 bearerPrefix。
+    await client.provider.secrets.set({ name: "k1", value: "sk-raw" });
+    const secrets = await client.provider.secrets.list({});
+    expect(secrets.count).toBe(1);
+    expect(Object.keys(secrets).sort()).toEqual(["count", "secrets"]);
+    expect(Object.keys(secrets.secrets[0]!).sort()).toEqual(["createdAt", "name", "updatedAt"]);
+    expect(JSON.stringify(secrets)).not.toContain("sk-raw");
+    expect(JSON.stringify(secrets)).not.toContain("bearerPrefix");
+    await expect(
+      // strictObject 输入：bearerPrefix 已退役——传入即校验失败（码面经 orpc 输入
+      // 校验层，非 DomainError 边界；此处只锁「拒绝」事实）
+      client.provider.secrets.set({ name: "k2", value: "v", bearerPrefix: true } as never),
+    ).rejects.toBeTruthy();
+
+    // services.test：auth 槽草稿输入（secret 引用 + bearer 默认拼）。
+    const seenReqs: Array<{ url: string; authorization: string | null }> = [];
+    const upstream = nodeHttp.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c: Buffer) => (body += c.toString()));
+      req.on("end", () => {
+        seenReqs.push({ url: req.url ?? "/", authorization: req.headers.authorization ?? null });
+        if (req.url === "/v1/models") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ data: [{ id: "mock-mini" }] }));
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    try {
+      const upstreamBase = `http://127.0.0.1:${(upstream.address() as import("node:net").AddressInfo).port}`;
+      const ok = await client.provider.services.test({
+        upstream: upstreamBase,
+        auth: { secret: "k1" },
+      });
+      expect(ok.ok).toBe(true);
+      expect(ok.model).toBe("mock-mini"); // /models 探测档
+      const posted = seenReqs.find((r) => r.url === "/v1/chat/completions")!;
+      expect(posted.authorization).toBe("Bearer sk-raw"); // 裸值 + auth 槽默认 bearer
+      // bearer:false 按原样注入
+      const raw = await client.provider.services.test({
+        upstream: upstreamBase,
+        auth: { secret: "k1", bearer: false },
+        model: "mock-mini",
+      });
+      expect(raw.ok).toBe(true);
+      expect(seenReqs.at(-1)!.authorization).toBe("sk-raw");
+      // 草稿引用缺失密钥 → 结果级失败（不抛）
+      const missing = await client.provider.services.test({
+        upstream: upstreamBase,
+        auth: { secret: "ghost" },
+        model: "mock-mini",
+      });
+      expect(missing.ok).toBe(false);
+      expect(missing.error).toBe("secret not found");
+      // secretName 单字段形态已退役：输入校验拒绝
+      await expect(
+        client.provider.services.test({ upstream: upstreamBase, secretName: "k1" } as never),
+      ).rejects.toBeTruthy();
+    } finally {
+      upstream.close();
+    }
     ws.close();
   });
 

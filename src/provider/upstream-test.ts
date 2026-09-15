@@ -1,8 +1,12 @@
 // 上游连通性测试（provider-local）：对「草稿或已存服务形状」（upstream、apiForm、
-// secretName、model?）发一次最小单轮请求，报告 ok/httpStatus/latencyMs/model/request。
+// **auth 槽草稿**（{secret}|{script,args?}|{literal} + bearer 开关）、model?）发
+// 一次最小单轮请求，报告 ok/httpStatus/latencyMs/model/request。
+// hooks-lifecycle 5.2：注入路径改读草稿 auth 槽——secret → 密钥库原样值；
+// script → resolveStageAuth 阶段函数；literal → 原样/$env:/$secret: 间接引用解析；
+// bearer 开关同转发路径（默认拼、已带 Bearer 不重复、关则原样）。不再接受
+// secretName 单字段。
 // 正交意图（本文件不实现）：
-// - 密钥库存取（secrets.ts；本文件只按 secretName resolve 出最终头值——bearerPrefix
-//   默认拼 "Bearer "，Owner 裁决 2026-09-10：密钥值默认是裸 key）；
+// - 密钥库存取（secrets.ts；本文件只按草稿解析出最终注入值）；
 // - 模型清单解析（presets/models-dev.ts；model 缺省时按 upstream 定位 provider
 //   取 priced chat 最低价模型；api.json 不覆盖的自定义上游回退探测 {upstream}/models）；
 // - 转发/限额/fabric（测试 MUST provider-local：不落盘、不计限额、不经 fabric——
@@ -12,6 +16,9 @@
 
 import type { ApiForm } from "../shared/rpc-contract.ts";
 import { deriveModels, findModelsDevProviderKey } from "../../presets/models-dev.ts";
+import { resolveStageAuth, type StageRequestCtx } from "./hook.ts";
+import type { AuthSlot } from "./lifecycle.ts";
+import { applyBearerPrefix, resolveLiteralHeaderValue } from "./rewrite.ts";
 
 /** 密钥读取面（SecretsStore 的结构子集；测试可注入内存假体）。 */
 export interface UpstreamTestSecrets {
@@ -23,12 +30,17 @@ export interface UpstreamTestInput {
   upstream: string;
   /** API 形态（缺省 openai-completions）。 */
   apiForm?: ApiForm | undefined;
-  /** 密钥库名（给定则从 secretsStore resolve 最终头值注入；缺密钥 = 结果级失败）。 */
-  secretName?: string | undefined;
+  /** auth 槽草稿（hooks-lifecycle 5.2：三族单选 + 可选 bearer）。 */
+  auth?: AuthSlot | undefined;
   /** 显式模型（缺省按 modelsRaw 选 priced chat 最低价；再缺则探测 /models）。 */
   model?: string | undefined;
   fetchImpl?: typeof fetch | undefined;
   secretsStore?: UpstreamTestSecrets | undefined;
+  /** literal `$env:` 解析源（缺省 process.env）。 */
+  env?: Record<string, string | undefined> | undefined;
+  /** auth.script 的脚本库 home / 测试加载缝（缺省真实加载）。 */
+  home?: string | undefined;
+  loader?: ((name: string, home: string) => Record<string, unknown> | undefined) | undefined;
   /** api.json 原始文本（models.dev 缓存；模型缺省选择用）。 */
   modelsRaw?: string | undefined;
   /** 整体超时（默认 20s；测试注入小值）。 */
@@ -91,12 +103,56 @@ export function pickDefaultModel(modelsRaw: string | undefined, upstream: string
 }
 
 /**
- * 探测 OpenAI 兼容上游的模型清单（GET {upstream}/models，带密钥）：自定义中转站
- * 不在 models.dev 覆盖内的回退路径。返回 id 列表（尽量挑便宜档：mini/flash/
- * small/lite 优先）；失败返回 undefined（原因不抛出，由调用方组合错误文本）。
+ * 解析 auth 槽草稿为最终注入值（hooks-lifecycle 5.2 注入路径）：
+ * - {secret}：密钥库原样值（未命中/空 → Error("secret not found")，结果级失败）；
+ * - {script}：resolveStageAuth 阶段函数（失效 → HookMissingError 固定脱敏文案）；
+ * - {literal}：原样 / $env:/$secret: 间接引用（$env 空/未设置 → undefined = 不注入；
+ *   $secret 未命中 → Error("secret not found")）。
+ * bearer 开关同转发路径（默认拼 "Bearer "、已带不重复、false 原样）。
+ */
+export async function resolveAuthDraft(
+  auth: AuthSlot,
+  opts: {
+    secretsStore?: UpstreamTestSecrets | undefined;
+    env?: Record<string, string | undefined> | undefined;
+    home?: string | undefined;
+    loader?: ((name: string, home: string) => Record<string, unknown> | undefined) | undefined;
+    request?: StageRequestCtx | undefined;
+  },
+): Promise<string | undefined> {
+  const secrets = (name: string): string | undefined => opts.secretsStore?.resolve(name)?.headerValue;
+  let value: string | undefined;
+  if ("secret" in auth) {
+    value = secrets(auth.secret);
+    if (value === undefined || value === "") throw new Error("secret not found");
+  } else if ("script" in auth) {
+    value = await resolveStageAuth(
+      { script: auth.script, ...(auth.args !== undefined ? { args: auth.args } : {}) },
+      {
+        ...(opts.request !== undefined ? { request: opts.request } : {}),
+        secrets,
+        env: (n) => opts.env?.[n] ?? process.env[n],
+        ...(opts.home !== undefined ? { home: opts.home } : {}),
+        ...(opts.loader !== undefined ? { loader: opts.loader } : {}),
+      },
+    );
+  } else {
+    value = resolveLiteralHeaderValue(auth.literal, { env: opts.env ?? process.env, secrets });
+    if (value === undefined) return undefined; // $env 空/未设置：不注入
+  }
+  return applyBearerPrefix(value, auth.bearer);
+}
+
+/**
+ * 探测 OpenAI 兼容上游的模型清单（GET {upstream}/models，带凭据）：自定义中转站
+ * 不在 models.dev 覆盖内的回退路径。凭据二选一：authorization（草稿解析后的最终
+ * 头值——连通测试路径）；secretName + secretsStore（presets.models 路径：密钥库
+ * 原样值 + 默认 Bearer 规则）。返回 id 列表（尽量挑便宜档：mini/flash/small/lite
+ * 优先）；失败返回 undefined（原因不抛出，由调用方组合错误文本）。
  */
 export async function probeUpstreamModels(input: {
   upstream: string;
+  authorization?: string | undefined;
   secretName?: string | undefined;
   secretsStore?: UpstreamTestSecrets | undefined;
   fetchImpl?: typeof fetch | undefined;
@@ -104,10 +160,12 @@ export async function probeUpstreamModels(input: {
 }): Promise<string[] | undefined> {
   const fetchFn = input.fetchImpl ?? fetch;
   const headers: Record<string, string> = { accept: "application/json" };
-  if (input.secretName !== undefined) {
-    const resolved = input.secretsStore?.resolve(input.secretName);
+  if (input.authorization !== undefined) {
+    headers.authorization = input.authorization;
+  } else if (input.secretName !== undefined) {
+    const resolved = input.secretsStore?.resolve(input.secretName)?.headerValue;
     if (resolved === undefined) return undefined;
-    headers.authorization = resolved.headerValue;
+    headers.authorization = applyBearerPrefix(resolved, true);
   }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
@@ -148,17 +206,12 @@ export async function probeUpstreamModels(input: {
 export async function testUpstream(input: UpstreamTestInput): Promise<UpstreamTestResult> {
   const fetchFn = input.fetchImpl ?? fetch;
   const now = input.now ?? Date.now;
+  const apiForm = input.apiForm ?? "openai-completions";
+  const base = trimTrailingSlash(input.upstream);
 
-  // 1) 密钥解析（bearerPrefix 语义在 resolve 内）：缺失/空值 = 结果级失败（不抛、零网络）。
-  let secretValue: string | undefined;
-  if (input.secretName !== undefined) {
-    secretValue = input.secretsStore?.resolve(input.secretName)?.headerValue;
-    if (secretValue === undefined || secretValue === "") {
-      return { ok: false, latencyMs: 0, model: input.model ?? "", error: "secret not found" };
-    }
-  }
-
-  // 2) 模型：显式 > models.dev 缓存（priced chat 最低价）> 上游 /models 探测（便宜档启发式）。
+  // 1) 模型预解析（显式 > models.dev 缓存——两步零网络，先于 auth：gemini 形态
+  //    请求路径内嵌 model，请求级 ctx 需要它才能给出真实形状；/models 探测
+  //    回退依赖凭据，置于 auth 之后）。
   let model = input.model;
   let modelSource: UpstreamTestResult["modelSource"];
   if (model !== undefined) {
@@ -168,18 +221,51 @@ export async function testUpstream(input: UpstreamTestInput): Promise<UpstreamTe
     if (fromCache !== undefined) {
       model = fromCache;
       modelSource = "models.dev";
-    } else {
-      const probed = await probeUpstreamModels({
-        upstream: input.upstream,
-        secretName: input.secretName,
-        secretsStore: input.secretsStore,
-        fetchImpl: fetchFn,
-        timeoutMs: input.timeoutMs,
+    }
+  }
+
+  // 2) auth 草稿解析（secret/script/literal + bearer）：失效 = 结果级失败
+  //    （不抛、零网络；消息脱敏——HookMissingError 固定文案/不含密钥名与值）。
+  //    script 族请求级 ctx 与转发路径（rewrite）同契约：POST + 表单路径 +
+  //    content-type（model 未知时 gemini 取其静态前缀——探测尚未发生）。
+  let authValue: string | undefined;
+  if (input.auth !== undefined) {
+    const requestPath =
+      apiForm === "openai-completions"
+        ? `${endsWithVersionSegment(base) ? "/chat/completions" : "/v1/chat/completions"}`
+        : apiForm === "openai-responses"
+          ? `${endsWithVersionSegment(base) ? "/responses" : "/v1/responses"}`
+          : apiForm === "anthropic-messages"
+            ? `${endsWithVersionSegment(base) ? "/messages" : "/v1/messages"}`
+            : model !== undefined
+              ? `${endsWithVersionSegment(base) ? "/models" : "/v1beta/models"}/${encodeURIComponent(model)}:generateContent`
+              : endsWithVersionSegment(base)
+                ? "/models"
+                : "/v1beta/models";
+    try {
+      authValue = await resolveAuthDraft(input.auth, {
+        ...(input.secretsStore !== undefined ? { secretsStore: input.secretsStore } : {}),
+        ...(input.env !== undefined ? { env: input.env } : {}),
+        ...(input.home !== undefined ? { home: input.home } : {}),
+        ...(input.loader !== undefined ? { loader: input.loader } : {}),
+        request: { method: "POST", path: requestPath, headers: { "content-type": "application/json" } },
       });
-      if (probed !== undefined && probed.length > 0) {
-        model = probed[0]!;
-        modelSource = "upstream-probe";
-      }
+    } catch (err) {
+      return { ok: false, latencyMs: 0, model: input.model ?? "", error: (err as Error).message };
+    }
+  }
+
+  // 3) 模型探测回退（models.dev 不覆盖的自定义上游：GET {upstream}/models 带凭据）。
+  if (model === undefined) {
+    const probed = await probeUpstreamModels({
+      upstream: input.upstream,
+      ...(authValue !== undefined ? { authorization: authValue } : {}),
+      fetchImpl: fetchFn,
+      timeoutMs: input.timeoutMs,
+    });
+    if (probed !== undefined && probed.length > 0) {
+      model = probed[0]!;
+      modelSource = "upstream-probe";
     }
     if (model === undefined) {
       return {
@@ -192,9 +278,7 @@ export async function testUpstream(input: UpstreamTestInput): Promise<UpstreamTe
     }
   }
 
-  // 3) 按 apiForm 构造最小请求（单轮 "ping"、最小 max tokens、JSON 正文）。
-  const apiForm = input.apiForm ?? "openai-completions";
-  const base = trimTrailingSlash(input.upstream);
+  // 4) 按 apiForm 构造最小请求（单轮 "ping"、最小 max tokens、JSON 正文）。
   const headers: Record<string, string> = { "content-type": "application/json" };
   let url: string;
   let body: string;
@@ -206,26 +290,28 @@ export async function testUpstream(input: UpstreamTestInput): Promise<UpstreamTe
       max_tokens: 1,
       stream: false,
     });
-    if (secretValue !== undefined) headers.authorization = secretValue;
+    if (authValue !== undefined) headers.authorization = authValue;
   } else if (apiForm === "openai-responses") {
     url = `${base}${endsWithVersionSegment(base) ? "/responses" : "/v1/responses"}`;
     body = JSON.stringify({ model, input: "ping", max_output_tokens: 1, stream: false });
-    if (secretValue !== undefined) headers.authorization = secretValue;
+    if (authValue !== undefined) headers.authorization = authValue;
   } else if (apiForm === "anthropic-messages") {
-    url = `${base}/v1/messages`;
+    // 版本段感知（复核 R2-F5/F6）：baseUrl 依调研原文携带 /v1（如 models.dev
+    // 的 api.minimax.io/anthropic/v1）时不再重复拼接。
+    url = `${base}${endsWithVersionSegment(base) ? "/messages" : "/v1/messages"}`;
     body = JSON.stringify({ model, messages: [{ role: "user", content: "ping" }], max_tokens: 1 });
-    if (secretValue !== undefined) headers.authorization = secretValue;
+    if (authValue !== undefined) headers.authorization = authValue;
     headers["anthropic-version"] = "2023-06-01";
   } else {
-    url = `${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+    url = `${base}${endsWithVersionSegment(base) ? "/models" : "/v1beta/models"}/${encodeURIComponent(model)}:generateContent`;
     body = JSON.stringify({
       contents: [{ parts: [{ text: "ping" }] }],
       generationConfig: { maxOutputTokens: 1 },
     });
-    if (secretValue !== undefined) headers["x-goog-api-key"] = secretValue;
+    if (authValue !== undefined) headers["x-goog-api-key"] = authValue;
   }
 
-  // 4) 发送（整体超时 AbortController；结果级返回 + 请求详情与非 2xx 正文摘录）。
+  // 5) 发送（整体超时 AbortController；结果级返回 + 请求详情与非 2xx 正文摘录）。
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -250,7 +336,7 @@ export async function testUpstream(input: UpstreamTestInput): Promise<UpstreamTe
     } catch {
       // 正文读失败不掩盖状态码
     }
-    if (secretValue !== undefined && excerpt.includes(secretValue)) excerpt = "(redacted)";
+    if (authValue !== undefined && excerpt.includes(authValue)) excerpt = "(redacted)";
     return {
       ok: false,
       httpStatus: response.status,
@@ -272,7 +358,7 @@ export async function testUpstream(input: UpstreamTestInput): Promise<UpstreamTe
       model,
       request: requestDetail,
       ...(modelSource !== undefined ? { modelSource } : {}),
-      error: timedOut ? "request timed out" : summarizeError(err, secretValue),
+      error: timedOut ? "request timed out" : summarizeError(err, authValue),
     };
   } finally {
     clearTimeout(timer);

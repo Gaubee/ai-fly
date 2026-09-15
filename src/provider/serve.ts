@@ -182,16 +182,36 @@ export interface RunningDaemon {
   stop(): Promise<void>;
 }
 
+/** legacy（pre-v2）存储态 NOTICE（hooks-lifecycle 2.3；daemon 启动横幅外补充）。 */
+export function legacyStoreNotice(dataDir: string, serviceNames: readonly string[]): string {
+  return (
+    `NOTICE: ${join(dataDir, "services.json")} uses a legacy (pre-v2) format; ` +
+    `${serviceNames.length} service(s) are inactive and cannot be served or edited.\n` +
+    `         Remove them one by one ('ai-fly service remove <name> --data ${dataDir}') ` +
+    `to rebuild the store as v2 (no automatic migration).`
+  );
+}
+
 export async function startProviderDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   const store = ProviderStore.open(opts.dataDir); // 0700/0600 由 store 保障
-  if (opts.alias !== undefined && opts.alias !== store.alias) {
+  // legacy 态（hooks-lifecycle 版本门禁）：NOTICE 日志 + 启动期 alias 写入跳过
+  // （不影响启动；watch 语义保留——CLI 进程的 legacy remove 仍能热传导）。
+  if (store.legacy !== null) {
+    process.stderr.write(`${legacyStoreNotice(opts.dataDir, store.legacy.serviceNames)}\n`);
+    if (opts.alias !== undefined && opts.alias !== store.alias) {
+      process.stderr.write(
+        `NOTICE: --alias '${opts.alias}' not written (legacy store is read-only except service remove)\n`,
+      );
+    }
+  } else if (opts.alias !== undefined && opts.alias !== store.alias) {
     store.setAlias(opts.alias);
   }
   const limits = new LimitEnforcer({ dataDir: opts.dataDir });
-  // $secret 解析默认接密钥库（无内存态：每请求读盘，UI/CLI 写入即刻生效）。
-  // resolve() 应用 bearerPrefix（默认拼 "Bearer "；Owner 裁决 2026-09-10）。
+  // $secret/auth.secret 解析默认接密钥库（无内存态：每请求读盘，UI/CLI 写入即刻
+  // 生效）。hooks-lifecycle 5.2：取**原样值**——Bearer 前缀由服务 auth 槽 bearer
+  // 开关在 buildUpstreamRequest 头链内拼（SecretsStore.bearerPrefix 已退役）。
   const secretsStore = SecretsStore.open(opts.dataDir);
-  const secrets = opts.secrets ?? ((name: string) => secretsStore.resolve(name)?.headerValue);
+  const secrets = opts.secrets ?? ((name: string) => secretsStore.get(name));
   const fabric = await openOrCreateFabric(opts.dataDir, opts.relayUrls, opts.httpProxy);
   const engine = new ProviderEngine({
     fabric,

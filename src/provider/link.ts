@@ -47,6 +47,13 @@ export const SHARE_LINK_PAYLOAD_SCHEMA = z.strictObject({
 
 export type ShareLinkPayload = z.infer<typeof SHARE_LINK_PAYLOAD_SCHEMA>;
 
+/**
+ * 旧格式链接的用户面报错（hooks-lifecycle v2：payload schema 不合当前形状即过期
+ * ——无迁移路径；英文 ASCII，保持仓库错误风格）。
+ */
+export const SHARE_LINK_OUTDATED_MESSAGE =
+  "error: this share link uses an outdated format - ask the provider to generate a new one";
+
 /** 链接构造失败（用户面 message 英文 ASCII）。 */
 export class LinkError extends Error {
   constructor(message: string) {
@@ -78,7 +85,9 @@ export function decodeShareLink(text: string): ShareLinkPayload {
   }
   const result = SHARE_LINK_PAYLOAD_SCHEMA.safeParse(parsed);
   if (!result.success) {
-    throw new LinkError(`error: share link payload failed validation: ${result.error.message}`);
+    // v2 破坏性变更：payload 不合当前 schema（含 v1 旧条目形状）→ 明确报过期，
+    // 不区分具体失败字段（无迁移路径，让提供方重新生成）。
+    throw new LinkError(SHARE_LINK_OUTDATED_MESSAGE);
   }
   return result.data;
 }

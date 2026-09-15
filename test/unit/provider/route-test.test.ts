@@ -43,7 +43,8 @@ describe("testServiceRoute（provider 侧按标准路由测试）", () => {
     const service = makeService({
       upstream: "https://api.example.com/",
       routes: [{ forms: ["openai-chat", "openai-responses"], localPrefix: "/v1", upstreamPrefix: "/v1" }],
-      rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: "sk-panel" } } } },
+      // hooks-lifecycle v2：$secret 字面量间接引用（headers.set）。
+      headers: { set: { authorization: "$secret:sk-panel" } },
     });
     const result = await testServiceRoute({
       service,

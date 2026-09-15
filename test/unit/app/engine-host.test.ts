@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Fabric, FabricOptions } from "@jixo/opendweb-client-sdk";
-import { EngineHost, type NotifyEvent } from "../../../src/app/engine-host.ts";
+import { EngineHost, diffConsumerSnapshots, type ConsumerSnapshot, type NotifyEvent } from "../../../src/app/engine-host.ts";
 import type { RunningDaemon } from "../../../src/provider/serve.ts";
 import { ProviderStore } from "../../../src/provider/store.ts";
 import type { FabricEventLike, FabricFactory, FabricLike } from "../../../src/consumer/providers.ts";
@@ -238,5 +238,57 @@ describe("settings persistence", () => {
       relayUrls: z.array(z.string()).nullable(),
     });
     expect(schema.parse(raw)).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// consumer 快照 diff（hooks-lifecycle 复核 R3-F1：lastError set/clear/变化）
+// ---------------------------------------------------------------------------
+
+describe("diffConsumerSnapshots", () => {
+  it("lastError set/clear/变化均触发 consumer-catalog（驱动 UI 重拉 cservices）", () => {
+    const base = {
+      endpointId: "ep1",
+      state: "direct" as const,
+      servedCount: 0,
+      bufferOverflows: 0,
+      ports: { s1: 4700 },
+      services: 1,
+      lastError: undefined,
+    };
+    const fired: Array<{ type: string; endpointId: string | undefined }> = [];
+    const notify = (type: string, payload: Record<string, unknown>): void => {
+      fired.push({ type, endpointId: payload["endpointId"] as string | undefined });
+    };
+
+    // set：undefined -> "catalog sync failed"
+    diffConsumerSnapshots([base] as ConsumerSnapshot, [{ ...base, lastError: "catalog sync failed" }] as ConsumerSnapshot, notify);
+    expect(fired).toEqual([{ type: "consumer-catalog", endpointId: "ep1" }]);
+
+    // 变化：错误文案更新
+    fired.length = 0;
+    diffConsumerSnapshots([{ ...base, lastError: "a" }] as ConsumerSnapshot, [{ ...base, lastError: "b" }] as ConsumerSnapshot, notify);
+    expect(fired).toEqual([{ type: "consumer-catalog", endpointId: "ep1" }]);
+
+    // clear：错误 -> undefined（成功 AUTH_OK 清错后 UI 撤下错误态）
+    fired.length = 0;
+    diffConsumerSnapshots([{ ...base, lastError: "b" }] as ConsumerSnapshot, [base] as ConsumerSnapshot, notify);
+    expect(fired).toEqual([{ type: "consumer-catalog", endpointId: "ep1" }]);
+
+    // 无变化不触发
+    fired.length = 0;
+    diffConsumerSnapshots([base] as ConsumerSnapshot, [base] as ConsumerSnapshot, notify);
+    expect(fired).toEqual([]);
+
+    // 新 endpoint 首次即带 lastError：diff 只发 consumer-state（首现事件本身驱动
+    // consumer 拉取）；错误呈现由即时的 consumer-catalog-error 事件负责——两事件
+    // 职责分离在此锁定（R4-P2）。
+    fired.length = 0;
+    diffConsumerSnapshots(
+      [],
+      [{ ...base, endpointId: "ep-new", lastError: "catalog sync failed" }] as ConsumerSnapshot,
+      notify,
+    );
+    expect(fired).toEqual([{ type: "consumer-state", endpointId: "ep-new" }]);
   });
 });

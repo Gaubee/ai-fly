@@ -19,6 +19,7 @@ import {
   FRAME_HEADER_SCHEMAS,
   FRAME_TYPE,
   FRAME_TYPE_NAME,
+  SERVICE_DETAIL_SCHEMA,
   type AuthErrHeader,
   type AuthHeader,
   type AuthOkHeader,
@@ -66,7 +67,17 @@ export interface WireTransport {
 /** 校验通过的入站业务帧（schema 已过、门控/方向/id/seq 检查已过）。 */
 export type InboundFrame =
   | { type: typeof FRAME_TYPE.AUTH; header: AuthHeader }
-  | { type: typeof FRAME_TYPE.AUTH_OK; header: AuthOkHeader }
+  | {
+      type: typeof FRAME_TYPE.AUTH_OK;
+      header: AuthOkHeader;
+      /**
+       * 二阶段目录投影失败原因（hooks-lifecycle v2）：载荷内 detail 不合
+       * SERVICE_DETAIL_SCHEMA 时由 mux 标注——帧本身已通过帧级 schema 并照常
+       * 交付（上层仍应完成 AUTH 记账，会话保持 authed），但目录视图不得应用；
+       * 触发 onCatalogError，不走普通帧丢弃路径。
+       */
+      catalogError?: string;
+    }
   | { type: typeof FRAME_TYPE.AUTH_ERR; header: AuthErrHeader }
   | { type: typeof FRAME_TYPE.REQ; header: ReqHeader; body: Uint8Array }
   | { type: typeof FRAME_TYPE.REQ_BODY; header: ReqBodyHeader; body: Uint8Array }
@@ -91,6 +102,13 @@ export type TerminateCause =
 export interface WireSessionHooks {
   /** 合法入站帧交付（含 AUTH 族、PING、ABORT 等控制帧；由上层决定业务动作）。 */
   onFrame?(frame: InboundFrame): void;
+  /**
+   * 目录同步失败（hooks-lifecycle v2 二阶段）：AUTH_OK 载荷内 detail 投影不合
+   * 当前 SERVICE_DETAIL_SCHEMA（典型为提供者运行旧版本——同版本约束）。帧已
+   * 通过帧级 schema 并交付（catalogError 标注），会话保持 authed，不触发普通
+   * 帧丢弃路径；上层保留旧视图、记录本地错误态。
+   */
+  onCatalogError?(providerId: string, message: string): void;
   /** 连接毒化（seq 缺断 → 流已不可信）：上层负责终结请求并重建连接。 */
   onPoison?(info: { id: string; reason: "protocol_seq" }): void;
   /** 请求级空闲超时：上层终结清理（提供方回送 ERROR(idle_timeout)、使用方本地动作）。
@@ -107,6 +125,11 @@ export interface WireSessionHooks {
 export interface WireSessionOptions {
   role: WireRole;
   transport: WireTransport;
+  /**
+   * 对端 endpointId（consumer 角色下即提供者身份；onCatalogError 的 providerId
+   * 取自该值——目录同步失败按提供者呈现，未配置时为空串）。
+   */
+  peerEndpointId?: string;
   idleTimeoutMs?: number;
   maxQueuedPerId?: number;
   reassemblyLimitBytes?: number;
@@ -118,6 +141,8 @@ export interface WireSessionStats {
   unauthDropped: number;
   directionDropped: number;
   schemaDropped: number;
+  /** AUTH_OK 二阶段目录投影失败计数（不占 schemaDropped——跨版本目录安全拒绝）。 */
+  catalogDropped: number;
   unknownIdDropped: number;
   terminalDropped: number;
   malformedDropped: number;
@@ -205,6 +230,7 @@ export class WireSession {
   readonly role: WireRole;
   private readonly transport: WireTransport;
   private readonly hooks: WireSessionHooks;
+  private readonly peerEndpointId: string | undefined;
   private readonly idleTimeoutMs: number;
   private readonly maxQueuedPerId: number;
   private readonly reassemblyLimitBytes: number;
@@ -217,6 +243,7 @@ export class WireSession {
     unauthDropped: 0,
     directionDropped: 0,
     schemaDropped: 0,
+    catalogDropped: 0,
     unknownIdDropped: 0,
     terminalDropped: 0,
     malformedDropped: 0,
@@ -235,6 +262,7 @@ export class WireSession {
     this.role = opts.role;
     this.transport = opts.transport;
     this.hooks = opts.hooks ?? {};
+    this.peerEndpointId = opts.peerEndpointId;
     this.idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
     this.maxQueuedPerId = opts.maxQueuedPerId ?? DEFAULT_MAX_QUEUED_PER_ID;
     this.reassemblyLimitBytes = opts.reassemblyLimitBytes ?? DEFAULT_REASSEMBLY_LIMIT_BYTES;
@@ -371,12 +399,14 @@ export class WireSession {
     return this.ids.get(id)?.queuedCount ?? 0;
   }
 
-  /** 等待该 id 队列回落到 maxDepth 以下（默认上限-1；上层“暂停读上游”用）。 */
+  /** 等待该 id 队列回落到 maxDepth 以下（默认上限-1；上层“暂停读上游”用）。
+   *  id 终结（对端 ERROR/本地失败）或会话断连时立即返回——队列永不再回落，
+   *  挂起会让调用方永久等待（复核 R2-F3）。 */
   async waitOutboundQueue(id: string, maxDepth: number = this.maxQueuedPerId - 1): Promise<void> {
     const ctx = this.ids.get(id);
     if (ctx === undefined) return;
     while (ctx.queuedCount > maxDepth) {
-      if (this.deadFlag) return;
+      if (this.deadFlag || ctx.terminal) return;
       await new Promise<void>((resolve) => ctx.slotWaiters.push(resolve));
     }
   }
@@ -491,6 +521,20 @@ export class WireSession {
     const rawId = parsedHeader.id;
     const id = typeof rawId === "string" ? rawId : undefined;
     if (id === undefined) {
+      // 4a) AUTH_OK 二阶段：帧级 schema 已过（detail 宽松承载），此处按
+      //     SERVICE_DETAIL_SCHEMA 严格复核载荷内 detail 投影。失败 = 该提供者
+      //     目录同步失败（跨版本安全拒绝）：计数 catalogDropped、触发
+      //     onCatalogError、帧带 catalogError 标注后照常交付（会话记账由上层
+      //     完成，保持 authed；不走普通帧丢弃路径——schemaDropped 不动）。
+      if (type === FRAME_TYPE.AUTH_OK) {
+        const catalogError = this.checkCatalogProjection(parsedHeader);
+        if (catalogError !== undefined) {
+          this.counters.catalogDropped++;
+          this.hooks.onCatalogError?.(this.peerEndpointId ?? "", catalogError);
+          this.deliver(type, parsedHeader, body, catalogError);
+          return;
+        }
+      }
       this.deliver(type, parsedHeader, body);
       return;
     }
@@ -561,8 +605,30 @@ export class WireSession {
     this.deliver(type, parsedHeader, body);
   }
 
-  private deliver(type: number, header: Record<string, unknown>, body: Uint8Array): void {
-    const frame = { type, header, body } as unknown as InboundFrame;
+  /**
+   * AUTH_OK 载荷内 detail 投影的严格复核（二阶段第二段）：任一服务携带不合
+   * SERVICE_DETAIL_SCHEMA 的 detail 即整体目录同步失败（全量替换语义下无部分
+   * 应用）。返回固定脱敏消息（不含 zod 细节与原始值）；全部通过返回 undefined。
+   */
+  private checkCatalogProjection(header: Record<string, unknown>): string | undefined {
+    const groups = header.groups;
+    if (!Array.isArray(groups)) return undefined; // 帧级 schema 已保证形状（防御）
+    for (const group of groups) {
+      const services = (group as { services?: unknown }).services;
+      if (!Array.isArray(services)) continue;
+      for (const service of services) {
+        const detail = (service as { detail?: unknown }).detail;
+        if (detail === undefined) continue;
+        if (!SERVICE_DETAIL_SCHEMA.safeParse(detail).success) {
+          return "provider catalog detail failed validation (provider/consumer version mismatch?)";
+        }
+      }
+    }
+    return undefined;
+  }
+
+  private deliver(type: number, header: Record<string, unknown>, body: Uint8Array, catalogError?: string): void {
+    const frame = { type, header, body, ...(catalogError !== undefined ? { catalogError } : {}) } as unknown as InboundFrame;
     this.hooks.onFrame?.(frame);
   }
 
@@ -610,6 +676,14 @@ export class WireSession {
     }, this.idleTimeoutMs);
   }
 
+  /** 唤醒该 lane 全部排队等待者（不改变 queuedCount）：send 路径在唤醒后
+   *  复查 terminal 走 terminalDropped；waitOutboundQueue 复查后直接返回。
+   *  终结与断连必经（复核 R2-F3）——否则 transport 不再结算时等待者永久挂起。 */
+  private wakeSlotWaiters(lane: LaneHolder): void {
+    const waiters = lane.slotWaiters.splice(0);
+    for (const wake of waiters) wake();
+  }
+
   private finishId(id: string, cause: TerminateCause): void {
     const ctx = this.ids.get(id);
     if (ctx === undefined || ctx.terminal) return;
@@ -618,6 +692,7 @@ export class WireSession {
       clearTimeout(ctx.idleTimer);
       ctx.idleTimer = null;
     }
+    this.wakeSlotWaiters(ctx);
     this.hooks.onTerminate?.(id, cause);
   }
 
@@ -635,7 +710,9 @@ export class WireSession {
         ctx.terminal = true;
         this.hooks.onTerminate?.(ctx.id, cause);
       }
+      this.wakeSlotWaiters(ctx); // 全局通道等待者同样唤醒（复核 R2-F3）
     }
+    this.wakeSlotWaiters(this.globalLane);
     this.hooks.onDisconnect?.(reason);
   }
 

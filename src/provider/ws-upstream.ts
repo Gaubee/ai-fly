@@ -1,6 +1,10 @@
 // WebSocket 升级通道：识别 WS 升级请求（由 upstream.ts 分流）-> `ws` 客户端对重写后
 // 的上游 URL 执行握手 -> 101 经 RESP_META（sec-websocket-accept 白名单透传）->
 // DATA_UP / DATA_DOWN 双向中继 -> CLOSE 终结。
+// hooks-lifecycle 约束：WS 共享 rewrite 出站 plan——① auth 与 ② headers 阶段对
+// WS 生效（头链在 buildUpstreamRequest 内完成）；③ onRequest 接管**不适用于 WS**
+// （Owner Non-goal 裁决：出站仍原生 WebSocket，不进 request 阶段）；④ onResponse
+// 同样不进 WS 路径（RESP_META(101) 由握手产物直接下发）。
 // 正交意图（本文件不实现）：
 // - HTTP 普通转发（upstream.ts）；
 // - 授权/限额（引擎）。
@@ -92,6 +96,9 @@ export async function forwardWsUpgrade(
 
   const cleanup = (): void => {
     if (pingTimer !== null) clearInterval(pingTimer);
+    // 正常完成同样解除引擎 abort 监听（复核 R1-F7）：once 监听器在连接正常
+    // 关闭路径不触发，不解除则随 ctx.signal 泄漏 relay 闭包。
+    ctx.signal.removeEventListener("abort", onExternalAbort);
   };
   const teardown = (code?: number): void => {
     if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {

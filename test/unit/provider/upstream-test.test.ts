@@ -1,7 +1,8 @@
-// upstream-test 单测（m3 MODELS-TEST 5.2）：三 apiForm 最小请求形状（URL/头/正文，
-// fetchImpl 捕获断言——零真实网络）、密钥缺失结果级失败、模型缺省（api.json 按
-// upstream 定位 provider 取 priced chat 最低价；清单不可用要求显式指定）、非 2xx、
-// 网络错误摘要不含密钥、整体超时（AbortController 小值注入）。
+// upstream-test 单测（m3 MODELS-TEST 5.2 + hooks-lifecycle 5.2）：三 apiForm 最小
+// 请求形状（URL/头/正文，fetchImpl 捕获断言——零真实网络）、**auth 槽草稿**注入
+// （secret/script/literal 三族 + bearer 开关）、密钥缺失结果级失败、模型缺省
+// （api.json 按 upstream 定位 provider 取 priced chat 最低价；清单不可用要求
+// 显式指定）、非 2xx、网络错误摘要不含密钥、整体超时（AbortController 小值注入）。
 
 import { describe, expect, it } from "vitest";
 import { testUpstream } from "../../../src/provider/upstream-test.ts";
@@ -20,10 +21,10 @@ function captureFetch(status = 200): { calls: Captured[]; fetchImpl: typeof fetc
   return { calls, fetchImpl };
 }
 
-// bearerPrefix 语义在 store.resolve；测试假体直接给最终头值
+// 密钥库假体：原样裸值（Bearer 前缀由草稿 auth 槽决定——5.2 语义）
 const SECRETS = {
   resolve: (name: string): { headerValue: string } | undefined =>
-    name === "ok" ? { headerValue: "Bearer sk-1" } : undefined,
+    name === "ok" ? { headerValue: "sk-1" } : undefined,
 };
 
 const MODELS_RAW = JSON.stringify({
@@ -46,7 +47,7 @@ describe("testUpstream 请求形状", () => {
     const result = await testUpstream({
       upstream: "https://api.example.com/v1",
       apiForm: "openai-completions",
-      secretName: "ok",
+      auth: { secret: "ok" },
       model: "gpt-x",
       fetchImpl,
       secretsStore: SECRETS,
@@ -78,7 +79,7 @@ describe("testUpstream 请求形状", () => {
     await testUpstream({
       upstream: "https://api.anthropic.com",
       apiForm: "anthropic-messages",
-      secretName: "ok",
+      auth: { secret: "ok" },
       model: "claude-x",
       fetchImpl,
       secretsStore: SECRETS,
@@ -99,7 +100,7 @@ describe("testUpstream 请求形状", () => {
     await testUpstream({
       upstream: "https://gen.example.com",
       apiForm: "gemini-native",
-      secretName: "ok",
+      auth: { secret: "ok" },
       model: "gemini-x",
       fetchImpl: withSecret.fetchImpl,
       secretsStore: SECRETS,
@@ -148,12 +149,152 @@ describe("testUpstream 密钥与模型缺省", () => {
     }) as typeof fetch;
     const result = await testUpstream({
       upstream: "https://api.example.com",
-      secretName: "ghost",
+      auth: { secret: "ghost" },
       model: "m",
       fetchImpl,
       secretsStore: SECRETS,
     });
     expect(result).toMatchObject({ ok: false, error: "secret not found", model: "m" });
+    expect(calls).toBe(0);
+  });
+
+  it("auth 草稿三族 + bearer 开关（hooks-lifecycle 5.2 注入路径）", async () => {
+    const authHeaderOf = (calls: Captured[]): string | undefined =>
+      (calls[0]!.init.headers as Record<string, string>)["authorization"];
+    // {secret}：默认 bearer=true 拼前缀；bearer:false 原样；已带 Bearer 不重复。
+    const bare = captureFetch();
+    await testUpstream({
+      upstream: "https://api.example.com",
+      auth: { secret: "ok" },
+      model: "m",
+      fetchImpl: bare.fetchImpl,
+      secretsStore: SECRETS,
+    });
+    expect(authHeaderOf(bare.calls)).toBe("Bearer sk-1");
+    const off = captureFetch();
+    await testUpstream({
+      upstream: "https://api.example.com",
+      auth: { secret: "ok", bearer: false },
+      model: "m",
+      fetchImpl: off.fetchImpl,
+      secretsStore: SECRETS,
+    });
+    expect(authHeaderOf(off.calls)).toBe("sk-1");
+    const prefilled = captureFetch();
+    await testUpstream({
+      upstream: "https://api.example.com",
+      auth: { literal: "Bearer tok-9" },
+      model: "m",
+      fetchImpl: prefilled.fetchImpl,
+    });
+    expect(authHeaderOf(prefilled.calls)).toBe("Bearer tok-9");
+    // {literal $env:}：命中取值（bearer 默认拼）；空/未设置 = 不注入。
+    const envHit = captureFetch();
+    await testUpstream({
+      upstream: "https://api.example.com",
+      auth: { literal: "$env:MY_KEY" },
+      model: "m",
+      fetchImpl: envHit.fetchImpl,
+      env: { MY_KEY: "envtok" },
+    });
+    expect(authHeaderOf(envHit.calls)).toBe("Bearer envtok");
+    const envEmpty = captureFetch();
+    await testUpstream({
+      upstream: "https://api.example.com",
+      auth: { literal: "$env:MY_KEY" },
+      model: "m",
+      fetchImpl: envEmpty.fetchImpl,
+      env: { MY_KEY: "" },
+    });
+    expect(authHeaderOf(envEmpty.calls)).toBeUndefined();
+    // {literal $secret:}：密钥库解析；未命中 = 结果级失败 secret not found。
+    const secretRef = captureFetch();
+    await testUpstream({
+      upstream: "https://api.example.com",
+      auth: { literal: "$secret:ok" },
+      model: "m",
+      fetchImpl: secretRef.fetchImpl,
+      secretsStore: SECRETS,
+    });
+    expect(authHeaderOf(secretRef.calls)).toBe("Bearer sk-1");
+    const secretMiss = await testUpstream({
+      upstream: "https://api.example.com",
+      auth: { literal: "$secret:ghost" },
+      model: "m",
+      fetchImpl: (async () => new Response("{}")) as typeof fetch,
+      secretsStore: SECRETS,
+    });
+    expect(secretMiss).toMatchObject({ ok: false, error: "referenced secret is missing" });
+    // {script}：resolveStageAuth 路径（loader 注入），裸值经 bearer 默认拼。
+    const viaScript = captureFetch();
+    await testUpstream({
+      upstream: "https://api.example.com",
+      auth: { script: "authsrc" },
+      model: "m",
+      fetchImpl: viaScript.fetchImpl,
+      loader: (name) =>
+        name === "authsrc" ? { onRequestBearerAuthentication: () => "script-tok" } : undefined,
+    });
+    expect(authHeaderOf(viaScript.calls)).toBe("Bearer script-tok");
+  });
+
+  it("auth {script} 请求级 ctx 与转发路径同契约（POST + 表单路径 + content-type）", async () => {
+    const seen: unknown[] = [];
+    const calls = captureFetch();
+    await testUpstream({
+      upstream: "https://api.example.com",
+      apiForm: "openai-responses",
+      auth: { script: "ctxprobe" },
+      model: "m",
+      fetchImpl: calls.fetchImpl,
+      loader: (name) =>
+        name === "ctxprobe"
+          ? { onRequestBearerAuthentication: (ctx: unknown) => (seen.push(ctx), "ctx-tok") }
+          : undefined,
+    });
+    expect(seen[0]).toMatchObject({
+      method: "POST",
+      path: "/v1/responses",
+      headers: { "content-type": "application/json" },
+    });
+    // gemini 形态路径内嵌 model（model 已知时给全真实形状）
+    seen.length = 0;
+    await testUpstream({
+      upstream: "https://api.example.com",
+      apiForm: "gemini-native",
+      auth: { script: "ctxprobe" },
+      model: "gem-2",
+      fetchImpl: calls.fetchImpl,
+      loader: (name) =>
+        name === "ctxprobe"
+          ? { onRequestBearerAuthentication: (ctx: { path: string }) => (seen.push(ctx.path), "ctx-tok") }
+          : undefined,
+    });
+    expect(seen[0]).toBe("/v1beta/models/gem-2:generateContent");
+  });
+
+  it("auth {script} 失效 -> 固定脱敏文案（credential source missing）、零 fetch", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response("{}");
+    }) as typeof fetch;
+    const result = await testUpstream({
+      upstream: "https://api.example.com",
+      auth: { script: "broken" },
+      model: "m",
+      fetchImpl,
+      loader: (name) =>
+        name === "broken"
+          ? {
+              onRequestBearerAuthentication: () => {
+                throw new Error("leak sk-xyz");
+              },
+            }
+          : undefined,
+    });
+    expect(result).toMatchObject({ ok: false, error: "credential source missing" });
+    expect(result.error).not.toContain("sk-xyz");
     expect(calls).toBe(0);
   });
 
@@ -238,7 +379,7 @@ describe("testUpstream 结果语义", () => {
     }) as typeof fetch;
     const result = await testUpstream({
       upstream: "https://api.example.com",
-      secretName: "ok",
+      auth: { secret: "ok" },
       model: "m",
       fetchImpl,
       secretsStore: SECRETS,
@@ -255,7 +396,7 @@ describe("testUpstream 结果语义", () => {
     }) as typeof fetch;
     const result = await testUpstream({
       upstream: "https://api.example.com",
-      secretName: "ok",
+      auth: { secret: "ok" },
       model: "m",
       fetchImpl,
       secretsStore: SECRETS,

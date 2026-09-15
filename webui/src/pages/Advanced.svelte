@@ -27,7 +27,6 @@
   import { slide } from "svelte/transition";
   import ErrorAlert from "../components/ErrorAlert.svelte";
   import CopyField from "../components/CopyField.svelte";
-  import AuthSourcePicker from "../components/AuthSourcePicker.svelte";
   import GroupKeysPanel from "../components/GroupKeysPanel.svelte";
   import ServiceForm from "../components/ServiceForm.svelte";
   import { serviceForm, openAdd, openEdit, submit } from "../stores/service-form.svelte.ts";
@@ -42,7 +41,12 @@
   import { toastRpcError } from "../stores/toast.svelte.ts";
   import { setSecret, removeSecret } from "../stores/secrets.svelte.ts";
   import {
-    maskSecret,
+    STAGE_LABELS,
+    authDetailLine,
+    headersDetailLines,
+    scriptSlotDetailLine,
+  } from "$lib/lifecycle.ts";
+  import {
     hooksPanel,
     loadHooks,
     hookAdd,
@@ -83,9 +87,8 @@
   });
   interface SecretRow {
     name: string;
-    createdAt: number;
-    updatedAt: number;
-    bearerPrefix: boolean;
+    createdAt?: number;
+    updatedAt?: number;
   }
   let secretRows = $state<SecretRow[]>([]);
   let secretsLoading = $state(false);
@@ -95,8 +98,6 @@
   let secretNameDraft = $state("");
   /** password 型输入，提交后即清空，永不回显。 */
   let secretValueDraft = $state("");
-  /** Bearer 开关（M3-acceptance ①）：编辑既有条目时回填该条目值。 */
-  let secretBearerPrefix = $state(true);
   /** 正在覆写的既有密钥名（编辑 = 同名 set 覆写；值不回显）。 */
   let secretEditing = $state<string | null>(null);
   /** 行内 remove 二次确认（与 services/keys 行同款切换）。 */
@@ -139,7 +140,6 @@
   function resetSecretForm(): void {
     secretNameDraft = "";
     secretValueDraft = "";
-    secretBearerPrefix = true;
     secretEditing = null;
   }
 
@@ -147,14 +147,13 @@
     secretEditing = row.name;
     secretNameDraft = row.name;
     secretValueDraft = "";
-    secretBearerPrefix = row.bearerPrefix;
   }
 
   async function submitSecret(): Promise<void> {
     const name = secretNameDraft.trim();
     if (secretBusy || !secretFormValid) return;
     secretBusy = true;
-    const ok = await setSecret(name, secretValueDraft, secretBearerPrefix);
+    const ok = await setSecret(name, secretValueDraft);
     secretBusy = false;
     if (!ok) return; // 失败已由 store toast
     await loadSecretRows();
@@ -208,19 +207,9 @@
     }
   }
 
-  /** 行头 key injected 徽章：hook 协议（对象）注入即亮。 */
-  function hasInjectedAuth(service: ServiceConfigView): boolean {
-    const authorization = service.rewrite?.headerSet?.["authorization"];
-    return authorization !== undefined && typeof authorization === "object";
-  }
-
-  /** 头值 humanize：字面量原样；钩子调用 `hook <fn>(k=v)[ bearer]`。 */
-  function humanizeValue(value: string | { hook: string; args?: Record<string, string>; bearer?: boolean }): string {
-    if (typeof value === "string") return value;
-    const args = Object.entries(value.args ?? {})
-      .map(([k, v]) => `${k}=${k === "name" || k === "var" ? v : "***"}`)
-      .join(", ");
-    return `hook ${value.hook}${args !== "" ? ` (${args})` : ""}${value.bearer === true ? " [bearer]" : ""}`;
+  /** 行头 auth 绑定徽章（hooks-lifecycle 7.3）：auth 槽配置即亮（四族任一）。 */
+  function hasAuthBinding(service: ServiceConfigView): boolean {
+    return service.auth !== undefined;
   }
 
   function toggleExpanded(serviceId: string): void {
@@ -330,6 +319,38 @@
           </span>
         </div>
 
+        <!-- legacy 失效服务只读列表（hooks-lifecycle 7.4；与 App 顶横幅同一
+             数据源/同一移除动作——此处为服务页签的就地联动） -->
+        {#if app.legacyServiceNames.length > 0}
+          <Alert variant="tonal" class="jx-hue-warning" title={t("legacy.bannerTitle")}>
+            <p class="text-xs leading-relaxed">{t("legacy.bannerBody")}</p>
+            <div class="mt-2 flex flex-col gap-1.5">
+              {#each app.legacyServiceNames as name (name)}
+                <div class="flex flex-wrap items-center gap-2 border border-border/70 bg-card px-2.5 py-1.5">
+                  <span class="min-w-0 truncate font-mono text-xs">{name}</span>
+                  <Badge variant="tonal" class="jx-hue-warning">{t("legacy.badge")}</Badge>
+                  <span class="ml-auto flex items-center gap-1.5">
+                    {#if serviceRemove.confirm === name}
+                      <PressButton
+                        variant="tonal"
+                        class="jx-pair-destructive"
+                        loading={serviceRemove.busy === name}
+                        onclick={() => void removeService(name)}
+                      >{t("common.confirmRemove")}</PressButton>
+                      <PressButton variant="ghost" onclick={() => (serviceRemove.confirm = "")}>{t("common.cancel")}</PressButton>
+                    {:else}
+                      <PressButton
+                        variant="ghost"
+                        onclick={() => (serviceRemove.confirm = name)}
+                      >{t("common.remove")}</PressButton>
+                    {/if}
+                  </span>
+                </div>
+              {/each}
+            </div>
+          </Alert>
+        {/if}
+
         <!-- 服务行 snippet（统一服务视图 #4：组内/未分组共用） -->
         {#snippet serviceRow(service: ServiceConfigView)}
         {@const open = expanded.has(service.serviceId)}
@@ -350,8 +371,8 @@
               {#each groupsOfService.get(service.name) ?? [] as groupName (groupName)}
                 <Badge variant="tonal">{groupName}</Badge>
               {/each}
-              {#if hasInjectedAuth(service)}
-                <Badge variant="tonal" class="jx-hue-info">{t("adv.services.keyInjected")}</Badge>
+              {#if hasAuthBinding(service)}
+                <Badge variant="tonal" class="jx-hue-info">{t("adv.services.authBound")}</Badge>
               {/if}
             </button>
             <span class="flex items-center gap-1.5">
@@ -395,7 +416,9 @@
             </span>
           </div>
           {#if open}
-            <!-- detail 展开：upstream / match 全集 / rewrite（$env:/$secret: 注入值掩码） -->
+            <!-- detail 展开（hooks-lifecycle v2）：upstream / match 全集 /
+                 rewrite（host/路径前缀）+ 生命周期四槽——密钥名/脚本绑定/
+                 引用型字面量一律 ●（与 M1 AUTH_OK 披露同源） -->
             <dl class="grid gap-x-6 gap-y-1.5 border-t border-border px-3 py-2.5 text-xs" transition:slide={{ duration: 150 }}>
               <div class="flex gap-2">
                 <dt class="w-20 flex-none text-muted-foreground">{t("adv.services.upstream")}</dt>
@@ -409,28 +432,50 @@
                   {/each}
                 </dd>
               </div>
+              <!-- ① auth -->
+              {#if service.auth !== undefined}
+                <div class="flex gap-2">
+                  <dt class="w-20 flex-none text-muted-foreground">{t("f.lifecycle.auth")}</dt>
+                  <dd class="min-w-0 break-all font-mono">{authDetailLine(service.auth)}</dd>
+                </div>
+              {/if}
+              <!-- ② headers -->
+              {#if service.headers !== undefined}
+                <div class="flex gap-2">
+                  <dt class="w-20 flex-none text-muted-foreground">{t("f.lifecycle.headers")}</dt>
+                  <dd class="flex min-w-0 flex-col gap-0.5 font-mono">
+                    {#each headersDetailLines(service.headers) as line, i (`${service.serviceId}:h:${i}`)}
+                      <span class="break-all">{line}</span>
+                    {:else}
+                      <span class="text-muted-foreground">{t("adv.services.none")}</span>
+                    {/each}
+                  </dd>
+                </div>
+              {/if}
+              <!-- ③ request / ④ response -->
+              {#if scriptSlotDetailLine(service.request) !== null}
+                <div class="flex gap-2">
+                  <dt class="w-20 flex-none text-muted-foreground">{t("f.lifecycle.request")}</dt>
+                  <dd class="min-w-0 break-all font-mono">{scriptSlotDetailLine(service.request)}</dd>
+                </div>
+              {/if}
+              {#if scriptSlotDetailLine(service.response) !== null}
+                <div class="flex gap-2">
+                  <dt class="w-20 flex-none text-muted-foreground">{t("f.lifecycle.response")}</dt>
+                  <dd class="min-w-0 break-all font-mono">{scriptSlotDetailLine(service.response)}</dd>
+                </div>
+              {/if}
               {#if service.rewrite}
                 <div class="flex gap-2">
                   <dt class="w-20 flex-none text-muted-foreground">{t("adv.services.rewrite")}</dt>
                   <dd class="flex min-w-0 flex-col gap-0.5 font-mono">
-                    {#if service.rewrite.hostHeader}<span>host: {service.rewrite.hostHeader}</span>{/if}
+                    {#if service.rewrite.host}<span>host: {service.rewrite.host}</span>{/if}
                     {#if service.rewrite.pathPrefixStrip}<span>strip: {service.rewrite.pathPrefixStrip}</span>{/if}
                     {#if service.rewrite.pathPrefixAppend}<span>append: {service.rewrite.pathPrefixAppend}</span>{/if}
-                    {#each Object.entries(service.rewrite.headerSet ?? {}) as [name, value] (`${service.serviceId}:${name}`)}
-                      <span>header {name}: {typeof value === "string" ? maskSecret(value) : humanizeValue(value as string | { hook: string; args?: Record<string, string>; bearer?: boolean })}</span>
-                    {/each}
-                    {#each service.rewrite.headerRemove ?? [] as name (`${service.serviceId}:rm:${name}`)}
-                      <span>remove header {name}</span>
-                    {/each}
-                    {#if !service.rewrite.hostHeader && !service.rewrite.pathPrefixStrip && !service.rewrite.pathPrefixAppend && Object.keys(service.rewrite.headerSet ?? {}).length === 0 && (service.rewrite.headerRemove ?? []).length === 0}
+                    {#if !service.rewrite.host && !service.rewrite.pathPrefixStrip && !service.rewrite.pathPrefixAppend}
                       <span class="text-muted-foreground">{t("adv.services.noRewrite")}</span>
                     {/if}
                   </dd>
-                </div>
-              {:else}
-                <div class="flex gap-2">
-                  <dt class="w-20 flex-none text-muted-foreground">{t("adv.services.rewrite")}</dt>
-                  <dd class="font-mono text-muted-foreground">{t("adv.services.none")}</dd>
                 </div>
               {/if}
               <div class="flex gap-2">
@@ -666,7 +711,9 @@
                 {#each secretRows as row (row.name)}
                   <div class="flex flex-wrap items-center gap-2 border border-border/70 px-2.5 py-1.5">
                     <span class="min-w-0 truncate font-mono text-xs">{row.name}</span>
-                    <span class="text-[11px] text-muted-foreground">updated {formatDate(row.updatedAt)}</span>
+                    {#if row.updatedAt !== undefined}
+                      <span class="text-[11px] text-muted-foreground">updated {formatDate(row.updatedAt)}</span>
+                    {/if}
                     <span class="ml-auto flex items-center gap-1.5">
                       <PressButton variant="ghost" onclick={() => editSecretRow(row)}>{t("common.edit")}</PressButton>
                       {#if secretConfirm === row.name}
@@ -708,17 +755,9 @@
                 autocomplete="off"
                 bind:value={secretValueDraft}
               />
-              <div class="flex flex-col gap-1.5">
-                <Toggle
-                  label='add "Bearer " prefix'
-                  checked={secretBearerPrefix}
-                  onchange={(event) => (secretBearerPrefix = event.currentTarget.checked)}
-                />
-                <p class="text-[11px] leading-relaxed text-muted-foreground">
-                  most OpenAI-compatible providers expect it; turn off for raw keys -
-                  the value is stored locally and cleared from this form after saving.
-                </p>
-              </div>
+              <p class="text-[11px] leading-relaxed text-muted-foreground">
+                {t("secretdlg.valueNote")}
+              </p>
               <div class="flex items-center gap-2">
                 <PressButton
                   variant="fill"
@@ -743,8 +782,7 @@
   <div class="flex flex-col gap-3">
     <div class="flex items-center justify-between gap-3">
       <p class="text-xs leading-relaxed text-muted-foreground">
-        hook scripts: builtin library + ~/.aifly/hooks (user overrides builtin);
-        exported function names are the hook inventory (authHeader = HTTP auth header hook).
+        {t("adv.hooks.hint")}
       </p>
       <PressButton
         variant="outline"
@@ -767,8 +805,10 @@
           <div class="flex flex-wrap items-center gap-2 border border-border bg-card px-3 py-2.5 shadow-2xs">
             <span class="font-mono text-xs">{script.name}</span>
             <Badge variant={script.source === "user" ? "tonal" : "outline"}>{script.source}</Badge>
-            {#each script.fns as fn (fn)}
-              <Badge variant="tonal" class="jx-hue-info">{fn}()</Badge>
+            {#each script.stages as stage (stage)}
+              <Badge variant="tonal" class="jx-hue-info">{STAGE_LABELS[stage]}</Badge>
+            {:else}
+              <Badge variant="tonal" class="jx-hue-warning">{t("adv.hooks.noStages")}</Badge>
             {/each}
             <span class="ml-auto flex items-center gap-1.5">
               <PressButton variant="ghost" onclick={() => void openHookView(script.name)}>{t("common.view")}</PressButton>
@@ -890,7 +930,7 @@
       <span class="font-nav text-[10px] uppercase tracking-[0.1em] text-muted-foreground">{t("hookdlg.script")}</span>
       <textarea
         class="min-h-40 border border-border bg-background px-2 py-1.5 font-mono text-xs"
-        placeholder={'module.exports.authHeader = ({ homedir, args, secrets }) => {\n  return "Bearer ...";\n};'}
+        placeholder={'module.exports.onRequestBearerAuthentication = ({ homedir, args, secrets }) => {\n  return "Bearer ...";\n};'}
         bind:value={hookAdd.content}
       ></textarea>
     </label>

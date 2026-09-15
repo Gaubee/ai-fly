@@ -27,6 +27,8 @@ export function toDomainError(err: unknown): DomainError {
     if (code === "duplicate" || code === "conflict") return new DomainError("CONFLICT", safeMessage);
     if (code === "not-found") return new DomainError("NOT_FOUND", safeMessage);
     if (code === "invalid") return new DomainError("INVALID_INPUT", safeMessage);
+    // legacy（pre-v2）存储态写门禁（hooks-lifecycle 2.2）：RPC 呈现 INVALID_STATE。
+    if (code === "legacy_readonly") return new DomainError("INVALID_STATE", safeMessage);
     return new DomainError("INTERNAL", safeMessage); // corrupt
   }
   if (name === "UsageError") return new DomainError("INVALID_INPUT", safeMessage);

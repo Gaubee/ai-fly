@@ -9,16 +9,11 @@ import { call } from "./rpc.svelte.ts";
 import { toastRpcError, toastSuccess } from "./toast.svelte.ts";
 import { app, refresh } from "./app.svelte.ts";
 import { parsePositiveInt } from "./service-form.svelte.ts";
+import { STAGE_LABELS, type StageFnNameValue } from "$lib/lifecycle.ts";
 
 
 /** services.add 的输入类型（契约推导，保持单源）。 */
 type ServiceAddInput = Parameters<RpcClient["provider"]["services"]["add"]>[0];
-
-/** 注入值脱敏：$secret 显示面板名（值只在本机密钥库）；$env 维持 ●，无变量名。 */
-export function maskSecret(value: string): string {
-  if (value.startsWith("$secret:")) return `secret panel: ${value.slice(8)}`;
-  return value.startsWith("$env:") ? "\u25cf" : value;
-}
 
 // ---------------------------------------------------------------------------
 // 服务：增 / 删 / 改（remove+add）
@@ -377,13 +372,15 @@ export async function setModelsDev(enabled: boolean): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// hooks 脚本资源域（Owner 视觉验收 2026-09-12：管理面同 group/secret）
+// hooks 脚本资源域（Owner 视觉验收 2026-09-12：管理面同 group/secret；
+// hooks-lifecycle 5.2：hooks.list stages-only——阶段矩阵按导出的阶段函数名
+// 归类，旧导出名（如 v1 authHeader）不在矩阵内自然排除）
 // ---------------------------------------------------------------------------
 
 export interface HookScriptRow {
   name: string;
   source: "user" | "builtin";
-  fns: string[];
+  stages: StageFnNameValue[];
 }
 
 export const hooksPanel = $state({
@@ -462,7 +459,10 @@ export async function submitHookAdd(): Promise<void> {
       c.provider.hooks.add({ name: hookAdd.name.trim(), content: hookAdd.content }),
     );
     hookAdd.open = false;
-    toastSuccess("Hook script installed", `${installed.name} (${installed.fns.join(", ")})`);
+    toastSuccess(
+      "Hook script installed",
+      `${installed.name} (${installed.stages.map((stage) => STAGE_LABELS[stage]).join(", ")})`,
+    );
     await loadHooks(true);
   } catch (error) {
     hookAdd.error = toRpcError(error);

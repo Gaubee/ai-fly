@@ -2,10 +2,10 @@
 // forget 整环删除、目录全量替换（新增/删除/relay 变更/端口修剪）、setPort、前缀/
 // 别名定位、0600/0700 权限与原子写落盘。
 
-import { mkdtempSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync, existsSync, readFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomZ32 } from "../../../src/wire/z32.ts";
 import type { ServiceEntry } from "../../../src/wire/frames.ts";
 import { CliError } from "../../../src/cli/errors.ts";
@@ -288,6 +288,118 @@ describe("定位与删除", () => {
     const { rings, warnings } = listKeyrings(root);
     expect(rings).toHaveLength(1);
     expect(warnings).toHaveLength(1);
+  });
+});
+
+describe("陈旧服务条目逐条过滤（hooks-lifecycle v2 自愈）", () => {
+  const v2Entry = (serviceId: string, port: number) => ({
+    serviceId,
+    name: serviceId,
+    match: [{ type: "suffix", value: ".local" }],
+    defaultPort: port,
+  });
+  /** v1 时期形状：顶层 hooks + detail.rewrite.headerSet（v2 均退役）。 */
+  const v1Entry = (serviceId: string) => ({
+    serviceId,
+    name: serviceId,
+    match: [{ type: "suffix", value: ".local" }],
+    defaultPort: 11434,
+    hooks: "env",
+    detail: { upstream: "https://u.example", match: [], rewrite: { headerSet: [{ name: "authorization", value: "\u25cf" }] } },
+  });
+
+  function writeRawKeyring(ep: string, services: unknown[]): void {
+    const dir = keyringDir(root, ep);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "keyring.json"),
+      JSON.stringify({
+        alias: "prov",
+        endpointId: ep,
+        relayUrls: ["http://r1"],
+        keys: [{ keyId: "kid", key: "sk-aifly-keep-me-000001", group: "g" }],
+        services,
+        ports: {},
+        disabledServices: [],
+        disabled: false,
+      }),
+    );
+  }
+
+  function rawServices(ep: string): Array<{ serviceId: string }> {
+    const p = join(keyringDir(root, ep), "keyring.json");
+    return (JSON.parse(readFileSync(p, "utf8")) as { services: Array<{ serviceId: string }> }).services;
+  }
+
+  it("部分坏：陈旧条目丢弃、合法条目/密钥/记录保留、原子写回清理文件", () => {
+    const ep = endpointId();
+    writeRawKeyring(ep, [v2Entry("svc-good", 11434), v1Entry("svc-old")]);
+    const ring = loadKeyring(root, ep)!;
+    expect(ring.services.map((s) => s.serviceId)).toEqual(["svc-good"]);
+    expect(ring.keys).toEqual([{ keyId: "kid", key: "sk-aifly-keep-me-000001", group: "g" }]);
+    expect(ring.endpointId).toBe(ep); // 提供者记录保留
+    expect(rawServices(ep).map((s) => s.serviceId)).toEqual(["svc-good"]); // 写回清理
+    expect(loadKeyring(root, ep)!.services).toHaveLength(1); // 幂等（无残留 tmp）
+    expect(readdirSync(keyringDir(root, ep)).filter((f) => f.startsWith(".keyring"))).toEqual([]);
+  });
+
+  it("全坏：服务视图清空，提供者记录与密钥保留", () => {
+    const ep = endpointId();
+    writeRawKeyring(ep, [v1Entry("a"), v1Entry("b")]);
+    const ring = loadKeyring(root, ep)!;
+    expect(ring.services).toEqual([]);
+    expect(ring.keys).toHaveLength(1);
+    expect(rawServices(ep)).toEqual([]);
+  });
+
+  it("写回失败（目录只读）：仅日志、不阻断内存视图", () => {
+    const ep = endpointId();
+    writeRawKeyring(ep, [v1Entry("a")]);
+    const errors: unknown[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args) => errors.push(args));
+    chmodSync(keyringDir(root, ep), 0o500);
+    try {
+      const ring = loadKeyring(root, ep)!; // 不抛
+      expect(ring.services).toEqual([]);
+      expect(ring.keys).toHaveLength(1);
+    } finally {
+      chmodSync(keyringDir(root, ep), 0o700);
+      spy.mockRestore();
+    }
+    expect(errors.length).toBeGreaterThan(0); // 有日志证据
+  });
+
+  it("文件级 JSON 非法维持既有语义（定位跳过损坏目录、listKeyrings 告警，不进入过滤路径）", () => {
+    const ep = endpointId();
+    mkdirSync(keyringDir(root, ep), { recursive: true });
+    writeFileSync(join(keyringDir(root, ep), "keyring.json"), "{not json");
+    expect(loadKeyring(root, ep)).toBeUndefined(); // findKeyringDir 跳过损坏目录（既有语义）
+    const { rings, warnings } = listKeyrings(root);
+    expect(rings).toHaveLength(0);
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("services 非数组维持整体校验失败语义（定位跳过 + listKeyrings 告警）", () => {
+    const ep = endpointId();
+    mkdirSync(keyringDir(root, ep), { recursive: true });
+    writeFileSync(
+      join(keyringDir(root, ep), "keyring.json"),
+      JSON.stringify({ alias: "prov", endpointId: ep, relayUrls: [], keys: [], services: { a: 1 }, ports: {} }),
+    );
+    expect(loadKeyring(root, ep)).toBeUndefined();
+    const { warnings } = listKeyrings(root);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("failed validation");
+  });
+
+  it("下轮目录同步全量重建（applyCatalog 覆盖被丢弃视图）", () => {
+    const ep = endpointId();
+    writeRawKeyring(ep, [v1Entry("a")]);
+    const ring = loadKeyring(root, ep)!;
+    expect(ring.services).toEqual([]);
+    const rebuilt = applyCatalog(ring, { relayUrls: ["http://fresh"], services: [service("svc-new", "new", 1)] });
+    expect(rebuilt.services.map((s) => s.serviceId)).toEqual(["svc-new"]);
+    expect(rebuilt.relayUrls).toEqual(["http://fresh"]);
   });
 });
 

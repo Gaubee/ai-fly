@@ -62,6 +62,11 @@ export const ERROR_HTTP_MAPPING: Readonly<Record<ErrorCodeValue, HttpErrorMappin
   upstream_status: { status: 502, type: "api_error" },
   // 提供方密钥库无此引用（$secret 未知名）：提供方配置问题，消费方视角 502。
   secret_missing: { status: 502, type: "api_error" },
+  // ②③④ 生命周期脚本失效（绑定缺席/抛错/形状非法/流中途失败）：HTTP 生命周期
+  // 分流（hooks-lifecycle 4.4）——pending 阶段（RESP_META 未下发）经下方
+  // errorResponseFor 映射 502 + 脱敏 message JSON；已进入流式后由 onError 的
+  // failStream 分支关闭本地连接终结（不回退状态码，观感与上游流中断一致）。
+  hook_failed: { status: 502, type: "api_error" },
   protocol_version: { status: 500, type: "api_error" },
   protocol_seq: { status: 500, type: "api_error" },
   protocol_error: { status: 500, type: "api_error" },

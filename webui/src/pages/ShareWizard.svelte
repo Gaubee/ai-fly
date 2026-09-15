@@ -21,7 +21,7 @@
   import { slide } from "svelte/transition";
   import StepHeader from "../components/StepHeader.svelte";
   import { t } from "$lib/i18n.svelte.ts";
-  import { authSelSummary } from "$lib/auth-source.ts";
+  import { authSelSummary } from "$lib/lifecycle.ts";
   import ErrorAlert from "../components/ErrorAlert.svelte";
   import CopyField from "../components/CopyField.svelte";
   import GroupKeysPanel from "../components/GroupKeysPanel.svelte";
@@ -33,7 +33,7 @@
     isLocalPreset,
     refresh,
   } from "../stores/app.svelte.ts";
-  import { serviceForm } from "../stores/service-form.svelte.ts";
+  import { serviceForm, headersSummary, stageSummary } from "../stores/service-form.svelte.ts";
   import {
     share,
     resetShare,
@@ -273,6 +273,18 @@
           <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
             <dt class="text-muted-foreground">{t("share.generate.auth")}</dt>
             <dd class="font-mono">{authSelSummary(serviceForm.auth)}</dd>
+          </div>
+          <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
+            <dt class="text-muted-foreground">{t("f.lifecycle.headers")}</dt>
+            <dd class="font-mono">{headersSummary()}</dd>
+          </div>
+          <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
+            <dt class="text-muted-foreground">{t("f.lifecycle.request")}</dt>
+            <dd class="font-mono">{stageSummary(serviceForm.requestScript)}</dd>
+          </div>
+          <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
+            <dt class="text-muted-foreground">{t("f.lifecycle.response")}</dt>
+            <dd class="font-mono">{stageSummary(serviceForm.responseScript)}</dd>
           </div>
         </dl>
 

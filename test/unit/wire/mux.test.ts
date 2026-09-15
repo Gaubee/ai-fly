@@ -234,8 +234,55 @@ describe("WireSession 出站保序与队列", () => {
 
     const seqs = h.consumerEvents.frames
       .filter((f) => f.type === FRAME_TYPE.RESP_CHUNK)
-      .map((f) => (f.header as RespChunkHeader).seq);
+      .map((f) => f.header.seq);
     expect(seqs).toEqual([0, 1, 2]);
+  });
+
+  it("终结唤醒等待者（复核 R2-F3）：peer ERROR 后门控 send 走 terminalDropped、waitOutboundQueue 返回", async () => {
+    // 消费侧停泊（ERROR 仅提供方可出站）：REQ 同 id 超 cap 挂起。
+    const h = createHarness({ consumer: { maxQueuedPerId: 1 } });
+    authed(h);
+    const id = h.consumer.allocId();
+    h.tc.sendGate = () => new Promise<void>(() => undefined); // 永不结算
+    void h.consumer.send(FRAME_TYPE.REQ, { ...reqHeader(id) });
+    await flush();
+    const gated = h.consumer.send(FRAME_TYPE.REQ, { ...reqHeader(id) }); // 门控挂起
+    const waiting = h.consumer.waitOutboundQueue(id, 0);
+    await flush();
+    expect(await isPending(gated)).toBe(true);
+    expect(await isPending(waiting)).toBe(true);
+
+    // 对端 ERROR 该 id → finishId：等待者必须被唤醒（修复前永久挂起）。
+    await h.provider.send(FRAME_TYPE.ERROR, { code: "idle_timeout", message: "peer gone", id });
+    await flush();
+    await Promise.race([
+      Promise.all([waiting, gated]),
+      new Promise(((_, reject) => setTimeout(() => reject(new Error("waiters not woken on terminal")), 500))),
+    ]);
+    expect(h.consumer.stats().terminalDropped).toBe(1); // gated 帧被丢弃而非发出
+    expect(h.consumerEvents.terminates.some((t) => t.id === id)).toBe(true);
+  });
+
+  it("断连唤醒等待者（复核 R2-F3）：close 后 waitOutboundQueue 返回、门控 send 以 closed 拒绝", async () => {
+    const h = createHarness({ provider: { maxQueuedPerId: 1 } });
+    authed(h);
+    const id = h.consumer.allocId();
+    await sendReq(h.consumer, id);
+    h.tp.sendGate = () => new Promise<void>(() => undefined);
+    void h.provider.send(FRAME_TYPE.RESP_CHUNK, { id, seq: 0 }, bytes(4));
+    await flush();
+    const gated = h.provider.send(FRAME_TYPE.RESP_CHUNK, { id, seq: 1 }, bytes(4));
+    const waiting = h.provider.waitOutboundQueue(id, 0);
+    await flush();
+    expect(await isPending(waiting)).toBe(true);
+
+    h.tc.close("bye"); // 两侧 onClose → handleClosed（置 terminal 后唤醒）
+    await Promise.race([
+      waiting,
+      new Promise(((_, reject) => setTimeout(() => reject(new Error("waiter not woken on close")), 500))),
+    ]);
+    await gated; // 唤醒后走 terminalDropped（帧被丢弃、promise 正常结算）
+    expect(h.provider.stats().terminalDropped).toBe(1);
   });
 
   it("出站方向违规抛本地误用（ERROR 仅提供方发出等）", async () => {
@@ -786,5 +833,137 @@ describe("WireSession request-id", () => {
       seen.add(id);
     }
     expect(seen.size).toBe(2000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AUTH_OK 二阶段目录投影（hooks-lifecycle v2：帧级宽松 → detail 严格复核）
+// ---------------------------------------------------------------------------
+
+describe("AUTH_OK 二阶段目录投影", () => {
+  const MASK = "\u25cf";
+
+  function authOkWithDetail(detail: unknown): Record<string, unknown> {
+    return {
+      v: 1,
+      alias: "box",
+      relayUrls: ["https://relay.example/announce"],
+      groups: [
+        {
+          keyId: "k1",
+          group: "g1",
+          limits: {},
+          services: [
+            { serviceId: "s1", name: "api", match: [{ type: "exact", value: "api.example.com" }], defaultPort: 11434, ...(detail === undefined ? {} : { detail }) },
+          ],
+        },
+      ],
+    };
+  }
+
+  /** v1 时期 detail 形状（rewrite.headerSet——v2 已退役）。 */
+  const v1Detail = {
+    upstream: "https://api.upstream/v1",
+    match: [],
+    rewrite: { host: "h", prefix: "/p", headerSet: [{ name: "authorization", value: MASK }] },
+  };
+
+  /** v2 合法 detail（掩码位 ●）。 */
+  const v2Detail = {
+    upstream: "https://api.upstream/v1",
+    match: [],
+    rewrite: {},
+    auth: { secret: MASK },
+    headers: { set: { "x-a": MASK, "x-literal": "keep" } },
+    request: { script: MASK },
+    response: { script: MASK },
+  };
+
+  interface CatalogHarness {
+    consumer: WireSession;
+    provider: WireSession;
+    ta: LoopbackTransport; // consumer 侧传输（注入伪造帧用）
+    tb: LoopbackTransport; // provider 侧传输
+    events: EventLog;
+    catalogErrors: Array<{ providerId: string; message: string }>;
+  }
+
+  function createCatalogHarness(peerEndpointId?: string): CatalogHarness {
+    const { a, b } = createLoopbackPair();
+    const events = makeEvents();
+    const catalogErrors: CatalogHarness["catalogErrors"] = [];
+    const consumer = new WireSession({
+      role: "consumer",
+      transport: a,
+      ...(peerEndpointId !== undefined ? { peerEndpointId } : {}),
+      hooks: {
+        ...hooksOf(events),
+        onCatalogError: (providerId, message) => catalogErrors.push({ providerId, message }),
+      },
+    });
+    const provider = new WireSession({ role: "provider", transport: b, hooks: hooksOf(makeEvents()) });
+    return { consumer, provider, ta: a, tb: b, events, catalogErrors };
+  }
+
+  it("detail 不合 v2：帧照常交付（catalogError 标注）、onCatalogError 携对端身份、不经 schemaDropped", async () => {
+    const h = createCatalogHarness("prov-ep-z32-1");
+    await h.consumer.send(FRAME_TYPE.AUTH, { v: 1, keys: ["sk-aifly-" + "a".repeat(52)] });
+    await h.provider.send(FRAME_TYPE.AUTH_OK, authOkWithDetail(v1Detail));
+    await settle();
+    const stats = h.consumer.stats();
+    expect(stats.schemaDropped).toBe(0); // 不触发普通帧丢弃路径
+    expect(stats.catalogDropped).toBe(1);
+    expect(h.catalogErrors).toEqual([
+      { providerId: "prov-ep-z32-1", message: "provider catalog detail failed validation (provider/consumer version mismatch?)" },
+    ]);
+    const frames = h.events.frames.filter((f) => f.type === FRAME_TYPE.AUTH_OK);
+    expect(frames).toHaveLength(1); // 帧本身交付（上层完成 AUTH 记账，会话保持 authed）
+    expect((frames[0] as { catalogError?: string }).catalogError).toBeDefined();
+    // 连接继续可用：后续正常帧照常处理
+    await h.provider.send(FRAME_TYPE.AUTH_OK, authOkWithDetail(v2Detail));
+    await settle();
+    expect(h.consumer.stats().catalogDropped).toBe(1); // 成功同步不计数
+    expect(h.events.frames.filter((f) => f.type === FRAME_TYPE.AUTH_OK)).toHaveLength(2);
+  });
+
+  it("detail 非对象垃圾同样归目录失败（不毒化、不断连）", async () => {
+    const h = createCatalogHarness("prov-ep");
+    await h.consumer.send(FRAME_TYPE.AUTH, { v: 1, keys: ["sk-aifly-" + "a".repeat(52)] });
+    await h.provider.send(FRAME_TYPE.AUTH_OK, authOkWithDetail(42));
+    await settle();
+    expect(h.consumer.stats().catalogDropped).toBe(1);
+    expect(h.consumer.poisoned).toBe(false);
+    expect(h.consumer.dead).toBe(false);
+  });
+
+  it("无 detail 的条目不受二阶段影响（合法目录照常交付）", async () => {
+    const h = createCatalogHarness("prov-ep");
+    await h.consumer.send(FRAME_TYPE.AUTH, { v: 1, keys: ["sk-aifly-" + "a".repeat(52)] });
+    await h.provider.send(FRAME_TYPE.AUTH_OK, authOkWithDetail(undefined));
+    await settle();
+    expect(h.consumer.stats().catalogDropped).toBe(0);
+    expect(h.catalogErrors).toEqual([]);
+    expect(h.events.frames.filter((f) => f.type === FRAME_TYPE.AUTH_OK)).toHaveLength(1);
+  });
+
+  it("未配置 peerEndpointId 时 providerId 为空串（对端身份未知）", async () => {
+    const h = createCatalogHarness();
+    await h.consumer.send(FRAME_TYPE.AUTH, { v: 1, keys: ["sk-aifly-" + "a".repeat(52)] });
+    await h.provider.send(FRAME_TYPE.AUTH_OK, authOkWithDetail(v1Detail));
+    await settle();
+    expect(h.catalogErrors.map((e) => e.providerId)).toEqual([""]);
+  });
+
+  it("其它帧 schema 失败仍走既有丢弃计数（二阶段只管 AUTH_OK detail）", async () => {
+    const h = createCatalogHarness("prov-ep");
+    h.consumer.markAuthed();
+    h.provider.markAuthed();
+    const id = h.consumer.allocId();
+    await h.consumer.send(FRAME_TYPE.REQ, reqHeader(id));
+    raw(h.ta, FRAME_TYPE.RESP_META, { id, status: 999, contentType: "a" }); // status 越界 → consumer 入站
+    await settle();
+    expect(h.consumer.stats().schemaDropped).toBe(1);
+    expect(h.consumer.stats().catalogDropped).toBe(0);
+    expect(h.catalogErrors).toEqual([]);
   });
 });

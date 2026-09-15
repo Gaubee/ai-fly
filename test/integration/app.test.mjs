@@ -113,7 +113,8 @@ describe("app integration: token gate + contract over ws", () => {
       upstream: deepseek.baseUrl,
       defaultPort: 4300,
       match: deepseek.matchDomains.slice(0, 2).map((d) => ({ type: "suffix", value: d })),
-      rewrite: { headerSet: { authorization: `$env:${deepseek.keyEnv}` } },
+      // hooks-lifecycle v2：rewrite 头字段退役——$env 注入落 headers.set
+      headers: { set: { authorization: `$env:${deepseek.keyEnv}` } },
       routes: deepseek.routes,
     });
     assert.ok(added.service.name === "deepseek-bridge");
@@ -141,7 +142,8 @@ describe("app integration: token gate + contract over ws", () => {
     const entry = listed.keys.find((k) => k.keyId === key.keyId);
     assert.ok(entry);
     assert.equal(entry.revokedAt, undefined, "新钥未撤销");
-    assert.ok(!JSON.stringify(entry).includes(key.key), "list 不回显原文");
+    // Owner 2026-09-13：key 原文随库返回（本机 GUI 随时可复制）
+    assert.equal(entry.key, key.key, "list 回显原文（随时可复制）");
     ws.close();
   });
 
@@ -378,17 +380,17 @@ describe("app integration: token gate + contract over ws", () => {
       // 测试前缺密钥 -> 结果级失败（不抛）
       const noSecret = await client.provider.services.test({
         upstream: upstreamBase,
-        secretName: "fake",
+        auth: { secret: "fake" },
       });
       assert.equal(noSecret.ok, false);
       assert.equal(noSecret.error, "secret not found");
 
       // 设密钥后：默认模型 = priced chat 最低价；openai 形状请求注入 authorization。
-      // 裸 key（Owner 2026-09-10）：bearerPrefix 默认开，注入自动拼 "Bearer "
+      // 裸 key + auth 槽默认 bearer=true（hooks-lifecycle 5.2：前缀归 auth 槽）
       await client.provider.secrets.set({ name: "fake", value: "fk-1" });
       const ok = await client.provider.services.test({
         upstream: upstreamBase,
-        secretName: "fake",
+        auth: { secret: "fake" },
       });
       assert.equal(ok.ok, true, JSON.stringify(ok));
       assert.equal(ok.httpStatus, 200);
@@ -404,17 +406,17 @@ describe("app integration: token gate + contract over ws", () => {
         upstream: upstreamBase,
         apiForm: "anthropic-messages",
         model: "claude-x",
-        secretName: "fake",
+        auth: { secret: "fake" },
       });
       assert.equal(seen.at(-1).url, "/v1/messages");
       assert.equal(seen.at(-1).body.model, "claude-x");
 
-      // gemini 形状：密钥经 x-goog-api-key；无 secretName 则不带
+      // gemini 形状：密钥经 x-goog-api-key；无 auth 草稿则不带
       await client.provider.services.test({
         upstream: upstreamBase,
         apiForm: "gemini-native",
         model: "gemini-x",
-        secretName: "fake",
+        auth: { secret: "fake" },
       });
       assert.equal(seen.at(-1).url, "/v1beta/models/gemini-x:generateContent");
       assert.equal(seen.at(-1).googKey, "Bearer fk-1");
@@ -423,7 +425,7 @@ describe("app integration: token gate + contract over ws", () => {
         apiForm: "gemini-native",
         model: "gemini-x",
       });
-      assert.equal(seen.at(-1).googKey, null, "无 secretName 不带密钥头");
+      assert.equal(seen.at(-1).googKey, null, "无 auth 草稿不带密钥头");
 
       // 非 http(s) upstream -> INVALID_INPUT
       await assert.rejects(
@@ -460,7 +462,7 @@ describe("app integration: token gate + contract over ws", () => {
       const probed = await client.presets.models({ upstream: probeBase, secretName: "fake" });
       assert.equal(probed.error, undefined);
       assert.equal(probed.models[0].id, "relay-mini", "探测清单便宜档排首");
-      const viaProbe = await client.provider.services.test({ upstream: probeBase, secretName: "fake" });
+      const viaProbe = await client.provider.services.test({ upstream: probeBase, auth: { secret: "fake" } });
       assert.equal(viaProbe.ok, true, JSON.stringify(viaProbe));
       assert.equal(viaProbe.model, "relay-mini");
       assert.equal(viaProbe.modelSource, "upstream-probe");
@@ -470,7 +472,7 @@ describe("app integration: token gate + contract over ws", () => {
       await client.provider.secrets.remove({ name: "fake" });
       const gone = await client.provider.services.test({
         upstream: upstreamBase,
-        secretName: "fake",
+        auth: { secret: "fake" },
         model: "cheap-chat",
       });
       assert.equal(gone.ok, false);

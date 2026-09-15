@@ -62,11 +62,20 @@ function formatDetail(svc: ServiceEntry): string[] {
       const parts: string[] = [];
       if (d.rewrite.host !== undefined) parts.push(`host=${d.rewrite.host}`);
       if (d.rewrite.prefix !== undefined) parts.push(`prefix=${d.rewrite.prefix}`);
-      if (d.rewrite.headerSet !== undefined && d.rewrite.headerSet.length > 0) {
-        parts.push(`headers=${d.rewrite.headerSet.map((h) => `${h.name}:${h.value}`).join(",")}`);
-      }
-      lines.push(`        rewrite : ${parts.length > 0 ? parts.join("  ") : "(identity)"}`);
+      if (parts.length > 0) lines.push(`        rewrite : ${parts.join("  ")}`);
     }
+    // 生命周期四槽（hooks-lifecycle v2 投影：绑定/注入位均为 ●）
+    const stages: string[] = [];
+    if (d.auth !== undefined) {
+      stages.push(`auth=${"secret" in d.auth ? "secret" : "script" in d.auth ? "script" : "literal"}`);
+    }
+    if (d.headers !== undefined) {
+      const n = Object.keys(d.headers.set ?? {}).length + (d.headers.remove ?? []).length;
+      stages.push(`headers=${n}${d.headers.script !== undefined ? "+script" : ""}`);
+    }
+    if (d.request !== undefined) stages.push("request=script");
+    if (d.response !== undefined) stages.push("response=script");
+    if (stages.length > 0) lines.push(`        lifecycle: ${stages.join("  ")}`);
   }
   return lines;
 }

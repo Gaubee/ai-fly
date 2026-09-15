@@ -8,7 +8,7 @@ Share any HTTP/WebSocket upstream (ollama / vllm / LM Studio, an internal gatewa
 Consumer machine                         Provider machine
 Agent ──► http://127.0.0.1:11434/…       ollama :11434 (or any HTTP/WS upstream)
        ──► ws://127.0.0.1:11434/…            ▲   provider engine
-           consumer engine                   │   match set + rewrite ($env keys)
+           consumer engine                   │   match set + lifecycle hooks (auth/headers)
                │  AUTH keyring / catalog     │   quotas (per key)
                └────── OpenDWeb fabric ──────┘   (identity / invites / QUIC + relay)
 ```
@@ -61,6 +61,56 @@ updates the entry, it just never re-materializes a local port until you start it
 back. The running gateway daemon picks these changes up live (keyring watch); the
 dashboard's port table exposes the same start/stop/remove actions.
 
+## Request lifecycle (hooks v2)
+
+Every service runs a four-stage pipeline around the upstream call:
+
+`onRequestBearerAuthentication (1) -> onRequestHeaders (2) -> onRequest (3) -> onResponse (4)`
+
+- `service.auth` (stage 1) — Authorization header source: `{secret: <name>}`,
+  `{script: <name>, args?}` or `{literal: <value>}` (literals accept `$env:<VAR>` /
+  `$secret:<name>` indirection, resolved per request), plus `bearer: false` to drop
+  the default `Bearer ` prefix.
+- `service.headers` (stage 2) — `remove: [...]`, `set: {name: literal}` and an
+  optional whole-stage `script: {name, args?}` returning `{set?, remove?}` (script
+  output wins over the declared set).
+- `service.request` (stage 3) — takes over the outbound call entirely; ctx is
+  `{url, method, headers, body, signal}`, returns `{status, headers, body?}`.
+- `service.response` (stage 4) — post-processes the response; ctx is
+  `{status, headers, body, signal}`, returns `{status?, headers?, body?}`.
+
+Hook scripts export one function per stage they implement — the export name is the
+stage name. Builtin library: `codex` (reads `~/.codex/auth.json` — read-only, ai-fly
+never writes credential files), plus `env` / `file` / `secret` bridges for stage 1.
+All stage fns receive `{homedir, args, secrets, env}`; stages 1-2 additionally get
+the request-level `{method, path, headers}`. Returned streams (3/4 bodies) are
+cancelled when the engine aborts the request.
+
+```bash
+# --secret -> auth = {secret: mykey}; --headers-script -> stage-2 whole-stage
+# script; --request-script/--response-script -> stage 3/4 bindings
+ai-fly service add myapi --upstream https://api.example.com --match suffix:api.example.com \
+  --secret mykey \
+  --header-set x-org=acme --header-remove x-internal \
+  --headers-script hdrfix \
+  --request-script mock-up --response-script log
+ai-fly hooks list                                 # stage matrix per script
+ai-fly hooks run codex --stage onRequestBearerAuthentication
+```
+
+**Breaking changes (hooks-lifecycle v2)**
+
+- Old hook scripts must be rewritten, not just renamed: export names changed
+  (`authHeader` -> `onRequestBearerAuthentication`, etc.) and the runtime contract
+  is new — request-scoped ctx, 3/4 object return shapes, stream cancellation.
+- v1 `services.json` (pre-`version: 2`) is invalid: the store enters a legacy
+  read-only state (`ai-fly service list` and `status --verbose` show the stale
+  names); remove them with `ai-fly service remove <name>`, then re-add services
+  to rebuild a clean v2 store (groups and share keys are not carried over).
+- `--hooks` was removed; `--secret` now fills `auth.secret`; `--header-set`
+  values accept literals and `$env:`/`$secret:` references only (per-header hook
+  objects are gone — bind a stage script with `--headers-script` instead).
+
 ## Development
 
 ```bash
@@ -109,7 +159,7 @@ strings below are exactly what the UI shows.
    plain browser tab the layout must look identical (zero inset fallback).
 9. **Secrets panel** — Advanced > secrets: add a key-value pair, pick it in
    the share wizard's "api key" selector, generate a service; the saved
-   rewrite shows `authorization: $secret:<name>`; values never re-display
+   service shows the auth slot `secret <name>`; values never re-display
    after saving; removing a secret referenced by a service is allowed but the
    service then fails with `secret_missing` until re-added.
 10. **Connectivity test** — in the share wizard (with a secret picked) or a

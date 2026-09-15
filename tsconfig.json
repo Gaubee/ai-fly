@@ -14,7 +14,13 @@
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
     "declaration": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "paths": {
+      // webui 概念模型进 root 测试范围时与 webui/vite.config.ts 同源映射
+      // （lifecycle.ts 只依赖 $shared——运行时值消费，vitest.config.ts 同步别名）
+      "$shared": ["./src/shared"],
+      "$shared/*": ["./src/shared/*"]
+    }
   },
   "include": ["src", "test", "presets"]
 }

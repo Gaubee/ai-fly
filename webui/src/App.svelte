@@ -11,12 +11,16 @@
   import { onMount } from "svelte";
   import ToastViewport from "$lib/ui/toast";
   import ThemeToggle from "$lib/ui/theme-toggle";
+  import Alert from "$lib/ui/alert";
+  import Badge from "$lib/ui/badge";
+  import PressButton from "$lib/ui/press-button";
   import { router, type RouteId } from "$lib/router.svelte.ts";
   import { startOverlay, beginWindowDrag } from "$lib/overlay.svelte.ts";
   import { rpcState } from "./stores/rpc.svelte.ts";
   import { locale, setLocale, t, type Locale } from "$lib/i18n.svelte.ts";
-  import { startApp } from "./stores/app.svelte.ts";
+  import { startApp, app } from "./stores/app.svelte.ts";
   import { toast } from "./stores/toast.svelte.ts";
+  import { serviceRemove, removeService } from "./stores/advanced.svelte.ts";
   // app 图标：直接引仓库 resources/icon.svg（app:icons 同一源，vite asset
   // import 走 fs.allow 工作区；build 期拷入 dist/assets，零手工同步）
   import iconUrl from "../../resources/icon.svg";
@@ -39,6 +43,15 @@
   ];
 
   const disconnected = $derived(rpcState.status !== "open");
+
+  /** legacy（pre-v2）存储态（hooks-lifecycle 7.4）：顶部失效横幅——
+   *  「界面可用」语义冻结：页面正常加载、全部入口可见；服务/分组/分享
+   *  密钥提交在表单侧渲染 INVALID_STATE 引导（ErrorAlert）；密钥面板
+   *  读写独立文件照常可用。旧条目全部移除后横幅消失。 */
+  const legacyNames = $derived(app.ready ? app.legacyServiceNames : []);
+  // 横幅判据用 provider.status.legacy 本体（而非名册长度）：空名册的 legacy
+  // 态（恶形条目）同样需要失效提示（复核 R2-P2）。
+  const legacyActive = $derived(app.ready && app.provider?.legacy != null);
 
   /** header 拖拽守卫：命中交互元素（theme-toggle 等）不触发窗口拖拽。 */
   function onHeaderPointerDown(event: PointerEvent & { currentTarget: EventTarget & HTMLElement }): void {
@@ -95,6 +108,44 @@
       <ThemeToggle variant="compact" />
     </div>
   </header>
+
+  <!-- legacy 失效横幅（hooks-lifecycle 7.4）：旧版配置已失效——只读名册 +
+       移除（busy 锁 + 二次确认）；全部移除后 store 重建 v2，横幅消失。
+       条件挂 provider.status.legacy（复核 R2-P2）：空名册（无法按名移除的
+       恶形条目）也要给横幅与人工清理指引，不能静默锁死。 -->
+  {#if legacyActive}
+    <Alert variant="tonal" class="jx-hue-warning m-3" title={t("legacy.bannerTitle")}>
+      <p class="text-xs leading-relaxed">{t("legacy.bannerBody")}</p>
+      {#if legacyNames.length === 0}
+        <p class="text-xs leading-relaxed text-muted-foreground">{t("legacy.noNames")}</p>
+      {:else}
+        <div class="mt-2 flex flex-col gap-1.5">
+          {#each legacyNames as name (name)}
+            <div class="flex flex-wrap items-center gap-2 border border-border/70 bg-card px-2.5 py-1.5">
+              <span class="min-w-0 truncate font-mono text-xs">{name}</span>
+              <Badge variant="tonal" class="jx-hue-warning">{t("legacy.badge")}</Badge>
+              <span class="ml-auto flex items-center gap-1.5">
+                {#if serviceRemove.confirm === name}
+                  <PressButton
+                    variant="tonal"
+                    class="jx-pair-destructive"
+                    loading={serviceRemove.busy === name}
+                    onclick={() => void removeService(name)}
+                  >{t("common.confirmRemove")}</PressButton>
+                  <PressButton variant="ghost" onclick={() => (serviceRemove.confirm = "")}>{t("common.cancel")}</PressButton>
+                {:else}
+                  <PressButton
+                    variant="ghost"
+                    onclick={() => (serviceRemove.confirm = name)}
+                  >{t("common.remove")}</PressButton>
+                {/if}
+              </span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </Alert>
+  {/if}
 
   <div class="flex min-h-0 flex-1">
     <!-- 左侧导航：品牌与状态件已上移 appHeader，控件避让由 header 承担 -->

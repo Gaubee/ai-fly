@@ -11,6 +11,19 @@
 //   因此分类不依赖 zod issue 内部结构，直接复查原始输入。
 
 import { z } from "zod";
+import {
+  AUTH_LITERAL_SLOT_SCHEMA,
+  AUTH_SCRIPT_SLOT_SCHEMA,
+  AUTH_SECRET_SLOT_SCHEMA,
+  ENV_REF_PREFIX,
+  HEADERS_REMOVE_SCHEMA,
+  HEADERS_SCRIPT_SLOT_SCHEMA,
+  HEADERS_SET_SCHEMA,
+  MASK_LITERAL,
+  REQUEST_SLOT_SCHEMA,
+  RESPONSE_SLOT_SCHEMA,
+  SECRET_REF_PREFIX,
+} from "../provider/lifecycle.ts";
 
 // ---------------------------------------------------------------------------
 // 帧类型号（design A3；PAUSE/RESUME 留待 v2 分配，不预留号段）
@@ -69,6 +82,7 @@ export const ERROR_CODE = {
   key_all_invalid: "key_all_invalid",
   unknown_service: "unknown_service",
   path_not_offered: "path_not_offered",
+  hook_failed: "hook_failed",
   upstream_unreachable: "upstream_unreachable",
   upstream_status: "upstream_status",
   secret_missing: "secret_missing",
@@ -268,18 +282,50 @@ export const SERVICE_MATCH_SCHEMA = z.strictObject({
   value: z.string().min(1).max(2048),
 });
 
-/** 服务完整配置的脱敏披露（$env 注入的头值仅显示 ●，变量名不显示）。 */
+/**
+ * 生命周期四槽的 wire 脱敏投影（hooks-lifecycle v2）：结构位置与 canonical
+ * （provider/lifecycle.ts）一致，敏感位（密钥名 / 脚本绑定 / 引用型字面量）一律
+ * 为掩码 ●——从 canonical 基础对象派生（extend/omit + MASK_LITERAL），禁止手写
+ * 镜像声明。
+ */
+export const SERVICE_AUTH_DETAIL_SCHEMA = z.union([
+  AUTH_SECRET_SLOT_SCHEMA.extend({ secret: MASK_LITERAL }),
+  AUTH_SCRIPT_SLOT_SCHEMA.omit({ args: true }).extend({ script: MASK_LITERAL }),
+  AUTH_LITERAL_SLOT_SCHEMA.extend({ literal: MASK_LITERAL }),
+]);
+
+export const SERVICE_HEADERS_DETAIL_SCHEMA = z.strictObject({
+  remove: HEADERS_REMOVE_SCHEMA.optional(),
+  // 值 = 字面量或 ●（掩码纪律入 schema：引用型值（$env:/$secret:）绝不裸上 wire——
+  // 提供方 detail 投影按 spec 将引用整体掩码后发送）。
+  set: HEADERS_SET_SCHEMA.refine(
+    (set) =>
+      Object.values(set).every((v) => !v.startsWith(ENV_REF_PREFIX) && !v.startsWith(SECRET_REF_PREFIX)),
+    { message: "detail headers.set reference values must be masked" },
+  ).optional(),
+  script: HEADERS_SCRIPT_SLOT_SCHEMA.omit({ args: true }).extend({ name: MASK_LITERAL }).optional(),
+});
+
+export const SERVICE_REQUEST_DETAIL_SCHEMA = REQUEST_SLOT_SCHEMA.omit({ args: true }).extend({
+  script: MASK_LITERAL,
+});
+
+export const SERVICE_RESPONSE_DETAIL_SCHEMA = RESPONSE_SLOT_SCHEMA.omit({ args: true }).extend({
+  script: MASK_LITERAL,
+});
+
+/** 服务完整配置的脱敏披露（v2 四槽；脚本/密钥/引用注入位显示 ●，名称与值不出）。 */
 export const SERVICE_DETAIL_SCHEMA = z.strictObject({
   upstream: z.string().min(1).max(2048),
   match: z.array(SERVICE_MATCH_SCHEMA).max(64),
   rewrite: z.strictObject({
     host: z.string().min(1).max(2048).optional(),
     prefix: z.string().min(1).max(2048).optional(),
-    headerSet: z
-      .array(z.strictObject({ name: z.string().min(1).max(1024), value: z.string().max(256) }))
-      .max(32)
-      .optional(),
   }),
+  auth: SERVICE_AUTH_DETAIL_SCHEMA.optional(),
+  headers: SERVICE_HEADERS_DETAIL_SCHEMA.optional(),
+  request: SERVICE_REQUEST_DETAIL_SCHEMA.optional(),
+  response: SERVICE_RESPONSE_DETAIL_SCHEMA.optional(),
   /** 路径路由披露（M3-r7：prefix/pattern 双模式；forms 为 AI 层标注，可为空）。 */
   routes: z
     .array(
@@ -301,8 +347,21 @@ export const SERVICE_ENTRY_SCHEMA = z.strictObject({
   name: z.string().min(1).max(256),
   match: z.array(SERVICE_MATCH_SCHEMA).max(64),
   defaultPort: z.number().int().min(1).max(65535),
-      hooks: z.string().optional(),
   detail: SERVICE_DETAIL_SCHEMA.optional(),
+});
+
+/**
+ * AUTH_OK 目录条目（帧级 / 二阶段第一阶段）：身份字段严格校验，detail 宽松承载
+ * （z.unknown）且未知字段剥除——旧版本 detail 形状不在帧级拒绝，而由 mux 二阶段
+ * 按 SERVICE_DETAIL_SCHEMA 严格解析，失败走 onCatalogError（目录同步失败，
+ * 不触发普通帧丢弃路径）。跨版本不兼容是显式约束（提供者与使用方同版本）。
+ */
+export const SERVICE_ENTRY_CATALOG_SCHEMA = z.object({
+  serviceId: Z_ID,
+  name: z.string().min(1).max(256),
+  match: z.array(SERVICE_MATCH_SCHEMA).max(64),
+  defaultPort: z.number().int().min(1).max(65535),
+  detail: z.unknown().optional(),
 });
 
 export const GROUP_ENTRY_SCHEMA = z.strictObject({
@@ -312,7 +371,7 @@ export const GROUP_ENTRY_SCHEMA = z.strictObject({
     maxConcurrency: z.number().int().min(1).optional(),
     dailyRequests: z.number().int().min(1).optional(),
   }),
-  services: z.array(SERVICE_ENTRY_SCHEMA),
+  services: z.array(SERVICE_ENTRY_CATALOG_SCHEMA),
 });
 
 // ---------------------------------------------------------------------------
@@ -396,6 +455,7 @@ export const ERROR_HEADER_SCHEMA = z.strictObject({
     ERROR_CODE.key_all_invalid,
     ERROR_CODE.unknown_service,
     ERROR_CODE.path_not_offered,
+    ERROR_CODE.hook_failed,
     ERROR_CODE.upstream_unreachable,
     ERROR_CODE.upstream_status,
     ERROR_CODE.secret_missing,
@@ -459,7 +519,11 @@ export const FRAME_HEADER_SCHEMAS: Readonly<Record<FrameTypeValue, z.ZodType>> =
 
 export type ServiceMatch = z.infer<typeof SERVICE_MATCH_SCHEMA>;
 export type ServiceDetail = z.infer<typeof SERVICE_DETAIL_SCHEMA>;
+export type ServiceAuthDetail = z.infer<typeof SERVICE_AUTH_DETAIL_SCHEMA>;
+export type ServiceHeadersDetail = z.infer<typeof SERVICE_HEADERS_DETAIL_SCHEMA>;
 export type ServiceEntry = z.infer<typeof SERVICE_ENTRY_SCHEMA>;
+/** AUTH_OK 目录条目（帧级）：detail 宽松（二阶段严格解析后恢复 ServiceDetail 形）。 */
+export type ServiceCatalogEntry = z.infer<typeof SERVICE_ENTRY_CATALOG_SCHEMA>;
 export type GroupEntry = z.infer<typeof GROUP_ENTRY_SCHEMA>;
 
 export type AuthHeader = z.infer<typeof AUTH_HEADER_SCHEMA>;

@@ -53,7 +53,7 @@ type Probe =
 // 输入形状（参数类型精确到字段）
 // ---------------------------------------------------------------------------
 
-/** services.add 的输入参数类型。 */
+/** services.add 的输入参数类型（hooks-lifecycle v2：四槽 + rewrite 瘦身）。 */
 type ServicesAddInput = Parameters<Client["provider"]["services"]["add"]>[0];
 const checkAddInput: AssertEqual<
   ServicesAddInput,
@@ -61,27 +61,28 @@ const checkAddInput: AssertEqual<
     name: string;
     upstream: string;
     match: Array<{ type: "exact" | "suffix" | "regex"; value: string }>;
-    hooks?: string | undefined;
     defaultPort?: number | undefined;
     rewrite?:
       | {
-          hostHeader?: string | undefined;
+          host?: string | undefined;
           pathPrefixStrip?: string | undefined;
           pathPrefixAppend?: string | undefined;
-          headerSet?:
-            | Record<
-                string,
-                | string
-                | {
-                    hook: string;
-                    args?: Record<string, string> | undefined;
-                    bearer?: boolean | undefined;
-                  }
-              >
-            | undefined;
-          headerRemove?: string[] | undefined;
         }
       | undefined;
+    auth?:
+      | ({ secret: string; bearer?: boolean | undefined })
+      | ({ script: string; args?: Record<string, string> | undefined; bearer?: boolean | undefined })
+      | ({ literal: string; bearer?: boolean | undefined })
+      | undefined;
+    headers?:
+      | {
+          remove?: string[] | undefined;
+          set?: Record<string, string> | undefined;
+          script?: { name: string; args?: Record<string, string> | undefined } | undefined;
+        }
+      | undefined;
+    request?: { script: string; args?: Record<string, string> | undefined } | undefined;
+    response?: { script: string; args?: Record<string, string> | undefined } | undefined;
     routes?:
       | Array<{
           forms: Array<"openai-chat" | "openai-responses" | "anthropic">;
@@ -96,6 +97,49 @@ const checkAddInput: AssertEqual<
   }
 > = true;
 void checkAddInput;
+
+/** provider.status 输出的 legacy 态字段（hooks-lifecycle 2.3 最小增量）。 */
+type ProviderStatusOutput = Awaited<ReturnType<Client["provider"]["status"]>>;
+const checkStatusLegacy: AssertEqual<
+  ProviderStatusOutput["legacy"],
+  { serviceNames: string[] } | null
+> = true;
+void checkStatusLegacy;
+
+/** hooks.list 输出 stages-only（hooks-lifecycle 5.1；codex R6：fns 字段删除）。 */
+type HooksListOutput = Awaited<ReturnType<Client["provider"]["hooks"]["list"]>>;
+const checkHooksStages: AssertEqual<
+  HooksListOutput,
+  {
+    hooks: Array<{
+      name: string;
+      source: "user" | "builtin";
+      stages: Array<
+        "onRequestBearerAuthentication" | "onRequestHeaders" | "onRequest" | "onResponse"
+      >;
+    }>;
+  }
+> = true;
+void checkHooksStages;
+
+/** secrets.list 精确形状（hooks-lifecycle 5.2：{secrets, count}；bearerPrefix 退役）。 */
+type SecretsListOutput = Awaited<ReturnType<Client["provider"]["secrets"]["list"]>>;
+const checkSecretsList: AssertEqual<
+  SecretsListOutput,
+  { secrets: Array<{ name: string; createdAt?: number | undefined; updatedAt?: number | undefined }>; count: number }
+> = true;
+void checkSecretsList;
+
+/** services.test 输入的 auth 槽草稿（hooks-lifecycle 5.2：secretName 单字段退役）。 */
+type ServicesTestInput = Parameters<Client["provider"]["services"]["test"]>[0];
+const checkServicesTestAuth: AssertEqual<
+  ServicesTestInput["auth"],
+  | ({ secret: string; bearer?: boolean | undefined })
+  | ({ script: string; args?: Record<string, string> | undefined; bearer?: boolean | undefined })
+  | ({ literal: string; bearer?: boolean | undefined })
+  | undefined
+> = true;
+void checkServicesTestAuth;
 
 /** writers.preview 的输入参数类型（serviceId/port 二选一联合）。 */
 type WritersPreviewInput = Parameters<Client["writers"]["preview"]>[0];

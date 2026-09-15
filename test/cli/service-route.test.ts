@@ -2,7 +2,7 @@
 // 解析（forms 按 anthropic 子串自动推导）、--route-pattern match=template、
 // --secret 推 $secret: 重写、service get 全量详情。真实 ProviderStore + tmp HOME。
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -73,7 +73,7 @@ describe("ai-fly service add 路由参数", () => {
     expect(code).toBe(2);
   });
 
-  it("--secret 挂 authorization=$secret:<name> 重写；service get 展示（值不出库）", async () => {
+  it("--secret 落 auth.secret 槽；service get 展示（值不出库）", async () => {
     const home = freshHome();
     const data = join(home, "provider");
     const secret = await import("../../src/cli/commands/provider/secret.ts");
@@ -81,18 +81,19 @@ describe("ai-fly service add 路由参数", () => {
     lines.length = 0;
     await run(["add", "withsec", "--upstream", "https://api.example.com/", "--match", "suffix:api.example.com", "--secret", "kk", "--port", "4314", "--data", data], { homedir: home });
     const svc = ProviderStore.open(data).listServices().find((s) => s.name === "withsec");
-    expect(svc?.rewrite?.headerSet).toEqual({ authorization: { hook: "authHeader", args: { name: "kk" } } });
-    expect(svc?.hooks).toBe("secret");
+    // hooks-lifecycle v2：--secret 糖 → auth.secret（不再写 rewrite.headerSet/hooks）
+    expect(svc?.auth).toEqual({ secret: "kk" });
+    expect(svc?.rewrite).toBeUndefined();
     lines.length = 0;
     expect(await run(["get", "withsec", "--data", data], { homedir: home })).toBe(0);
     const text = lines.join("");
-    expect(text).toContain("hook authHeader (name=kk)");
+    expect(text).toContain("auth       : secret kk");
     expect(text).not.toContain("sk-xyz");
   });
 });
 
 describe("ai-fly service add --preset codex（cli-codex）", () => {
-  it("路由 + $file 凭据模板预填（无需 --secret/--port）", async () => {
+  it("路由 + preset.auth→auth.script 预填（无需 --secret/--port）", async () => {
     const home = mkdtempSync(join(tmpdir(), `aifly-codex-${process.pid}`));
     const data = join(home, "provider");
     const code = await run(["add", "my-codex", "--preset", "codex", "--data", data], { homedir: home });
@@ -105,14 +106,14 @@ describe("ai-fly service add --preset codex（cli-codex）", () => {
       localPrefix: "/codex",
       upstreamPrefix: "/backend-api/codex",
     });
-    expect(svc?.rewrite?.headerSet).toEqual({
-      authorization: { hook: "authHeader", bearer: true },
-    });
+    // hooks-lifecycle 6.3：preset.auth {script, bearer} 原样透传为 v2 auth 槽
+    expect(svc?.auth).toEqual({ script: "codex", bearer: true });
+    expect(svc?.rewrite).toBeUndefined();
     const text = lines.join("");
     expect(text).toContain("/codex=/backend-api/codex");
   });
 
-  it("--secret 覆盖 preset 的 authHeader", async () => {
+  it("--secret 覆盖 preset 的 auth", async () => {
     const home = mkdtempSync(join(tmpdir(), `aifly-codex2-${process.pid}`));
     const data = join(home, "provider");
     const secret = await import("../../src/cli/commands/provider/secret.ts");
@@ -120,6 +121,150 @@ describe("ai-fly service add --preset codex（cli-codex）", () => {
     lines.length = 0;
     await run(["add", "codex2", "--preset", "codex", "--secret", "ck", "--data", data], { homedir: home });
     const svc = ProviderStore.open(data).listServices().find((s) => s.name === "codex2");
-    expect(svc?.rewrite?.headerSet).toEqual({ authorization: { hook: "authHeader", args: { name: "ck" } } });
+    expect(svc?.auth).toEqual({ secret: "ck" });
+  });
+
+  it("--no-bearer 覆盖 preset.auth 的 bearer 开关", async () => {
+    const home = mkdtempSync(join(tmpdir(), `aifly-codex3-${process.pid}`));
+    const data = join(home, "provider");
+    const code = await run(["add", "codex3", "--preset", "codex", "--no-bearer", "--data", data], { homedir: home });
+    expect(code).toBe(0);
+    const svc = ProviderStore.open(data).listServices().find((s) => s.name === "codex3");
+    expect(svc?.auth).toEqual({ script: "codex", bearer: false });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hooks-lifecycle 6.1：service add 旗标重映射 + get/list 四槽 humanize + legacy
+// ---------------------------------------------------------------------------
+
+describe("ai-fly service add 生命周期旗标（v2）", () => {
+  it("--auth-script/--auth-literal 落 auth 槽；三族互斥拒绝", async () => {
+    const home = freshHome();
+    const data = join(home, "provider");
+    const base = ["--upstream", "https://api.example.com/", "--match", "suffix:api.example.com", "--port", "4320", "--data", data];
+    await run(["add", "via-script", ...base, "--auth-script", "codex"], { homedir: home });
+    await run(["add", "via-literal", ...base, "--auth-literal", "Bearer abc"], { homedir: home });
+    const services = ProviderStore.open(data).listServices();
+    expect(services.find((s) => s.name === "via-script")?.auth).toEqual({ script: "codex" });
+    expect(services.find((s) => s.name === "via-literal")?.auth).toEqual({ literal: "Bearer abc" });
+
+    // 互斥：--secret + --auth-script 同时给 → UsageError（退出码 2）
+    const code = await run(["add", "conflict", ...base, "--secret", "a", "--auth-literal", "b"], { homedir: home });
+    expect(code).toBe(2);
+    expect(errLines.join("")).toContain("mutually exclusive");
+  });
+
+  it("--no-bearer 需要 auth 源；有 auth 源时落 bearer:false", async () => {
+    const home = freshHome();
+    const data = join(home, "provider");
+    const base = ["--upstream", "https://api.example.com/", "--match", "suffix:api.example.com", "--port", "4321", "--data", data];
+    const noAuth = await run(["add", "x1", ...base, "--no-bearer"], { homedir: home });
+    expect(noAuth).toBe(2);
+    expect(errLines.join("")).toContain("--no-bearer requires an auth source");
+
+    await run(["add", "x2", ...base, "--secret", "kk", "--no-bearer"], { homedir: home });
+    expect(ProviderStore.open(data).listServices().find((s) => s.name === "x2")?.auth).toEqual({ secret: "kk", bearer: false });
+  });
+
+  it("--headers-script/--request-script/--response-script 落对应槽", async () => {
+    const home = freshHome();
+    const data = join(home, "provider");
+    await run(
+      [
+        "add", "staged",
+        "--upstream", "https://api.example.com/", "--match", "suffix:api.example.com", "--port", "4322", "--data", data,
+        "--header-set", "x-org=acme", "--header-set", "x-token=$secret:tk", "--header-remove", "X-Internal",
+        "--headers-script", "hdrfix", "--request-script", "mock-up", "--response-script", "tail-log",
+      ],
+      { homedir: home },
+    );
+    const svc = ProviderStore.open(data).listServices().find((s) => s.name === "staged");
+    expect(svc?.headers).toEqual({
+      set: { "x-org": "acme", "x-token": "$secret:tk" },
+      remove: ["x-internal"],
+      script: { name: "hdrfix" },
+    });
+    expect(svc?.request).toEqual({ script: "mock-up" });
+    expect(svc?.response).toEqual({ script: "tail-log" });
+  });
+
+  it("--header-set 值拒收 JSON 钩子对象（提示改用 --headers-script）", async () => {
+    const home = freshHome();
+    const data = join(home, "provider");
+    const code = await run(
+      [
+        "add", "badhdr",
+        "--upstream", "https://api.example.com/", "--match", "suffix:api.example.com", "--port", "4323", "--data", data,
+        "--header-set", 'authorization={"hook":"authHeader","args":{"name":"k"}}',
+      ],
+      { homedir: home },
+    );
+    expect(code).toBe(2);
+    expect(errLines.join("")).toContain("per-header hook objects were removed");
+    expect(errLines.join("")).toContain("--headers-script");
+  });
+
+  it("--hooks 已退役：传入即报错并给阶段槽指引", async () => {
+    const home = freshHome();
+    const data = join(home, "provider");
+    const code = await run(
+      ["add", "old", "--upstream", "https://api.example.com/", "--match", "suffix:api.example.com", "--port", "4324", "--data", data, "--hooks", "codex"],
+      { homedir: home },
+    );
+    expect(code).toBe(2);
+    expect(errLines.join("")).toContain("--hooks was removed");
+    expect(errLines.join("")).toContain("--auth-script");
+    expect(ProviderStore.open(data).listServices()).toHaveLength(0);
+  });
+
+  it("service get/list 按四槽阶段 humanize（显示引用形态，auth 三族 + bearer）", async () => {
+    const home = freshHome();
+    const data = join(home, "provider");
+    await run(
+      [
+        "add", "full",
+        "--upstream", "https://api.example.com/", "--match", "suffix:api.example.com", "--port", "4325", "--data", data,
+        "--secret", "kk", "--no-bearer",
+        "--header-set", "x-org=acme", "--header-remove", "X-Internal", "--headers-script", "hdrfix",
+        "--request-script", "mock-up", "--response-script", "tail-log",
+      ],
+      { homedir: home },
+    );
+    lines.length = 0;
+    expect(await run(["get", "full", "--data", data], { homedir: home })).toBe(0);
+    const text = lines.join("");
+    expect(text).toContain("auth       : secret kk (bearer off)");
+    expect(text).toContain("headers    : set x-org=acme | remove x-internal | script hdrfix");
+    expect(text).toContain("request    : script mock-up");
+    expect(text).toContain("response   : script tail-log");
+
+    lines.length = 0;
+    expect(await run(["list", "--data", data], { homedir: home })).toBe(0);
+    const listText = lines.join("");
+    expect(listText).toContain("lifecycle  : auth:secret kk (bearer off); headers:set(1),remove(1),script:hdrfix; request:script mock-up; response:script tail-log");
+  });
+
+  it("keyEnv 预设（openai）走 auth.literal $env 引用", async () => {
+    const home = freshHome();
+    const data = join(home, "provider");
+    await run(["add", "oa", "--preset", "openai", "--data", data], { homedir: home });
+    const svc = ProviderStore.open(data).listServices().find((s) => s.name === "oa");
+    expect(svc?.auth).toEqual({ literal: "$env:OPENAI_API_KEY" });
+  });
+
+  it("legacy（pre-v2）services.json：service list 显示失效名册 + 移除提示", async () => {
+    const home = freshHome();
+    const data = join(home, "provider");
+    mkdirSync(data, { recursive: true });
+    // v1 形状：无 version 字段（hooks-lifecycle 版本门禁 → legacy 态）
+    writeFileSync(join(data, "services.json"), JSON.stringify({ revision: 3, services: [{ name: "old-a", upstream: "https://a.example.com" }, { name: "old-b", upstream: "https://b.example.com" }], groups: [], keys: [] }));
+    lines.length = 0;
+    expect(await run(["list", "--data", data], { homedir: home })).toBe(0);
+    const text = lines.join("");
+    expect(text).toContain("legacy (pre-v2) format");
+    expect(text).toContain("old-a  [legacy]");
+    expect(text).toContain("old-b  [legacy]");
+    expect(text).toContain("ai-fly service remove <name>");
   });
 });

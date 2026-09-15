@@ -16,9 +16,11 @@ import { FabricWireAdapter } from "../wire/fabric-adapter.ts";
 import { splitBody } from "../wire/codec.ts";
 import {
   FRAME_TYPE,
+  SERVICE_DETAIL_SCHEMA,
   type AuthOkHeader,
   type ErrorHeader,
   type RespMetaHeader,
+  type ServiceDetail,
   type ServiceEntry,
 } from "../wire/frames.ts";
 import {
@@ -260,6 +262,7 @@ export class ProviderConnection implements ProviderRoute {
   private readonly backoff: BackoffOpts;
   private readonly pollIntervalMs: number;
   private readonly onCatalog: (conn: ProviderConnection, ring: Keyring) => void;
+  private readonly onCatalogError: (providerId: string, message: string) => void;
   private readonly onStateChange: (conn: ProviderConnection) => void;
   private readonly reloadRing: (endpointId: string) => Keyring | undefined;
 
@@ -286,6 +289,8 @@ export class ProviderConnection implements ProviderRoute {
     backoff?: BackoffOpts;
     pollIntervalMs?: number;
     onCatalog?: (conn: ProviderConnection, ring: Keyring) => void;
+    /** 目录同步失败通知（AUTH_OK 二阶段 detail 投影解析失败；保留旧视图）。 */
+    onCatalogError?: (providerId: string, message: string) => void;
     onStateChange?: (conn: ProviderConnection) => void;
     reloadRing?: (endpointId: string) => Keyring | undefined;
   }) {
@@ -297,6 +302,7 @@ export class ProviderConnection implements ProviderRoute {
     this.backoff = opts.backoff ?? {};
     this.pollIntervalMs = opts.pollIntervalMs ?? LINK_STATUS_POLL_MS;
     this.onCatalog = opts.onCatalog ?? (() => undefined);
+    this.onCatalogError = opts.onCatalogError ?? (() => undefined);
     this.onStateChange = opts.onStateChange ?? (() => undefined);
     this.reloadRing = opts.reloadRing ?? (() => undefined);
     this.lastKeySnapshot = JSON.stringify(opts.ring.keys.map((k) => k.key));
@@ -454,8 +460,10 @@ export class ProviderConnection implements ProviderRoute {
       this.session = new WireSession({
         role: "consumer",
         transport: raw.transport,
+        peerEndpointId: this.endpointId, // onCatalogError 的 providerId 来源（对端身份）
         hooks: {
           onFrame: (f) => this.handleFrame(f),
+          onCatalogError: (providerId, message) => this.handleCatalogError(providerId, message),
           onPoison: (info) => this.handlePoison(info.id),
           onIdleTimeout: (id) => this.handleIdleTimeout(id),
           onDisconnect: (reason) => this.handleDisconnect(reason),
@@ -517,7 +525,7 @@ export class ProviderConnection implements ProviderRoute {
   private handleFrame(frame: InboundFrame): void {
     switch (frame.type) {
       case FRAME_TYPE.AUTH_OK:
-        this.handleAuthOk(frame.header);
+        this.handleAuthOk(frame.header, frame.catalogError);
         return;
       case FRAME_TYPE.AUTH_ERR:
         this.handleAuthErr();
@@ -575,34 +583,60 @@ export class ProviderConnection implements ProviderRoute {
     }
   }
 
-  private handleAuthOk(header: AuthOkHeader): void {
+  /**
+   * 目录同步失败（AUTH_OK 二阶段 detail 投影解析失败，mux onCatalogError 路径）：
+   * 保留既有服务视图与映射不动、记录本地错误态（status.lastError 呈现 + 通知
+   * 通道回调）；AUTH 交换本身已成功（会话保持 authed），不影响其它提供者。
+   */
+  private handleCatalogError(providerId: string, message: string): void {
+    this.lastError = message;
+    this.onCatalogError(providerId, message);
+  }
+
+  private handleAuthOk(header: AuthOkHeader, catalogError?: string): void {
     const session = this.session;
     if (session === null) return;
     session.markAuthed();
     this.attempt = 0; // AUTH 通过：退避窗口复位
-    this.lastError = undefined;
-    // 目录全量替换（初次与 refresh 同构）+ 密钥元数据回填 + 持久化
-    const services: ServiceEntry[] = [];
-    const seen = new Set<string>();
-    for (const g of header.groups) {
-      for (const s of g.services) {
-        if (!seen.has(s.serviceId)) {
-          seen.add(s.serviceId);
-          services.push(s);
+    if (catalogError === undefined) {
+      // 任一次成功的目录同步覆盖视图并清除错误态。
+      this.lastError = undefined;
+      // 目录全量替换（初次与 refresh 同构）+ 密钥元数据回填 + 持久化
+      const services: ServiceEntry[] = [];
+      const seen = new Set<string>();
+      for (const g of header.groups) {
+        for (const s of g.services) {
+          if (!seen.has(s.serviceId)) {
+            seen.add(s.serviceId);
+            // detail 二阶段已在 mux 严格复核；此处复解析仅恢复类型（防御缺席）。
+            let detail: ServiceDetail | undefined;
+            if (s.detail !== undefined) {
+              const parsedDetail = SERVICE_DETAIL_SCHEMA.safeParse(s.detail);
+              if (parsedDetail.success) detail = parsedDetail.data;
+            }
+            services.push({
+              serviceId: s.serviceId,
+              name: s.name,
+              match: s.match,
+              defaultPort: s.defaultPort,
+              ...(detail !== undefined ? { detail } : {}),
+            });
+          }
         }
       }
+      // 磁盘侧 actualPorts 可能已被引擎监听回写更新（端口自动错开）——目录同步
+      // 若用构造期内存快照整体落盘会覆写清空；应用前先取磁盘现值
+      const persisted = loadKeyring(this.root, this.ring.endpointId);
+      const base = persisted === undefined ? this.ring : { ...this.ring, actualPorts: persisted.actualPorts };
+      let ring = applyCatalog(base, { alias: header.alias, relayUrls: header.relayUrls, services });
+      ring = reconcileKeyMetadata(ring, header.groups.map((g) => ({ keyId: g.keyId, group: g.group })));
+      this.ring = ring;
+      this.alias = ring.alias;
+      saveKeyring(this.root, ring);
+      this.onCatalog(this, ring);
     }
-    // 磁盘侧 actualPorts 可能已被引擎监听回写更新（端口自动错开）——目录同步
-    // 若用构造期内存快照整体落盘会覆写清空；应用前先取磁盘现值
-    const persisted = loadKeyring(this.root, this.ring.endpointId);
-    const base = persisted === undefined ? this.ring : { ...this.ring, actualPorts: persisted.actualPorts };
-    let ring = applyCatalog(base, { alias: header.alias, relayUrls: header.relayUrls, services });
-    ring = reconcileKeyMetadata(ring, header.groups.map((g) => ({ keyId: g.keyId, group: g.group })));
-    this.ring = ring;
-    this.alias = ring.alias;
-    saveKeyring(this.root, ring);
-    this.onCatalog(this, ring);
-    // 路径类型落地（AUTH 之前先置直接可用态，随后按 linkStatus 修正 direct/relay）
+    // 路径类型落地（AUTH 之前先置直接可用态，随后按 linkStatus 修正 direct/relay）；
+    // 目录同步失败时同样落地——AUTH 已通过、旧视图与映射继续服务。
     this.setState("direct");
     void this.rawSession
       ?.linkStatus()
@@ -731,6 +765,8 @@ export interface ProviderManagerOptions {
   backoff?: BackoffOpts;
   pollIntervalMs?: number;
   onCatalog?: (providerId: string, alias: string, services: readonly ServiceEntry[], ports: Readonly<Record<string, number>>) => void;
+  /** 目录同步失败通知（AUTH_OK 二阶段 detail 投影解析失败；UI 通知通道入口）。 */
+  onCatalogError?: (providerId: string, message: string) => void;
   onStateChange?: (providerId: string, state: ProviderStateKind) => void;
 }
 
@@ -752,6 +788,9 @@ export class ProviderManager {
             ? []
             : updated.services.filter((s) => !updated.disabledServices.includes(s.serviceId));
           opts.onCatalog?.(conn.endpointId, updated.alias, visible, updated.ports);
+        },
+        onCatalogError: (providerId, message) => {
+          opts.onCatalogError?.(providerId, message);
         },
         onStateChange: (conn) => {
           opts.onStateChange?.(conn.endpointId, conn.state);

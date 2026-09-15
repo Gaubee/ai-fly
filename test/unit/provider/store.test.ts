@@ -24,9 +24,10 @@ function seedBasic(): { store: ProviderStore; serviceId: string; keyId: string; 
     name: "ollama",
     upstream: "http://127.0.0.1:11434",
     match: [{ type: "suffix", value: ".local" }],
-    rewrite: {
-      headerSet: { authorization: "$env:UPSTREAM_KEY", "x-literal": "abc" },
-      headerRemove: ["x-drop"],
+    // hooks-lifecycle v2：头改写落 headers 槽（$env 间接引用 + 字面量 + remove）。
+    headers: {
+      set: { authorization: "$env:UPSTREAM_KEY", "x-literal": "abc" },
+      remove: ["x-drop"],
     },
   });
   store.addGroup("friends", ["ollama"]);
@@ -35,20 +36,85 @@ function seedBasic(): { store: ProviderStore; serviceId: string; keyId: string; 
 }
 
 describe("ProviderStore 服务/分组/密钥往返", () => {
-  it("添加后重启进程完整恢复（服务/分组/密钥）", () => {
+  it("添加后重启进程完整恢复（服务/分组/密钥；v2 version 标记）", () => {
     const seeded = seedBasic();
     const reopened = ProviderStore.open(dir);
     const svc = reopened.getService(seeded.serviceId);
     expect(svc?.name).toBe("ollama");
     expect(svc?.upstream).toBe("http://127.0.0.1:11434/");
     expect(svc?.defaultPort).toBe(11434);
-    expect(svc?.rewrite?.headerSet).toEqual({ authorization: "$env:UPSTREAM_KEY", "x-literal": "abc" });
-    expect(svc?.rewrite?.headerRemove).toEqual(["x-drop"]);
+    expect(svc?.headers?.set).toEqual({ authorization: "$env:UPSTREAM_KEY", "x-literal": "abc" });
+    expect(svc?.headers?.remove).toEqual(["x-drop"]);
+    expect(reopened.legacy).toBeNull();
+    // 文件带 version: 2（版本门禁判据）
+    const raw = JSON.parse(readFileSync(ProviderStore.filePath(dir), "utf8")) as { version?: number };
+    expect(raw.version).toBe(2);
     const group = reopened.getGroup("friends");
     expect(group?.serviceIds).toEqual([seeded.serviceId]);
     // 密钥记录存在（哈希），且校验仍通过
     expect(reopened.listKeys()).toHaveLength(1);
     expect(reopened.verifyKey(seeded.key)).toMatchObject({ status: "valid", keyId: seeded.keyId, group: "friends" });
+  });
+
+  it("生命周期四槽 v2 往返（auth 三族 / headers / request / response）", () => {
+    const store = ProviderStore.open(dir);
+    const svc = store.addService({
+      name: "slots",
+      upstream: "https://api.example.com",
+      match: [{ type: "suffix", value: "api.example.com" }],
+      defaultPort: 8443,
+      auth: { secret: "openai-main", bearer: false },
+      headers: {
+        remove: ["X-Drop", "x-drop"],
+        set: { "X-Custom": "literal", authorization: "$secret:openai-main" },
+        script: { name: "hdr", args: { mode: "strict" } },
+      },
+      request: { script: "relay", args: { base: "http://x" } },
+      response: { script: "transform" },
+      rewrite: { host: "internal.alias", pathPrefixStrip: "/a" },
+    });
+    const reopened = ProviderStore.open(dir);
+    const restored = reopened.getService(svc.serviceId);
+    expect(restored?.auth).toEqual({ secret: "openai-main", bearer: false });
+    expect(restored?.headers).toEqual({
+      remove: ["x-drop"],
+      set: { "x-custom": "literal", authorization: "$secret:openai-main" },
+      script: { name: "hdr", args: { mode: "strict" } },
+    });
+    expect(restored?.request).toEqual({ script: "relay", args: { base: "http://x" } });
+    expect(restored?.response).toEqual({ script: "transform" });
+    expect(restored?.rewrite).toEqual({ host: "internal.alias", pathPrefixStrip: "/a" });
+  });
+
+  it("四槽非法形状拒绝（store invalid）", () => {
+    const store = ProviderStore.open(dir);
+    expect(() =>
+      store.addService({
+        name: "bad-auth",
+        upstream: "http://127.0.0.1:9000",
+        match: [{ type: "exact", value: "a" }],
+        // 非法 auth 槽（双族并存；zod strict union 拒绝）
+        auth: { secret: "a", script: "b" },
+      }),
+    ).toThrow(StoreError);
+    expect(() =>
+      store.addService({
+        name: "bad-headers",
+        upstream: "http://127.0.0.1:9000",
+        match: [{ type: "exact", value: "a" }],
+        // @ts-expect-error set 值非 string
+        headers: { set: { a: 123 } },
+      }),
+    ).toThrow(StoreError);
+    expect(() =>
+      store.addService({
+        name: "bad-script",
+        upstream: "http://127.0.0.1:9000",
+        match: [{ type: "exact", value: "a" }],
+        // @ts-expect-error request 槽缺 script 名
+        request: {},
+      }),
+    ).toThrow(StoreError);
   });
 
   it("key 原文随库可复制（Owner 裁决 2026-09-13：随时可取，取代旧不可逆语义）", () => {
@@ -231,7 +297,7 @@ describe("服务停用开关（service-lifecycle）", () => {
     expect(store.getService(a.serviceId)?.enabled).toBe(false);
   });
 
-  it("旧版 services.json（无 enabled 字段）加载缺省 true", () => {
+  it("旧版 services.json（无 version 字段）进入 legacy 模式而非加载（详细矩阵见 store-legacy.test.ts）", () => {
     const legacy = {
       revision: 1,
       services: [
@@ -242,7 +308,9 @@ describe("服务停用开关（service-lifecycle）", () => {
     };
     writeFileSync(join(dir, "services.json"), JSON.stringify(legacy));
     const store = ProviderStore.open(dir);
-    expect(store.getService("legacy1")?.enabled).toBe(true);
+    // 空视图 + legacy 元数据（enabled 缺省语义随 v1 加载路径一并退役）。
+    expect(store.legacy).toEqual({ serviceNames: ["old"] });
+    expect(store.getService("legacy1")).toBeUndefined();
   });
 });
 

@@ -1,7 +1,8 @@
 // HTTP 上游转发单测（内存 loopback 成对 WireSession + 本地 mock 上游）：元信息/正文
 // 透传（含白名单头与 4xx 原样）、$env 注入、路径注入零上游请求（// 与 ..）、
 // 上游不可达、连接期超时（探测注入）、流停滞超时、ABORT 回 ERROR(aborted)、
-// 首字节等待期 PING 节奏、用量记录。
+// 首字节等待期 PING 节奏、用量记录；hooks-lifecycle 4.2/4.3 出站归一层（③ 接管/
+// probeConnect 跳过/SSE 逐块/abort cancel 传播/③头投影、④ 变换、hook_failed 分族）。
 
 import { createServer, type IncomingHttpHeaders, type RequestListener, type Server } from "node:http";
 import { AddressInfo } from "node:net";
@@ -182,7 +183,8 @@ describe("响应透传", () => {
       res.end('{"ok":true}');
     });
     const service = makeService(upstream.port, {
-      rewrite: { headerSet: { authorization: { hook: "authHeader", args: { var: "UPSTREAM_KEY" } } } },
+      // hooks-lifecycle v2：$env 字面量间接引用（headers.set）。
+      headers: { set: { authorization: "$env:UPSTREAM_KEY" } },
     });
     const h = makeHarness();
     const body = ENC.encode('{"q":"hi"}');
@@ -197,22 +199,22 @@ describe("响应透传", () => {
     expect(seen?.body.toString()).toBe('{"q":"hi"}');
   });
 
-  it("env 钩子空串 -> fail-fast ERROR(secret_missing)（语义收紧：不再静默省略）", async () => {
+  it("$env 空串/未设置 -> 该头省略（v2 语义：不静默注入、也不拒绝）", async () => {
     const upstream = await startUpstream((_req, res) => {
       res.writeHead(204);
       res.end();
     });
     const service = makeService(upstream.port, {
-      hooks: "env",
-      rewrite: { headerSet: { authorization: { hook: "authHeader", args: { var: "EMPTY_KEY" } }, "x-lit": "v" } },
+      headers: { set: { authorization: "$env:EMPTY_KEY", "x-lit": "v" } },
     });
     const h = makeHarness();
     const fh = forward(h, service, makeReq("r3"), new Uint8Array(0), { env: { EMPTY_KEY: "" } });
     await fh.done;
-    const err = of(h.consumerEvents, FRAME_TYPE.ERROR, "r3")[0]?.header as { code: string };
-    expect(err.code).toBe("secret_missing");
-    expect(upstream.requests).toHaveLength(0); // 零上游请求
-    expect(fh.usage).toEqual([{ status: "secret_missing", bytes: 0 }]);
+    // 空 $env 头省略；其余字面量照常（hooks-lifecycle「字面量间接引用语义平移」）。
+    expect(of(h.consumerEvents, FRAME_TYPE.RESP_END, "r3")).toHaveLength(1);
+    expect(upstream.requests).toHaveLength(1);
+    expect(upstream.requests[0]!.headers["authorization"]).toBeUndefined();
+    expect(upstream.requests[0]!.headers["x-lit"]).toBe("v");
   });
 
   it("上游 404 原样透传（status + 正文 + contentType，无 ERROR 帧）", async () => {
@@ -310,6 +312,78 @@ describe("错误与超时族", () => {
     expect(fetchCalls).toBe(0);
   });
 
+  it("初始失败路径解绑外部 abort 监听（复核 R2-F4）：③构造/probe/fetch 三类失败 adds=removes", async () => {
+    const countingSignal = (): { signal: AbortSignal; stats: () => { adds: number; removes: number } } => {
+      const ctrl = new AbortController();
+      let adds = 0;
+      let removes = 0;
+      const sig = ctrl.signal as AbortSignal & {
+        addEventListener: typeof ctrl.signal.addEventListener;
+        removeEventListener: typeof ctrl.signal.removeEventListener;
+      };
+      const origAdd = sig.addEventListener.bind(sig);
+      const origRemove = sig.removeEventListener.bind(sig);
+      sig.addEventListener = ((...args: Parameters<typeof origAdd>) => {
+        adds += 1;
+        return origAdd(...args);
+      }) as typeof origAdd;
+      sig.removeEventListener = ((...args: Parameters<typeof origRemove>) => {
+        removes += 1;
+        return origRemove(...args);
+      }) as typeof origRemove;
+      return { signal: ctrl.signal, stats: () => ({ adds, removes }) };
+    };
+
+    // a) ③ 脚本构造失败（HookStageError 路径）
+    {
+      const c = countingSignal();
+      const upstream = await startUpstream((_req, res) => res.end("never"));
+      const h = makeHarness();
+      const fh = forward(
+        h,
+        makeService(upstream.port, { request: { script: "boom" } }),
+        makeReq("f4a"),
+        new Uint8Array(0),
+        {
+          signal: c.signal,
+          loader: (name) => (name === "boom" ? { onRequest: () => { throw new Error("script blew up"); } } : undefined),
+        },
+      );
+      await fh.done;
+      expect((of(h.consumerEvents, FRAME_TYPE.ERROR, "f4a")[0]?.header as { code: string }).code).toBe("hook_failed");
+      expect(c.stats()).toEqual({ adds: 1, removes: 1 });
+    }
+    // b) probe 失败（ProbeFailedError 路径，零 fetch）
+    {
+      const c = countingSignal();
+      const upstream = await startUpstream((_req, res) => res.end("never"));
+      const h = makeHarness();
+      const fh = forward(h, makeService(upstream.port), makeReq("f4b"), new Uint8Array(0), {
+        signal: c.signal,
+        timeouts: { connectMs: 30, firstByteMs: 5_000, stallMs: 5_000, pingMs: 0 },
+        probeConnect: () => Promise.reject(new Error("probe refused")),
+        fetchImpl: (async () => {
+          throw new Error("fetch must not run");
+        }) as typeof fetch,
+      });
+      await fh.done;
+      expect((of(h.consumerEvents, FRAME_TYPE.ERROR, "f4b")[0]?.header as { code: string }).code).toBe("upstream_unreachable");
+      expect(c.stats()).toEqual({ adds: 1, removes: 1 });
+    }
+    // c) 原生 fetch 失败（ECONNREFUSED 路径）
+    {
+      const c = countingSignal();
+      const dead = await startUpstream((_req, res) => res.end());
+      const port = dead.port;
+      await new Promise<void>((resolve) => dead.server.close(() => resolve()));
+      const h = makeHarness();
+      const fh = forward(h, makeService(port), makeReq("f4c"), new Uint8Array(0), { signal: c.signal });
+      await fh.done;
+      expect((of(h.consumerEvents, FRAME_TYPE.ERROR, "f4c")[0]?.header as { code: string }).code).toBe("upstream_unreachable");
+      expect(c.stats()).toEqual({ adds: 1, removes: 1 });
+    }
+  });
+
   it("路径注入零上游请求：/../../admin -> ERROR(protocol_error)", async () => {
     const upstream = await startUpstream((_req, res) => res.end("never"));
     const h = makeHarness();
@@ -345,7 +419,7 @@ describe("错误与超时族", () => {
     });
     const h = makeHarness();
     const service = makeService(upstream.port, {
-      rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: "openai" } }, "x-env": { hook: "authHeader", args: { var: "SOME_VAR" } } } },
+      headers: { set: { authorization: "$secret:openai", "x-env": "$env:SOME_VAR" } },
     });
     const fh = forward(h, service, makeReq("rs1", { method: "POST" }), new Uint8Array(0), {
       secrets: (name) => (name === "openai" ? "Bearer sk-lib-9" : undefined),
@@ -362,7 +436,7 @@ describe("错误与超时族", () => {
     const upstream = await startUpstream((_req, res) => res.end("never"));
     const h = makeHarness();
     const service = makeService(upstream.port, {
-      rewrite: { headerSet: { authorization: { hook: "authHeader", args: { name: "openai" } } } },
+      headers: { set: { authorization: "$secret:openai" } },
     });
     const fh = forward(h, service, makeReq("rs2", { method: "POST" }), new Uint8Array(0), {
       secrets: () => undefined,
@@ -440,5 +514,316 @@ describe("首字节等待期心跳与用量", () => {
     const fh = forward(h, makeService(upstream.port), makeReq("r14"));
     await fh.done;
     expect(fh.usage).toEqual([{ status: 200, bytes: 5 }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hooks-lifecycle 4.2/4.3：出站归一层（③ onRequest 接管 / ④ onResponse 插入）
+// ---------------------------------------------------------------------------
+
+const loaderOf = (mods: Record<string, Record<string, unknown>>) =>
+  (name: string): Record<string, unknown> | undefined => mods[name];
+
+describe("③ onRequest 接管出站（归一层）", () => {
+  it("整体接管：跳过 probeConnect、零原生 fetch；脚本收 ctx{url,method,headers,body,signal}；③ 头小写化白名单投影", async () => {
+    const upstream = await startUpstream((_req, res) => res.end("never"));
+    let seen: Record<string, unknown> = {};
+    const mods = {
+      r: {
+        onRequest: (ctx: Record<string, unknown>) => {
+          seen = ctx;
+          return {
+            status: 201,
+            headers: { "X-Request-Id": "rid-7", "X-Custom": "dropped", "Content-Type": "application/json" },
+            body: (async function* () {
+              yield ENC.encode('{"ok":');
+              yield ENC.encode("true}");
+            })(),
+          };
+        },
+      },
+    };
+    let probeCalls = 0;
+    let fetchCalls = 0;
+    const h = makeHarness();
+    const service = makeService(upstream.port, { request: { script: "r" } });
+    const fh = forward(h, service, makeReq("q1", { method: "POST", bodyLen: 9 }), ENC.encode('{"q":1}'), {
+      loader: loaderOf(mods),
+      probeConnect: async () => {
+        probeCalls += 1;
+      },
+      fetchImpl: (async (...args: Parameters<typeof fetch>) => {
+        fetchCalls += 1;
+        return fetch(...args);
+      }) as typeof fetch,
+    });
+    await fh.done;
+    // 归一产出：RESP_META（③ 头投影——白名单挑选 + content-type 独立字段）
+    const meta = of(h.consumerEvents, FRAME_TYPE.RESP_META, "q1")[0]?.header as {
+      status: number;
+      contentType: string;
+      headers?: Record<string, string>;
+    };
+    expect(meta.status).toBe(201);
+    expect(meta.contentType).toBe("application/json");
+    expect(meta.headers).toEqual({ "x-request-id": "rid-7" }); // 白名单外忽略（X-Custom）
+    const chunks = of(h.consumerEvents, FRAME_TYPE.RESP_CHUNK, "q1");
+    expect(Buffer.concat(chunks.map((c) => bodyOf(c))).toString()).toBe('{"ok":true}');
+    expect(of(h.consumerEvents, FRAME_TYPE.RESP_END, "q1")).toHaveLength(1);
+    // 连接语义归脚本：probeConnect 与原生 fetch 均零调用；上游零请求。
+    expect(probeCalls).toBe(0);
+    expect(fetchCalls).toBe(0);
+    expect(upstream.requests).toHaveLength(0);
+    // ctx 超集：url/method/headers（① 头链产物 + host）/body/signal。
+    expect(seen.url).toBe(`http://127.0.0.1:${upstream.port}/v1/x`);
+    expect(seen.method).toBe("POST");
+    expect((seen.headers as Record<string, string>).host).toBe(`127.0.0.1:${upstream.port}`);
+    expect(seen.body).toBeInstanceOf(Uint8Array);
+    expect(seen.signal).toBeInstanceOf(AbortSignal);
+    expect(fh.usage).toEqual([{ status: 201, bytes: 11 }]);
+  });
+
+  it("③ 构造期失效（绑定缺席）-> ERROR(hook_failed)，消息固定脱敏，零 probe 零 fetch", async () => {
+    const upstream = await startUpstream((_req, res) => res.end("never"));
+    let probeCalls = 0;
+    let fetchCalls = 0;
+    const h = makeHarness();
+    const service = makeService(upstream.port, { request: { script: "missing-export" } });
+    const fh = forward(h, service, makeReq("q2"), new Uint8Array(0), {
+      probeConnect: async () => {
+        probeCalls += 1;
+      },
+      fetchImpl: (async (...args: Parameters<typeof fetch>) => {
+        fetchCalls += 1;
+        return fetch(...args);
+      }) as typeof fetch,
+    });
+    await fh.done;
+    const err = of(h.consumerEvents, FRAME_TYPE.ERROR, "q2")[0]?.header as { code: string; message: string };
+    expect(err.code).toBe("hook_failed");
+    expect(err.message).toBe("hook stage failed");
+    expect(probeCalls).toBe(0);
+    expect(fetchCalls).toBe(0);
+    expect(upstream.requests).toHaveLength(0);
+    expect(fh.usage).toEqual([{ status: "hook_failed", bytes: 0 }]);
+  });
+
+  it("③ 流中途失败 -> RESP_META 已发后回 ERROR(hook_failed)（分族：非 upstream_unreachable）", async () => {
+    const upstream = await startUpstream((_req, res) => res.end("never"));
+    const mods = {
+      r: {
+        onRequest: () => ({
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+          body: (async function* () {
+            yield ENC.encode("data: 1\n\n");
+            throw new Error("script stream exploded");
+          })(),
+        }),
+      },
+    };
+    const h = makeHarness();
+    const fh = forward(h, makeService(upstream.port, { request: { script: "r" } }), makeReq("q3"), new Uint8Array(0), {
+      loader: loaderOf(mods),
+    });
+    await fh.done;
+    expect(of(h.consumerEvents, FRAME_TYPE.RESP_META, "q3")).toHaveLength(1);
+    const chunks = of(h.consumerEvents, FRAME_TYPE.RESP_CHUNK, "q3");
+    expect(Buffer.concat(chunks.map((c) => bodyOf(c))).toString()).toBe("data: 1\n\n");
+    const err = of(h.consumerEvents, FRAME_TYPE.ERROR, "q3")[0]?.header as { code: string; message: string };
+    expect(err.code).toBe("hook_failed");
+    expect(err.message).toBe("hook stage failed"); // 脱敏：不含脚本抛错细节
+    expect(of(h.consumerEvents, FRAME_TYPE.RESP_END, "q3")).toHaveLength(0);
+  });
+
+  it("③ SSE 逐块 + abort cancel 传播：中止即回 ERROR(aborted)，脚本流被取消（finally 观察）", async () => {
+    let cancelled = false;
+    const mods = {
+      r: {
+        onRequest: (ctx: Record<string, unknown>) => ({
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+          body: (async function* () {
+            try {
+              yield ENC.encode("part1\n");
+              // 信号感知的挂起（契约：脚本流自担 signal 语义）
+              await new Promise<void>((resolve) =>
+                (ctx.signal as AbortSignal).addEventListener("abort", () => resolve(), { once: true }),
+              );
+              yield ENC.encode("part2-never\n");
+            } finally {
+              cancelled = true; // return() 传播证据
+            }
+          })(),
+        }),
+      },
+    };
+    const h = makeHarness();
+    const fh = forward(h, makeService(65534, { request: { script: "r" } }), makeReq("q4"), new Uint8Array(0), {
+      loader: loaderOf(mods),
+      timeouts: { connectMs: 1_000, firstByteMs: 30_000, stallMs: 30_000, pingMs: 0 },
+    });
+    await waitFor(() => (of(h.consumerEvents, FRAME_TYPE.RESP_CHUNK, "q4").length > 0 ? true : undefined));
+    fh.ctrl.abort(new UpstreamAbortError("aborted", true));
+    await waitFor(() => (of(h.consumerEvents, FRAME_TYPE.ERROR, "q4").length > 0 ? true : undefined));
+    expect((of(h.consumerEvents, FRAME_TYPE.ERROR, "q4")[0]?.header as { code: string }).code).toBe("aborted");
+    await waitFor(() => (cancelled ? true : undefined), 3_000);
+    expect(Buffer.concat(of(h.consumerEvents, FRAME_TYPE.RESP_CHUNK, "q4").map((c) => bodyOf(c))).toString()).toBe("part1\n");
+    await fh.done;
+  });
+});
+
+describe("④ onResponse 插入（归一后、RESP_META 前）", () => {
+  it("局部覆盖：status/白名单内头生效、白名单外忽略、body 变换流式生效", async () => {
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain", "x-request-id": "orig-rid", "x-custom": "orig" });
+      res.end("hello ");
+    });
+    let ctxSeen: Record<string, unknown> = {};
+    const mods = {
+      t: {
+        onResponse: async (ctx: Record<string, unknown>) => {
+          ctxSeen = ctx;
+          const original = ctx.body as AsyncIterable<Uint8Array>;
+          return {
+            status: 201,
+            headers: { "x-request-id": "rid-9", "x-custom": "dropped", "content-type": "application/json" },
+            body: (async function* () {
+              for await (const chunk of original) {
+                yield ENC.encode(Buffer.from(chunk).toString("utf8").toUpperCase());
+              }
+              yield ENC.encode("!");
+            })(),
+          };
+        },
+      },
+    };
+    const h = makeHarness();
+    const fh = forward(h, makeService(upstream.port, { response: { script: "t" } }), makeReq("p1"), new Uint8Array(0), {
+      loader: loaderOf(mods),
+    });
+    await fh.done;
+    const meta = of(h.consumerEvents, FRAME_TYPE.RESP_META, "p1")[0]?.header as {
+      status: number;
+      contentType: string;
+      headers?: Record<string, string>;
+    };
+    expect(meta.status).toBe(201);
+    expect(meta.contentType).toBe("application/json");
+    expect(meta.headers).toEqual({ "x-request-id": "rid-9" }); // 白名单外（x-custom）忽略
+    const chunks = of(h.consumerEvents, FRAME_TYPE.RESP_CHUNK, "p1");
+    expect(Buffer.concat(chunks.map((c) => bodyOf(c))).toString()).toBe("HELLO !");
+    expect(of(h.consumerEvents, FRAME_TYPE.RESP_END, "p1")).toHaveLength(1);
+    // ctx 超集：status/headers（归一后头态）/body/signal。
+    expect(ctxSeen.status).toBe(200);
+    expect((ctxSeen.headers as Record<string, string>)["x-request-id"]).toBe("orig-rid");
+    expect(typeof (ctxSeen.body as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]).toBe("function");
+    expect(fh.usage).toEqual([{ status: 201, bytes: 7 }]);
+  });
+
+  it("{} 返回 = 透传原归一流（status/头/body 原样）", async () => {
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain", "x-request-id": "rid-keep" });
+      res.end("passthrough");
+    });
+    const mods = { t: { onResponse: () => ({}) } };
+    const h = makeHarness();
+    const fh = forward(h, makeService(upstream.port, { response: { script: "t" } }), makeReq("p2"), new Uint8Array(0), {
+      loader: loaderOf(mods),
+    });
+    await fh.done;
+    const meta = of(h.consumerEvents, FRAME_TYPE.RESP_META, "p2")[0]?.header as {
+      status: number;
+      contentType: string;
+      headers?: Record<string, string>;
+    };
+    expect(meta.status).toBe(200);
+    expect(meta.contentType).toBe("text/plain");
+    expect(meta.headers).toEqual({ "x-request-id": "rid-keep" });
+    expect(Buffer.concat(of(h.consumerEvents, FRAME_TYPE.RESP_CHUNK, "p2").map((c) => bodyOf(c))).toString()).toBe("passthrough");
+    expect(of(h.consumerEvents, FRAME_TYPE.RESP_END, "p2")).toHaveLength(1);
+  });
+
+  it("status 204 覆盖 -> contentType 归一为空（无正文语义投影）", async () => {
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end('{"x":1}');
+    });
+    const mods = { t: { onResponse: () => ({ status: 204, headers: { "content-type": "application/json" } }) } };
+    const h = makeHarness();
+    const fh = forward(h, makeService(upstream.port, { response: { script: "t" } }), makeReq("p3"), new Uint8Array(0), {
+      loader: loaderOf(mods),
+    });
+    await fh.done;
+    const meta = of(h.consumerEvents, FRAME_TYPE.RESP_META, "p3")[0]?.header as { status: number; contentType: string };
+    expect(meta.status).toBe(204);
+    expect(meta.contentType).toBe("");
+  });
+
+  it("④ 失效（抛错）-> ERROR(hook_failed)（RESP_META 未发，零正文）", async () => {
+    const upstream = await startUpstream((_req, res) => res.end("never"));
+    const mods = {
+      t: {
+        onResponse: () => {
+          throw new Error("boom-secret");
+        },
+      },
+    };
+    const h = makeHarness();
+    const fh = forward(h, makeService(upstream.port, { response: { script: "t" } }), makeReq("p4"), new Uint8Array(0), {
+      loader: loaderOf(mods),
+    });
+    await fh.done;
+    expect(of(h.consumerEvents, FRAME_TYPE.RESP_META, "p4")).toHaveLength(0);
+    const err = of(h.consumerEvents, FRAME_TYPE.ERROR, "p4")[0]?.header as { code: string; message: string };
+    expect(err.code).toBe("hook_failed");
+    expect(err.message).toBe("hook stage failed");
+  });
+
+  it("④ 流式变换：上游 SSE 逐块到达即变换转发（不为拼齐缓冲）", async () => {
+    const events: string[] = [];
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write("data: 1\n\n");
+      setTimeout(() => res.write("data: 2\n\n"), 60);
+      setTimeout(() => {
+        events.push("end");
+        res.end("data: 3\n\n");
+      }, 120);
+    });
+    const mods = {
+      t: {
+        onResponse: (ctx: Record<string, unknown>) => ({
+          headers: { "content-type": "text/event-stream" },
+          body: (async function* () {
+            for await (const chunk of ctx.body as AsyncIterable<Uint8Array>) {
+              yield ENC.encode(`[${Buffer.from(chunk).toString("utf8")}]`);
+            }
+          })(),
+        }),
+      },
+    };
+    const h = makeHarness();
+    const origPush = h.consumerEvents.push.bind(h.consumerEvents);
+    h.consumerEvents.push = (...frames: InboundFrame[]) => {
+      for (const f of frames) {
+        if (f.type === FRAME_TYPE.RESP_CHUNK && (f.header as { id?: string }).id === "p5") {
+          events.push(`chunk:${bodyOf(f).toString()}`);
+        }
+      }
+      return origPush(...frames);
+    };
+    const fh = forward(h, makeService(upstream.port, { response: { script: "t" } }), makeReq("p5"), new Uint8Array(0), {
+      loader: loaderOf(mods),
+    });
+    await fh.done;
+    const chunks = of(h.consumerEvents, FRAME_TYPE.RESP_CHUNK, "p5");
+    // 反拼齐：首个变换分片先于上游 end；完整性与增量性。
+    expect(events.indexOf("chunk:[data: 1\n\n]")).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf("chunk:[data: 1\n\n]")).toBeLessThan(events.indexOf("end"));
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    expect(Buffer.concat(chunks.map((c) => bodyOf(c))).toString()).toBe(
+      "[data: 1\n\n][data: 2\n\n][data: 3\n\n]",
+    );
   });
 });

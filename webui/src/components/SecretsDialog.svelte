@@ -1,8 +1,8 @@
-<!-- 密钥面板（M3 6.2 + M3-acceptance ①）：列表仅名称 + 每行 remove（二次
+<!-- 密钥面板（M3 6.2 + hooks-lifecycle 5.2）：列表仅名称 + 每行 remove（二次
      确认，Dashboard forget 同款）；新增/编辑表单 name + value（password 型
-     裸密钥，提交后清空不回显——值由设计不跨 RPC 亦不回显）+ "Bearer "
-     前缀开关（编辑回填既有条目值）；空态引导。open 由选择器持有；
-     onpick 在新增/覆写成功后回选通知。 -->
+     裸密钥，提交后清空不回显——值由设计不跨 RPC 亦不回显）。Bearer 前缀
+     开关已迁至各服务的 auth 阶段编辑器（密钥条目不再携带前缀语义）。
+     open 由选择器持有；onpick 在新增/覆写成功后回选通知。 -->
 <script lang="ts">
   import Dialog from "$lib/ui/dialog";
   import { CardFooter } from "$lib/ui/card";
@@ -10,7 +10,6 @@
   import Input from "$lib/ui/input";
   import Separator from "$lib/ui/separator";
   import Skeleton from "$lib/ui/skeleton";
-  import Toggle from "$lib/ui/toggle";
   import { secrets, refreshSecrets, setSecret, removeSecret } from "../stores/secrets.svelte.ts";
   import { t } from "$lib/i18n.svelte.ts";
 
@@ -27,8 +26,6 @@
 
   let name = $state("");
   let value = $state("");
-  /** Bearer 开关（M3-acceptance ①）：编辑既有条目时回填该条目值。 */
-  let bearerPrefix = $state(true);
   /** 正在覆写的既有密钥名（编辑 = 同名 set 覆写；值不回显）。 */
   let editing = $state<string | null>(null);
   /** 每行 remove 二次确认（与 Dashboard forget 同款切换）。 */
@@ -51,7 +48,6 @@
   function resetForm(): void {
     name = "";
     value = "";
-    bearerPrefix = true;
     editing = null;
   }
 
@@ -59,14 +55,13 @@
     editing = secretName;
     name = secretName;
     value = "";
-    bearerPrefix = secrets.entries.find((entry) => entry.name === secretName)?.bearerPrefix ?? true;
   }
 
   async function submit(): Promise<void> {
     const trimmed = name.trim();
     if (busy || !formValid) return;
     busy = true;
-    const ok = await setSecret(trimmed, value, bearerPrefix);
+    const ok = await setSecret(trimmed, value);
     busy = false;
     if (!ok) return;
     onpick?.(trimmed);
@@ -85,8 +80,7 @@
 <Dialog bind:open title={t("secretdlg.title")}>
   <div class="flex flex-col gap-3">
     <p class="text-[11px] leading-relaxed text-muted-foreground">
-      values live in this machine's provider secret store and are never shown
-      again after saving - consumers only ever see <code class="font-mono">&#9679;</code>.
+      {t("secretdlg.hint")}
     </p>
 
     {#if secrets.loading && !secrets.loaded}
@@ -96,7 +90,7 @@
       </div>
     {:else if secrets.names.length === 0}
       <p class="border border-dashed border-border px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
-        no secrets yet - add one below (e.g. the api key of the provider you are sharing).
+        {t("f.secrets.empty")}
       </p>
     {:else}
       <div class="flex flex-col gap-1.5">
@@ -126,7 +120,7 @@
 
     <div class="flex flex-col gap-3">
       <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-        {editing !== null ? `overwrite "${editing}"` : "add a secret"}
+        {editing !== null ? t("secretdlg.overwrite", { name: editing }) : t("secretdlg.add")}
       </span>
       <Input
         label={t("f.name")}
@@ -144,17 +138,9 @@
         autocomplete="off"
         bind:value={value}
       />
-      <div class="flex flex-col gap-1.5">
-        <Toggle
-          label='add "Bearer " prefix'
-          checked={bearerPrefix}
-          onchange={(event) => (bearerPrefix = event.currentTarget.checked)}
-        />
-        <p class="text-[11px] leading-relaxed text-muted-foreground">
-          most OpenAI-compatible providers expect it; turn off for raw keys -
-          the value is stored locally and cleared from this form after saving.
-        </p>
-      </div>
+      <p class="text-[11px] leading-relaxed text-muted-foreground">
+        {t("secretdlg.valueNote")}
+      </p>
       <div class="flex items-center gap-2">
         <PressButton
           variant="fill"
@@ -162,7 +148,7 @@
           class={formValid ? undefined : "pointer-events-none opacity-50"}
           onclick={() => void submit()}
         >
-          {editing !== null ? "overwrite" : "save"}
+          {editing !== null ? t("secretdlg.overwriteBtn") : t("secretdlg.saveBtn")}
         </PressButton>
         {#if editing !== null}
           <PressButton variant="ghost" onclick={resetForm}>{t("common.cancel")}</PressButton>

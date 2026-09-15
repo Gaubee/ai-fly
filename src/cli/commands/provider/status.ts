@@ -1,6 +1,7 @@
 // `ai-fly status [--verbose]`：提供方状态快照——存储摘要（服务/分组/密钥）+ fabric
 // 身份（EndpointId/fabric-id/relay 状态/成员数）；--verbose 含服务 detail（ASCII
-// 展示形，$env/$secret 引用头值显示为 <hidden>）。
+// 展示形，$env/$secret 引用头值显示为 <hidden>）。legacy（pre-v2）存储态：摘要行
+// + --verbose 展开失效服务名（hooks-lifecycle 2.3/6.1，不新增命令）。
 
 import { homedir } from "node:os";
 import { parseArgv } from "../../args.ts";
@@ -36,6 +37,17 @@ export async function run(argv: string[], ctx: { homedir?: string } = {}): Promi
     lines.push(
       `  keys    : ${keys.filter((k) => k.revokedAt === undefined).length} active, ${keys.filter((k) => k.revokedAt !== undefined).length} revoked`,
     );
+
+    // legacy（pre-v2）存储态：失效服务名册（services/groups/keys 视图为空）。
+    const legacy = store.legacy;
+    if (legacy !== null) {
+      lines.push(
+        `  legacy  : ${legacy.serviceNames.length} stale service(s) (pre-v2 services.json; inactive - remove via 'ai-fly service remove <name>')`,
+      );
+      if (verbose) {
+        for (const name of legacy.serviceNames) lines.push(`    ${name}  [legacy]`);
+      }
+    }
 
     if (verbose) {
       for (const s of services) {

@@ -159,6 +159,9 @@ describe("错误码 → HTTP 映射", () => {
     { code: "upstream_unreachable", expect: 502 },
     { code: "upstream_status", expect: 502 }, // 裸 ERROR 帧（无 status 载荷）兜底；正常上游错误走 RESP 流
     { code: "secret_missing", expect: 502 }, // 提供方密钥库缺引用：提供方配置问题，502
+    // hooks-lifecycle 4.4：②③④ 生命周期脚本失效——pending 阶段 502 + 脱敏 message
+    // （流式中分支见下方独立用例：本地连接错误终结，不回退状态码）。
+    { code: "hook_failed", expect: 502 },
     { code: "protocol_error", expect: 500 },
     { code: "protocol_seq", expect: 500 },
     { code: "internal", expect: 500 },
@@ -190,6 +193,39 @@ describe("错误码 → HTTP 映射", () => {
     expect(Object.keys(body)).toEqual(["error"]);
     expect(Object.keys(body.error as object).sort()).toEqual(["code", "message", "type"]);
     await gw.stop();
+  });
+
+  it("hook_failed HTTP 生命周期双分支（hooks-lifecycle 4.4）：pending → 502 脱敏 JSON；流式中 → 本地连接错误终结", async () => {
+    // pending 分支已由表驱动 hook_failed -> 502 覆盖；此处补脱敏 message 透传断言。
+    const pending = new FakeRoute();
+    pending.onForward = (_i, h) =>
+      h.handlers.onError({ id: "x", code: "hook_failed", message: "hook stage failed" });
+    const gw1 = await bootGateway(pending, svc("svc-a", "a", await freePort()));
+    const res1 = await fetch(`http://127.0.0.1:${gw1.port}/v1/x`);
+    expect(res1.status).toBe(502);
+    const body1 = (await res1.json()) as { error: { code: string; message: string } };
+    expect(body1.error.code).toBe("hook_failed");
+    expect(body1.error.message).toBe("hook stage failed");
+    await gw1.stop();
+
+    // 流式分支：RESP_META 已下发（状态码不可回退）——ERROR(hook_failed) 到达时
+    // 本地响应流以错误终结（观感与上游流中断一致），不产生新实体。
+    const streaming = new FakeRoute();
+    let failStream!: () => void;
+    streaming.onForward = (_i, h) => {
+      h.handlers.onMeta({ id: "x", status: 200, contentType: "text/event-stream" });
+      h.handlers.onChunk(ENC.encode("data: 1\n\n"));
+      failStream = () => h.handlers.onError({ id: "x", code: "hook_failed", message: "hook stage failed" });
+    };
+    const gw2 = await bootGateway(streaming, svc("svc-b", "b", await freePort()));
+    const res2 = await fetch(`http://127.0.0.1:${gw2.port}/v1/chat`);
+    expect(res2.status).toBe(200); // 已进入流式：不回退状态码
+    const reader = res2.body!.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toBe("data: 1\n\n");
+    failStream();
+    await expect(reader.read()).rejects.toBeTruthy();
+    await gw2.stop();
   });
 });
 

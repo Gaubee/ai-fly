@@ -12,6 +12,7 @@ import type { ServiceEntry } from "../../../src/wire/frames.ts";
 import { CliError } from "../../../src/cli/errors.ts";
 import {
   KEY_PREFIX,
+  SHARE_LINK_OUTDATED_MESSAGE,
   addKey,
   assertKeyFormat,
   decodeShareLink,
@@ -127,12 +128,59 @@ describe("decodeShareLink", () => {
     expect(() => decodeShareLink("dweb1.whatever")).toThrow(CliError);
     expect(() => decodeShareLink("aifly1.!!!not-base64!!!")).toThrow(CliError);
     expect(() => decodeShareLink(`aifly1.${Buffer.from("not json").toString("base64url")}`)).toThrow(CliError);
+    // schema 违例（含 key/invite 前缀不符与 v 形状）统一走「格式已过期」文案
+    //（payload 不合当前 schema 即过期——无迁移路径，由提供方重新生成）。
     const badKey = payloadOf({ key: "not-a-fly-key" });
-    expect(() => decodeShareLink(encodeLink(badKey))).toThrow(/key/);
+    expect(() => decodeShareLink(encodeLink(badKey))).toThrow(SHARE_LINK_OUTDATED_MESSAGE);
     const badInvite = payloadOf({ invite: "wrongprefix.x" });
-    expect(() => decodeShareLink(encodeLink(badInvite))).toThrow(/invite/);
+    expect(() => decodeShareLink(encodeLink(badInvite))).toThrow(SHARE_LINK_OUTDATED_MESSAGE);
     const badVersion = { ...payloadOf(), v: 2 } as unknown as LinkPayload;
-    expect(() => decodeShareLink(encodeLink(badVersion))).toThrow(CliError);
+    expect(() => decodeShareLink(encodeLink(badVersion))).toThrow(SHARE_LINK_OUTDATED_MESSAGE);
+  });
+
+  it("v2 四槽条目合法解码（detail 掩码位原样往返）", () => {
+    const payload = payloadOf({
+      services: [
+        {
+          serviceId: "svc-v2",
+          name: "api",
+          match: [{ type: "suffix", value: ".local" }],
+          defaultPort: 8787,
+          detail: {
+            upstream: "https://api.upstream/v1",
+            match: [],
+            rewrite: {},
+            auth: { script: "\u25cf" },
+            headers: { set: { "x-a": "\u25cf", "x-literal": "keep" }, script: { name: "\u25cf" } },
+            request: { script: "\u25cf" },
+            response: { script: "\u25cf" },
+          },
+        },
+      ],
+    });
+    const decoded = decodeShareLink(encodeLink(payload));
+    expect(decoded.services[0]?.detail).toEqual(payload.services[0]?.detail);
+  });
+
+  it("旧格式链接（v1 条目形状：顶层 hooks / rewrite.headerSet）-> 明确报过期", () => {
+    const v1 = {
+      ...payloadOf(),
+      services: [
+        {
+          serviceId: "svc-old",
+          name: "api",
+          match: [{ type: "suffix", value: ".local" }],
+          defaultPort: 11434,
+          hooks: "env",
+          detail: {
+            upstream: "https://api.upstream/v1",
+            match: [],
+            rewrite: { headerSet: [{ name: "authorization", value: "\u25cf" }] },
+          },
+        },
+      ],
+    } as unknown as LinkPayload;
+    expect(() => decodeShareLink(encodeLink(v1))).toThrow(SHARE_LINK_OUTDATED_MESSAGE);
   });
 
   it("preview 摘要含别名/分组/端口与“链接即凭证”提示", () => {

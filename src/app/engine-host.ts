@@ -55,14 +55,48 @@ export interface EngineHostOptions {
 }
 
 /** consumer 快照的最小投影（diff 用）。 */
-type ConsumerSnapshot = Array<{
+export type ConsumerSnapshot = Array<{
   endpointId: string;
   state: ProviderStatus["state"];
   servedCount: number;
   bufferOverflows: number;
   ports: Record<string, number>;
   services: number;
+  /** 目录同步错误态（hooks-lifecycle 复核 R3-F1：set/clear/变化都要触发重拉）。 */
+  lastError: string | undefined;
 }>;
+
+/**
+ * consumer 快照 diff（纯函数，供轮询与单测共用）：新增/状态机/端口/目录/目录
+ * 错误变化 → 对应通知事件。lastError set/clear/变化均触发 consumer-catalog
+ * （驱动 UI 重拉 cservices 呈现错误态——hooks-lifecycle 复核 R3-F1）。
+ */
+export function diffConsumerSnapshots(
+  prev: ConsumerSnapshot,
+  next: ConsumerSnapshot,
+  notify: (type: string, payload: Record<string, unknown>) => void,
+): void {
+  const prevById = new Map(prev.map((p) => [p.endpointId, p]));
+  for (const entry of next) {
+    const before = prevById.get(entry.endpointId);
+    if (before === undefined) {
+      notify("consumer-state", { endpointId: entry.endpointId, state: entry.state });
+      continue;
+    }
+    if (before.state !== entry.state) {
+      notify("consumer-state", { endpointId: entry.endpointId, state: entry.state });
+    }
+    if (JSON.stringify(before.ports) !== JSON.stringify(entry.ports)) {
+      notify("consumer-ports", { endpointId: entry.endpointId });
+    }
+    if (before.services !== entry.services) {
+      notify("consumer-catalog", { endpointId: entry.endpointId });
+    }
+    if (before.lastError !== entry.lastError) {
+      notify("consumer-catalog", { endpointId: entry.endpointId });
+    }
+  }
+}
 
 const DEFAULT_POLL_MS = 1_000;
 
@@ -79,6 +113,8 @@ export class EngineHost {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastConsumerSnapshot = "";
   private lastProviderRevision = -1;
+  /** legacy NOTICE 只打一次（providerStore() 每次调用都会开新 store 视图）。 */
+  private legacyNoticed = false;
 
   constructor(opts: EngineHostOptions = {}) {
     const home = opts.home ?? homedir();
@@ -176,11 +212,21 @@ export class EngineHost {
 
   /**
    * 提供方存储句柄：daemon 运行时复用其 store 实例（同进程写入即刻一致），
-   * 否则按需打开磁盘存储（与 CLI 相同的打开语义）。
+   * 否则按需打开磁盘存储（与 CLI 相同的打开语义）。legacy（pre-v2）态首见
+   * 时打一行 NOTICE（hooks-lifecycle 2.3；daemon 运行路径的 NOTICE 由
+   * serve.ts 负责，这里只覆盖 UI daemon 未启动 provider 的只读面）。
    */
   providerStore(): ProviderStore {
     if (this.daemon !== null) return this.daemon.engine.store;
-    return ProviderStore.open(this.providerDataDir);
+    const store = ProviderStore.open(this.providerDataDir);
+    if (store.legacy !== null && !this.legacyNoticed) {
+      this.legacyNoticed = true;
+      process.stderr.write(
+        `NOTICE: provider store under ${this.providerDataDir} is in legacy (pre-v2) format; ` +
+          `stale services are visible for removal only (remove them to rebuild as v2)\n`,
+      );
+    }
+    return store;
   }
 
   /** 提供方存储当前 revision（-1 = 目录尚无存储文件）。 */
@@ -232,6 +278,11 @@ export class EngineHost {
           ...(ring.relayUrls.length > 0 ? { relayUrls: ring.relayUrls } : {}),
         }),
       onNotice: (line) => this.notify("consumer-notice", { message: line }),
+      // 目录同步失败（AUTH_OK detail 投影解析失败——复核 R3-F1）：专用事件驱动
+      // UI 标脏重拉（lastError 随 cservices/consumer 呈现），消息已脱敏（mux 层固定文案）。
+      onCatalogError: (providerId, message) => {
+        this.notify("consumer-catalog-error", { endpointId: providerId, message });
+      },
     });
     this.consumer = engine;
     this.lastConsumerSnapshot = "";
@@ -365,23 +416,7 @@ export class EngineHost {
     const json = JSON.stringify(snapshot);
     if (json !== this.lastConsumerSnapshot) {
       const prev = this.lastConsumerSnapshot === "" ? [] : (JSON.parse(this.lastConsumerSnapshot) as ConsumerSnapshot);
-      const prevById = new Map(prev.map((p) => [p.endpointId, p]));
-      for (const entry of snapshot) {
-        const before = prevById.get(entry.endpointId);
-        if (before === undefined) {
-          this.notify("consumer-state", { endpointId: entry.endpointId, state: entry.state });
-          continue;
-        }
-        if (before.state !== entry.state) {
-          this.notify("consumer-state", { endpointId: entry.endpointId, state: entry.state });
-        }
-        if (JSON.stringify(before.ports) !== JSON.stringify(entry.ports)) {
-          this.notify("consumer-ports", { endpointId: entry.endpointId });
-        }
-        if (before.services !== entry.services) {
-          this.notify("consumer-catalog", { endpointId: entry.endpointId });
-        }
-      }
+      diffConsumerSnapshots(prev, snapshot, (type, payload) => this.notify(type, payload));
       this.lastConsumerSnapshot = json;
     }
   }
@@ -394,6 +429,7 @@ export class EngineHost {
       bufferOverflows: s.bufferOverflows,
       ports: { ...s.ports },
       services: s.services.length,
+      lastError: s.lastError,
     }));
   }
 

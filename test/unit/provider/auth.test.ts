@@ -54,7 +54,8 @@ describe("handleAuthFrame 矩阵", () => {
     const alpha = decision.header.groups.find((g) => g.group === "alpha");
     expect(alpha?.limits).toEqual({ maxConcurrency: 3, dailyRequests: 100 });
     expect(alpha?.services[0]?.name).toBe("ollama");
-    expect(alpha?.services[0]?.detail?.upstream).toBe("http://127.0.0.1:11434/");
+    // 帧级目录条目的 detail 宽松承载（二阶段在消费侧严格解析）；此处取形状断言。
+    expect((alpha?.services[0]?.detail as { upstream?: string } | undefined)?.upstream).toBe("http://127.0.0.1:11434/");
     expect(decision.header.rejected).toBeUndefined();
     expect(decision.valid.map((v) => v.keyId).sort()).toEqual([keyA.keyId, keyB.keyId].sort());
   });

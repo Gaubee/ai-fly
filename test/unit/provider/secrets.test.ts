@@ -140,32 +140,40 @@ describe("SecretsStore 持久化形态", () => {
     expect(existsSync(SecretsStore.filePath(dir))).toBe(false);
   });
 
-  it("bearerPrefix（Owner 2026-09-10）：默认拼 Bearer；关闭按原样；已带前缀不重复拼", () => {
+  it("bearerPrefix 退役（hooks-lifecycle 5.2）：值为原样存储，resolve 不做前缀加工", () => {
     const store = SecretsStore.open(dir);
     store.set("std", "sk-1");
-    store.set("raw", "sk-2", { bearerPrefix: false });
     store.set("prefilled", "Bearer sk-3");
-    expect(store.resolve("std")).toEqual({ headerValue: "Bearer sk-1" });
-    expect(store.resolve("raw")).toEqual({ headerValue: "sk-2" });
+    // 原样语义：裸 key 与完整头值都按存储值返回——Bearer 前缀由服务 auth 槽拼。
+    expect(store.resolve("std")).toEqual({ headerValue: "sk-1" });
+    expect(store.get("std")).toBe("sk-1");
     expect(store.resolve("prefilled")).toEqual({ headerValue: "Bearer sk-3" });
-    // 覆写未给开关时沿用旧开关；显式给则切换
-    store.set("raw", "sk-2b");
-    expect(store.resolve("raw")).toEqual({ headerValue: "sk-2b" });
-    store.set("raw", "sk-2c", { bearerPrefix: true });
-    expect(store.resolve("raw")).toEqual({ headerValue: "Bearer sk-2c" });
-    expect(store.list().find((s) => s.name === "raw")?.bearerPrefix).toBe(true);
+    // 清单不再携带 bearerPrefix 字段。
+    const listed = store.list();
+    expect(listed.find((s) => s.name === "std")).toMatchObject({ name: "std" });
+    expect(Object.keys(listed[0]!)).toEqual(["name", "createdAt", "updatedAt"]);
   });
 
-  it("旧文件无 bearerPrefix 字段 -> 读为 true（zod default 兼容）", () => {
+  it("旧文件含 bearerPrefix 字段 -> 加载剥离（zod strip 语义）；下次写入落成新形状", () => {
     writeFileSync(
       SecretsStore.filePath(dir),
       JSON.stringify({
         version: 1,
-        secrets: { legacy: { value: "sk-old", createdAt: 1, updatedAt: 1 } },
+        secrets: {
+          legacy: { value: "sk-old", createdAt: 1, updatedAt: 1, bearerPrefix: false },
+          raw: { value: "sk-raw", createdAt: 1, updatedAt: 1, bearerPrefix: true },
+        },
       }),
     );
     const store = SecretsStore.open(dir);
-    expect(store.resolve("legacy")).toEqual({ headerValue: "Bearer sk-old" });
-    expect(store.list()[0]!.bearerPrefix).toBe(true);
+    // 读入即剥离：resolve 原样、list 无 bearerPrefix。
+    expect(store.resolve("legacy")).toEqual({ headerValue: "sk-old" });
+    expect(store.resolve("raw")).toEqual({ headerValue: "sk-raw" });
+    expect(JSON.stringify(store.list())).not.toContain("bearerPrefix");
+    // 触发一次写（覆写）后文件不再含该字段。
+    store.set("legacy", "sk-new");
+    const onDisk = readFileSync(SecretsStore.filePath(dir), "utf8");
+    expect(onDisk).not.toContain("bearerPrefix");
+    expect(JSON.parse(onDisk).secrets.legacy).toEqual({ value: "sk-new", createdAt: 1, updatedAt: expect.any(Number) });
   });
 });

@@ -51,6 +51,36 @@ describe("curated presets", () => {
     for (const id of required) expect(ids.has(id), `missing preset: ${id}`).toBe(true);
   });
 
+  it("covers the hooks-lifecycle frozen list (复核 R2-F5)：全部 16 家在册", () => {
+    const ids = new Set(loadCuratedPresets().map((p) => p.id));
+    // spec 冻结清单：OpenAI、Anthropic、Gemini、OpenRouter、DeepSeek、z.ai 双端点
+    // (coding/国内站)、Kimi 双协议、Minimax、Qwen token-plan、Copilot、groq、
+    // xai、together、Ollama、LM Studio（+ codex 订阅模板）。
+    const required = [
+      "openai", "anthropic", "gemini", "openrouter", "deepseek",
+      "zai-coding", "zai-cn", // z.ai coding/国内站双端点
+      "moonshot", // Kimi 双协议（openai + anthropic 双路由）
+      "minimax", "qwen-token-plan", "github-copilot",
+      "groq", "xai", "together", "ollama", "lmstudio", "codex",
+    ];
+    for (const id of required) expect(ids.has(id), `missing preset: ${id}`).toBe(true);
+  });
+
+  it("hooks-lifecycle 冻结面形状：本地模板无 keyEnv；Kimi 双协议双路由；本地运行时走 http", () => {
+    const curated = loadCuratedPresets();
+    for (const id of ["ollama", "lmstudio"]) {
+      const p = curated.find((x) => x.id === id)!;
+      expect(p.keyEnv, `${id} is a local runtime template - no keyEnv`).toBeUndefined();
+      expect(p.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
+    }
+    const moonshot = curated.find((p) => p.id === "moonshot")!;
+    expect(moonshot.routes?.some((r) => r.forms.includes("anthropic"))).toBe(true);
+    expect(moonshot.routes?.some((r) => r.forms.includes("openai-chat"))).toBe(true);
+    // 版本段照抄的 baseUrl（探测/请求构造按版本段感知，不重复补 /v1）
+    expect(curated.find((p) => p.id === "minimax")!.baseUrl).toBe("https://api.minimax.io/anthropic/v1");
+    expect(curated.find((p) => p.id === "zai-coding")!.baseUrl).toBe("https://api.z.ai/api/coding/paas/v4");
+  });
+
   it("M3-r4 按标准路由：deepseek 三路由（含 responses，官方支持 codex）、openai 双 openai 形态", () => {
     const curated = loadCuratedPresets();
     const deepseek = curated.find((p) => p.id === "deepseek")!;
@@ -72,12 +102,14 @@ describe("curated presets", () => {
     expect(new Set(curated.map((p) => p.defaultPort)).size).toBe(curated.length);
   });
 
-  it("curated presets declare a credential source (keyEnv or authHeader)", () => {
+  it("curated presets declare a credential source (keyEnv or auth)", () => {
     for (const preset of loadCuratedPresets()) {
-      // cli-codex 起，凭据可走 $file:（authHeader）；无 authHeader 的远程预设仍须 keyEnv
+      // 本地运行时模板（Ollama/LM Studio，回环 baseUrl）无 keyEnv——spec 冻结豁免
+      const isLocalRuntime = /^http:\/\/(127\.0\.0\.1|localhost)/.test(preset.baseUrl);
+      // hooks-lifecycle 6.3：凭据源为 preset.auth（v2 槽位直吐）或 keyEnv 建议
       expect(
-        preset.keyEnv !== undefined || preset.authHeader !== undefined,
-        `${preset.id} should declare keyEnv or authHeader`,
+        isLocalRuntime || preset.keyEnv !== undefined || preset.auth !== undefined,
+        `${preset.id} should declare keyEnv or auth`,
       ).toBe(true);
     }
   });

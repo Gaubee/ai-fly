@@ -6,6 +6,26 @@
 // 词汇 + oc.input/output router 树）。用户面文案英文 ASCII。
 import { oc, type ErrorMap } from "@orpc/contract";
 import { z } from "zod";
+// hooks-lifecycle v2 契约面收口（任务 5.1）：生命周期四槽与 rewrite v2 从
+// canonical 单源 import（lifecycle.ts 仅依赖 zod，browser-safe）；hooks.list 只留
+// 阶段矩阵（codex R6 裁决：stages-only，fns 字段删除）；services.test 输入改
+// auth 槽草稿；consumer 侧 SERVICE_ENTRY_SCHEMA 与 wire/frames.ts 同源（禁镜像）。
+import {
+  AUTH_SECRET_SLOT_SCHEMA,
+  AUTH_SCRIPT_SLOT_SCHEMA,
+  AUTH_SLOT_SCHEMA,
+  HEADERS_SLOT_SCHEMA,
+  REQUEST_SLOT_SCHEMA,
+  RESPONSE_SLOT_SCHEMA,
+  STAGE_FN_NAMES,
+} from "../provider/lifecycle.ts";
+import { SERVICE_ENTRY_SCHEMA as WIRE_SERVICE_ENTRY_SCHEMA } from "../wire/frames.ts";
+
+/** 阶段名枚举（hooks.list 阶段矩阵 / UI 按阶段过滤共用；单源 lifecycle.ts）。 */
+export const STAGE_FN_NAME_SCHEMA = z.enum(STAGE_FN_NAMES);
+export type StageFnNameValue = z.infer<typeof STAGE_FN_NAME_SCHEMA>;
+/** 四阶段管线顺序（单源透传，webui 管线区编号/展示用——hooks-lifecycle 7.1）。 */
+export { STAGE_FN_NAMES };
 
 // ---------------------------------------------------------------------------
 // 错误词汇（有限、稳定；router 侧把 DomainError 映射到这些码）
@@ -41,19 +61,12 @@ export const SERVICE_MATCH_SCHEMA = z.strictObject({
   value: z.string().min(1).max(2048),
 });
 
+/** rewrite v2（hooks-lifecycle 瘦身）：host 头覆盖 + 路径前缀——头改写能力
+ *  已迁出至 headers 槽（headerSet/headerRemove 退役）。 */
 export const SERVICE_REWRITE_SCHEMA = z.strictObject({
-  hostHeader: z.string().min(1).max(2048).optional(),
+  host: z.string().min(1).max(2048).optional(),
   pathPrefixStrip: z.string().min(1).max(2048).optional(),
   pathPrefixAppend: z.string().min(1).max(2048).optional(),
-  headerSet: z.record(z.string().min(1).max(1024), z.union([
-        z.string().max(8192),
-        z.strictObject({
-          hook: z.string().min(1).max(128),
-          args: z.record(z.string().min(1).max(128), z.string().max(2048)).optional(),
-          bearer: z.boolean().optional(),
-        }),
-      ])).optional(),
-  headerRemove: z.array(z.string().min(1).max(1024)).max(32).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -107,11 +120,22 @@ export const SERVICE_SCHEMA = z.strictObject({
   match: z.array(SERVICE_MATCH_SCHEMA).max(64),
   upstream: z.string().min(1).max(2048),
   rewrite: SERVICE_REWRITE_SCHEMA.optional(),
+  // hooks-lifecycle v2 四槽（canonical：provider/lifecycle.ts；顶层 hooks 字符串退役）。
+  auth: AUTH_SLOT_SCHEMA.optional(),
+  headers: HEADERS_SLOT_SCHEMA.optional(),
+  request: REQUEST_SLOT_SCHEMA.optional(),
+  response: RESPONSE_SLOT_SCHEMA.optional(),
   routes: z.array(SERVICE_ROUTE_SCHEMA).max(3).optional(),
-  hooks: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).optional(),
   defaultPort: z.number().int().min(1).max(65535),
   /** 停用开关（service-lifecycle）：false = 临时停暴露（目录排除、请求 404）。 */
   enabled: z.boolean().default(true),
+});
+
+/** legacy（pre-v2）存储态的最小失效壳（services.list 在 legacy 态只回 name；
+ *  仅供移除列表渲染——hooks-lifecycle 2.3）。 */
+export const LEGACY_SERVICE_SHELL_SCHEMA = z.strictObject({
+  name: z.string().min(1).max(256),
+  legacy: z.literal(true),
 });
 
 /** services.add 输入（defaultPort 缺省规则的校验在 store，同 CLI）。 */
@@ -121,8 +145,11 @@ export const SERVICE_INPUT_SCHEMA = z.strictObject({
   match: z.array(SERVICE_MATCH_SCHEMA).min(1).max(64),
   defaultPort: z.number().int().min(1).max(65535).optional(),
   rewrite: SERVICE_REWRITE_SCHEMA.optional(),
+  auth: AUTH_SLOT_SCHEMA.optional(),
+  headers: HEADERS_SLOT_SCHEMA.optional(),
+  request: REQUEST_SLOT_SCHEMA.optional(),
+  response: RESPONSE_SLOT_SCHEMA.optional(),
   routes: z.array(SERVICE_ROUTE_SCHEMA).max(3).optional(),
-  hooks: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).optional(),
   /** 编辑重建（remove+add）保留原停用态；缺省 true（service-lifecycle）。 */
   enabled: z.boolean().optional(),
 });
@@ -150,57 +177,13 @@ export const KEY_VIEW_SCHEMA = z.strictObject({
 });
 
 // ---------------------------------------------------------------------------
-// 消费方实体（形状镜像 consumer/store.ts / providers.ts）
+// 消费方实体（形状与 wire/frames.ts / consumer/store.ts 同源——hooks-lifecycle
+// 5.1 起 SERVICE_ENTRY_SCHEMA 直接复用 wire 投影：四槽脱敏 detail（敏感位掩码 ●），
+// provider/consumer 同版本约束，禁止在此手写镜像）
 // ---------------------------------------------------------------------------
 
 /** 使用方服务目录条目（AUTH_OK / import 视图；detail 为脱敏披露，$env 值显示 ●）。 */
-export const SERVICE_ENTRY_SCHEMA = z.object({
-  serviceId: z.string(),
-  name: z.string(),
-  match: z.array(z.strictObject({ type: z.string(), value: z.string() })),
-  defaultPort: z.number().int(),
-  detail: z
-    .object({
-      upstream: z.string(),
-      match: z.array(z.strictObject({ type: z.string(), value: z.string() })),
-      rewrite: z
-        .object({
-          host: z.string().optional(),
-          prefix: z.string().optional(),
-          headerSet: z
-            .array(
-              z.strictObject({
-                name: z.string(),
-                value: z.union([
-                  z.string(),
-                  z.strictObject({
-                    hook: z.string(),
-                    args: z.record(z.string(), z.string()).optional(),
-                    bearer: z.boolean().optional(),
-                  }),
-                ]),
-              }),
-            )
-            .optional(),
-        })
-        .optional(),
-      /** 按标准路由披露（消费侧呈现各标准本地 base 与可用性判定）。 */
-      routes: z
-        .array(
-          z.strictObject({
-            forms: z.array(ROUTE_FORM_SCHEMA).max(3),
-            mode: ROUTE_MODE_SCHEMA.optional(),
-            localPrefix: z.string().optional(),
-            upstreamPrefix: z.string().optional(),
-            matchPattern: z.string().optional(),
-            template: z.string().optional(),
-          }),
-        )
-        .max(4)
-        .optional(),
-    })
-    .optional(),
-});
+export const SERVICE_ENTRY_SCHEMA = WIRE_SERVICE_ENTRY_SCHEMA;
 
 /** 消费侧提供者连接状态（M1 六态 + 网关未运行时的 stopped）。 */
 export const PROVIDER_STATE_SCHEMA = z.enum([
@@ -239,18 +222,13 @@ export const PRESET_SCHEMA = z.strictObject({
   baseUrl: z.string().min(1).max(2048),
   /** 图标源 id（models.dev logos 覆写；缺省取 id）。 */
   iconId: z.string().min(1).max(128).optional(),
-  /** 惯用环境变量名（仅用于 $env 注入建议与文档；本地运行时模板无此字段）。 */
+  /** 惯用环境变量名（文档/建议字段；presetToServiceInput 无 auth 槽时兜底
+   *  生成 auth.literal 的 `$env:<VAR>` 间接引用）。 */
   keyEnv: z.string().min(1).max(256).optional(),
-  /** 选中的 hooks 脚本名（applyAsService 透传为服务 hooks 字段）。 */
-  hooks: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/).optional(),
-  /** 预填 authorization 头的钩子调用对象；优先级：显式 secretName > authHeader > keyEnv。 */
-  authHeader: z
-    .strictObject({
-      hook: z.string().min(1).max(128),
-      args: z.record(z.string().min(1).max(128), z.string().max(2048)).optional(),
-      bearer: z.boolean().optional(),
-    })
-    .optional(),
+  /** auth 槽预填（hooks-lifecycle 6.3：authHeader 退役，auth 直吐 v2 槽位——
+   *  {secret: 建议密钥名, bearer?} | {script, args?, bearer?}；canonical 单源
+   *  provider/lifecycle.ts，preset 装配时原样透传）。 */
+  auth: z.union([AUTH_SECRET_SLOT_SCHEMA, AUTH_SCRIPT_SLOT_SCHEMA]).optional(),
   /** 使用方本地端口建议（避开 <1024 特权段）。 */
   defaultPort: z.number().int().min(1024).max(65535),
   /** 官方域名集（exact/suffix 建议的生成源）。 */
@@ -282,13 +260,12 @@ export const SECRET_NAME_SCHEMA = z
   .max(128)
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "lowercase letters, digits, dot, dash, underscore");
 
-/** 密钥库清单条目（仅名称与开关——值由设计不跨 RPC）。 */
+/** 密钥库清单条目（仅名称与时间戳——值与 bearerPrefix 由设计不跨 RPC；
+ *  hooks-lifecycle 5.2：bearerPrefix 退役）。 */
 export const SECRET_ENTRY_SCHEMA = z.strictObject({
   name: SECRET_NAME_SCHEMA,
-  createdAt: z.number().int().min(0),
-  updatedAt: z.number().int().min(0),
-  /** 注入时自动拼 "Bearer "（默认 true；Owner 2026-09-10：值默认是裸 key）。 */
-  bearerPrefix: z.boolean(),
+  createdAt: z.number().int().min(0).optional(),
+  updatedAt: z.number().int().min(0).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -376,9 +353,10 @@ const PRESET_APPLY_INPUT_SCHEMA = z.strictObject({
   name: z.string().min(1).max(256).optional(),
   /** 显式端口（缺省取 preset.defaultPort；上游特权端口时必填——store 校验兜底）。 */
   port: z.number().int().min(1).max(65535).optional(),
-  /** 密钥库名（选中时 rewrite 写入 $secret:<name>，优先于 keyEnv）。 */
+  /** 密钥库名（选中时落 auth.secret；优先于 preset.auth 与 keyEnv）。 */
   secretName: SECRET_NAME_SCHEMA.optional(),
-  /** 注入建议的 $env 变量名（缺省取 preset.keyEnv；无 keyEnv 且未显式给出则不注入）。 */
+  /** 注入建议的 $env 变量名（缺省取 preset.keyEnv；仅在 preset 无 auth 槽时
+   *  兜底装配 auth.literal 的 `$env:<VAR>` 间接引用）。 */
   keyEnv: z.string().min(1).max(256).optional(),
 });
 
@@ -395,6 +373,9 @@ const PROVIDER_STATUS_SCHEMA = z.object({
   groups: z.number().int().min(0),
   activeKeys: z.number().int().min(0),
   revokedKeys: z.number().int().min(0),
+  /** legacy（pre-v2）存储态（hooks-lifecycle 2.3）：旧服务名册（仅可按名
+   *  移除）；null = 正常 v2 存储。 */
+  legacy: z.object({ serviceNames: z.array(z.string()) }).nullable(),
 });
 
 // ---------------------------------------------------------------------------
@@ -405,8 +386,12 @@ const PROVIDER_STATUS_SCHEMA = z.object({
 export const rpcContract = oc.errors(RpcErrorDefinitions).router({
   provider: {
     services: {
-      /** 全量服务配置（本机控制面：含 rewrite 原始 $env 引用，无脱敏需要）。 */
-      list: oc.input(z.object({})).output(z.object({ services: z.array(SERVICE_SCHEMA) })),
+      /** 全量服务配置（本机控制面：含 rewrite 原始 $env 引用，无脱敏需要）。
+       *  legacy（pre-v2）态返回最小失效壳（仅 name + legacy 标记，供移除列表
+       *  渲染——hooks-lifecycle 2.3 最小增量，正式契约面归 5.1）。 */
+      list: oc
+        .input(z.object({}))
+        .output(z.object({ services: z.array(z.union([SERVICE_SCHEMA, LEGACY_SERVICE_SHELL_SCHEMA])) })),
       /** 按 name 精确定位单个服务。 */
       get: oc
         .input(z.strictObject({ name: z.string().min(1).max(256) }))
@@ -432,7 +417,9 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
           z.strictObject({
             upstream: z.string().min(1).max(2048),
             apiForm: API_FORM_SCHEMA.optional(),
-            secretName: SECRET_NAME_SCHEMA.optional(),
+            /** auth 槽草稿（hooks-lifecycle 5.2：{secret}|{script,args?}|{literal}
+             *  + 可选 bearer——不再接受 secretName 单字段）。 */
+            auth: AUTH_SLOT_SCHEMA.optional(),
             model: z.string().min(1).max(256).optional(),
           }),
         )
@@ -469,7 +456,9 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
         .output(SERVICE_TEST_RESULT_SCHEMA),
     },
     hooks: {
-      /** hooks 脚本清单（内建 + 用户库；fns = 命名规范发现的钩子函数）。 */
+      /** hooks 脚本清单（内建 + 用户库；**stages-only**——阶段矩阵按导出的阶段
+       *  函数名归类，旧导出名（如 v1 authHeader）不在矩阵内，UI 按阶段过滤
+       *  自然排除。codex R6 裁决：fns 字段删除）。 */
       list: oc
         .input(z.object({}))
         .output(
@@ -478,7 +467,7 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
               z.strictObject({
                 name: z.string(),
                 source: z.enum(["user", "builtin"]),
-                fns: z.array(z.string()),
+                stages: z.array(STAGE_FN_NAME_SCHEMA),
               }),
             ),
           }),
@@ -502,23 +491,36 @@ export const rpcContract = oc.errors(RpcErrorDefinitions).router({
             content: z.string().min(1).max(65536),
           }),
         )
-        .output(z.strictObject({ name: z.string(), path: z.string(), fns: z.array(z.string()) })),
+        .output(
+          z.strictObject({
+            name: z.string(),
+            path: z.string(),
+            stages: z.array(STAGE_FN_NAME_SCHEMA),
+          }),
+        ),
       /** 删除（仅用户库；内建拒绝）。 */
       remove: oc
         .input(z.strictObject({ name: z.string().min(1).max(64) }))
         .output(z.object({ removed: z.boolean() })),
     },
     secrets: {
-      /** 密钥库清单（仅名称与时间戳；值由设计不跨 RPC）。 */
-      list: oc.input(z.object({})).output(z.object({ secrets: z.array(SECRET_ENTRY_SCHEMA) })),
-      /** 新增/覆写（value 为裸密钥——bearerPrefix 默认 true 时注入自动拼 "Bearer "）。 */
+      /** 密钥库清单（仅名称与时间戳 + 计数；值与 bearerPrefix 由设计不跨 RPC——
+       *  hooks-lifecycle 5.2 精确形状锁定）。 */
+      list: oc
+        .input(z.object({}))
+        .output(
+          z.object({
+            secrets: z.array(SECRET_ENTRY_SCHEMA),
+            count: z.number().int().min(0),
+          }),
+        ),
+      /** 新增/覆写（value 为原样字符串——Bearer 前缀由服务 auth 槽 bearer 开关
+       *  唯一决定，本输入不再接受前缀开关参数）。 */
       set: oc
         .input(
           z.strictObject({
             name: SECRET_NAME_SCHEMA,
             value: z.string().min(1).max(8192),
-            /** 关闭后按原样注入（非 Bearer 站点）。 */
-            bearerPrefix: z.boolean().optional(),
           }),
         )
         .output(z.object({ secret: SECRET_ENTRY_SCHEMA })),

@@ -9,6 +9,7 @@ import type { RpcClient } from "$lib/rpc-client";
 import { toRpcError } from "$lib/rpc-client";
 import { connection } from "./rpc.svelte.ts";
 import { toast } from "./toast.svelte.ts";
+import { isFullService, isLegacyServiceShell } from "$lib/lifecycle.ts";
 import type {
   GroupView,
   KeyView,
@@ -63,6 +64,8 @@ const SECTION_BY_EVENT: Readonly<Record<string, readonly Section[]>> = {
   "consumer-state": ["consumer"],
   "consumer-ports": ["ports", "consumer", "cservices"],
   "consumer-catalog": ["consumer", "ports", "cservices"],
+  // 目录同步失败（hooks-lifecycle 复核 R3-F1）：重拉 cservices 呈现 lastError
+  "consumer-catalog-error": ["consumer", "cservices"],
 };
 
 /** 应用快照（$state 代理；页面直接读取）。 */
@@ -76,7 +79,10 @@ export const app = $state({
   cservices: [] as ConsumerServicesProviderRow[],
   groups: [] as GroupView[],
   keys: [] as KeyView[],
+  /** v2 全量服务（legacy 失效壳已分拣出去——hooks-lifecycle 2.3 联合输出）。 */
   services: [] as ServiceConfigView[],
+  /** legacy（pre-v2）失效壳名册（仅可按名移除；清空即恢复正常态）。 */
+  legacyServiceNames: [] as string[],
   settings: null as Settings | null,
   /** 各区在途标记（skeleton 消费）。 */
   busy: { provider: false, consumer: false, ports: false, cservices: false, groups: false, keys: false, services: false, settings: false } as Record<Section, boolean>,
@@ -148,9 +154,14 @@ async function pull(section: Section): Promise<void> {
       case "keys":
         app.keys = (await connection.call((c) => c.provider.keys.list({}))).keys;
         break;
-      case "services":
-        app.services = (await connection.call((c) => c.provider.services.list({}))).services;
+      case "services": {
+        // legacy 失效壳分拣（hooks-lifecycle 7.4）：壳只进名册驱动横幅/移除
+        // 列表，v2 全量进 services——两个消费面互不污染。
+        const { services } = await connection.call((c) => c.provider.services.list({}));
+        app.services = services.filter(isFullService);
+        app.legacyServiceNames = services.filter(isLegacyServiceShell).map((shell) => shell.name);
         break;
+      }
       case "settings":
         app.settings = await connection.call((c) => c.system.settings.get({}));
         break;
@@ -181,6 +192,19 @@ async function flush(): Promise<void> {
 function onNotifyEvent(event: { type: string; payload: Record<string, unknown> }): void {
   if (event.type === "__reconcile") {
     markDirty(...ALL_SECTIONS);
+    return;
+  }
+  if (event.type === "consumer-catalog-error") {
+    // 目录同步失败（复核 R3-F1）：警示 toast（消息已脱敏）+ 标脏重拉 lastError
+    const message = typeof event.payload.message === "string" ? event.payload.message : "catalog sync failed";
+    const alias = typeof event.payload.endpointId === "string" ? event.payload.endpointId.slice(0, 8) : "";
+    toast.api.push({
+      title: "Catalog sync failed",
+      description: alias !== "" ? `${alias}: ${message}` : message,
+      variant: "tonal",
+      class: "jx-hue-warning",
+    });
+    markDirty(...(SECTION_BY_EVENT[event.type] ?? []));
     return;
   }
   if (event.type === "consumer-warning" || event.type === "consumer-notice") {

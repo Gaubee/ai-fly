@@ -1,19 +1,29 @@
 // 服务表单统一状态机（Owner 裁决 2026-09-13 #5：分享向导②与高级设置
 // "编辑服务"同一套编辑组件、同一数据源——本 store + ServiceForm.svelte）。
-// 模型 = 向导②定形：分组+服务名 → 上游 URL → PATH ROUTES 行 → hooks 脚本
-// → 认证头 → 连通测试 → 高级选项（接收方建议端口 + match 域名）。
+// 模型 = 向导②定形：分组+服务名 → 上游 URL → PATH ROUTES 行 → Request
+// lifecycle 管线（hooks-lifecycle v2 四槽：①auth/②headers/③request/
+// ④response）→ 连通测试 → 高级选项（接收方建议端口 + match 域名）。
 // 三个入口：choosePreset（预设预填）/ openAdd + openEdit（高级页 Dialog）/
 // chooseCustom；两条落库路径：submit（Dialog 保存，编辑 = remove+add）与
 // ensureCreated（向导③幂等补建，不 remove）。
-// 编辑透传（passthrough）：表单未覆盖的字段原样带回——routes、headerSet
-// 的非 authorization 头、非 suffix 的 legacy match 规则。
+// 编辑透传（passthrough）：表单未覆盖的字段原样带回——routes、rewrite
+// （host/路径前缀）、非 suffix 的 legacy match 规则、各脚本槽 args
+// （脚本名未变时原样带回，换绑即清除）。
 
 import { toRpcError, type RpcError, type RpcClient } from "$lib/rpc-client";
-import { ROUTE_LOCAL_PREFIX, type Preset, type RouteForm } from "$shared/rpc-contract.ts";
+import { ROUTE_LOCAL_PREFIX, type ApiForm, type Preset, type RouteForm, type ServiceConfigView } from "$shared/rpc-contract.ts";
 import { call } from "./rpc.svelte.ts";
 import { toastRpcError, toastSuccess } from "./toast.svelte.ts";
 import { app, refresh } from "./app.svelte.ts";
-import { authInput, authSelFromPreset, authSelFromService, hooksField, hooksScriptFromPreset, hooksScriptFromService, type AuthSel, type HeaderValue } from "$lib/auth-source.ts";
+import {
+  authSelFromPreset,
+  authSelFromService,
+  authSlotFromSel,
+  isFullService,
+  type AuthSlot,
+  type AuthStageSel,
+  type HeadersSlot,
+} from "$lib/lifecycle.ts";
 
 type ServiceAddInput = Parameters<RpcClient["provider"]["services"]["add"]>[0];
 
@@ -77,6 +87,19 @@ export function makeRouteRow(over: Partial<ShareRouteRow> = {}): ShareRouteRow {
   return { id: routeRowSeq++, mode: "prefix", from: "/v1", to: "/v1", bound: true, match: "", template: "", forms: [], ...over };
 }
 
+/** ② headers 槽 set 行（名称 + 字面量值；$env:/$secret: 引用语法随值键入）。 */
+export interface HeaderSetRow {
+  id: number;
+  name: string;
+  value: string;
+}
+
+let headerRowSeq = 1;
+
+export function makeHeaderRow(over: Partial<HeaderSetRow> = {}): HeaderSetRow {
+  return { id: headerRowSeq++, name: "", value: "", ...over };
+}
+
 export const serviceForm = $state({
   /** Dialog 开合（高级页编辑/新建用；向导内联渲染不读此位）。 */
   open: false,
@@ -90,16 +113,36 @@ export const serviceForm = $state({
   /** match 域名（逗号/空白分隔 → suffix 规则；留空 = upstream hostname）。 */
   customMatch: "",
   routeRows: [makeRouteRow()] as ShareRouteRow[],
-  /** hooks 脚本（Owner #3 双控件：先激活，认证头才出条目）。 */
-  hooksScript: "",
-  /** 认证头取值（AuthSel：none/secret/hook/keep）。 */
-  auth: { kind: "none" } as AuthSel,
+  // ── Request lifecycle 四槽（hooks-lifecycle 7.1/7.2）──────────────────
+  /** ① auth：四族单选 + bearer（唯一 Bearer 前缀来源）。 */
+  auth: { kind: "none" } as AuthStageSel,
+  /** ② headers：set 行（空行提交时跳过）。 */
+  headerSetRows: [makeHeaderRow()] as HeaderSetRow[],
+  /** ② headers：remove 名单草稿（逗号/空白分隔）。 */
+  headerRemove: "",
+  /** ② headers：整段脚本绑定（"" = 无）。 */
+  headersScript: "",
+  /** ③ request：脚本绑定（"" = 原生 fetch 直连）。 */
+  requestScript: "",
+  /** ④ response：脚本绑定（"" = 无）。 */
+  responseScript: "",
   /** 预设来源（TestConnection 的模型下拉用；"" = custom）。 */
   presetId: "",
+  /** 预设 apiForm（连通测试请求形状；服务模型不落库该字段——custom 缺省
+   *  openai-completions，仅草稿期供 services.test 携带）。 */
+  apiForm: undefined as ApiForm | undefined,
   busy: false,
   error: null as RpcError | null,
-  /** 编辑透传（表单外字段原样带回）。 */
-  passthrough: null as { routes?: ServiceAddInput["routes"]; headerRest?: Record<string, HeaderValue>; matchExtra?: ServiceAddInput["match"] } | null,
+  /** 编辑透传（表单外字段原样带回；脚本 args 仅在脚本名未变时带回）。 */
+  passthrough: null as {
+    routes?: ServiceAddInput["routes"];
+    rewrite?: ServiceAddInput["rewrite"];
+    matchExtra?: ServiceAddInput["match"];
+    authArgs?: Record<string, string>;
+    headersScriptArgs?: Record<string, string>;
+    requestArgs?: Record<string, string>;
+    responseArgs?: Record<string, string>;
+  } | null,
 });
 
 /** 表单复位（保留 open 由调用方管理）。 */
@@ -111,9 +154,14 @@ function formReset(): void {
   serviceForm.port = "";
   serviceForm.customMatch = "";
   serviceForm.routeRows = [makeRouteRow()];
-  serviceForm.hooksScript = "";
   serviceForm.auth = { kind: "none" };
+  serviceForm.headerSetRows = [makeHeaderRow()];
+  serviceForm.headerRemove = "";
+  serviceForm.headersScript = "";
+  serviceForm.requestScript = "";
+  serviceForm.responseScript = "";
   serviceForm.presetId = "";
+  serviceForm.apiForm = undefined;
   serviceForm.error = null;
   serviceForm.passthrough = null;
 }
@@ -124,9 +172,9 @@ export function openAdd(): void {
   serviceForm.open = true;
 }
 
-/** 高级页：编辑既有服务（回显统一模型；非 suffix 规则/headerSet 其他头/
- *  routes 原样透传，编辑保存不丢表单外字段）。 */
-export function openEdit(service: Parameters<typeof authSelFromService>[0]): void {
+/** 高级页：编辑既有服务（回显统一模型；rewrite/routes/非 suffix 规则/
+ *  脚本 args 原样透传，编辑保存不丢表单外字段）。 */
+export function openEdit(service: ServiceConfigView): void {
   formReset();
   serviceForm.editingName = service.name;
   serviceForm.name = service.name;
@@ -135,16 +183,33 @@ export function openEdit(service: Parameters<typeof authSelFromService>[0]): voi
   serviceForm.groupName = app.groups.find((g) => g.serviceIds.includes(service.serviceId))?.name ?? "";
   serviceForm.upstream = service.upstream;
   serviceForm.port = String(service.defaultPort);
-  serviceForm.hooksScript = hooksScriptFromService(service);
+  // 四槽回显（auth 四族全覆盖；headers 展开为行/名单；脚本绑定取脚本名）
   serviceForm.auth = authSelFromService(service);
+  const set = service.headers?.set ?? {};
+  const setRows = Object.entries(set).map(([name, value]) => makeHeaderRow({ name, value }));
+  serviceForm.headerSetRows = setRows.length > 0 ? setRows : [makeHeaderRow()];
+  serviceForm.headerRemove = (service.headers?.remove ?? []).join(", ");
+  serviceForm.headersScript = service.headers?.script?.name ?? "";
+  serviceForm.requestScript = service.request?.script ?? "";
+  serviceForm.responseScript = service.response?.script ?? "";
   const suffixes = service.match.filter((r) => r.type === "suffix").map((r) => r.value);
   serviceForm.customMatch = suffixes.join(", ");
   const matchExtra = service.match.filter((r) => r.type !== "suffix");
-  const { authorization, ...headerRest } = (service.rewrite?.headerSet ?? {}) as Record<string, HeaderValue>;
   serviceForm.passthrough = {
     ...(service.routes !== undefined && service.routes.length > 0 ? { routes: service.routes } : {}),
-    ...(Object.keys(headerRest).length > 0 ? { headerRest } : {}),
+    ...(service.rewrite !== undefined &&
+    (service.rewrite.host !== undefined ||
+      service.rewrite.pathPrefixStrip !== undefined ||
+      service.rewrite.pathPrefixAppend !== undefined)
+      ? { rewrite: service.rewrite }
+      : {}),
     ...(matchExtra.length > 0 ? { matchExtra } : {}),
+    ...(service.auth !== undefined && "script" in service.auth && service.auth.args !== undefined
+      ? { authArgs: service.auth.args }
+      : {}),
+    ...(service.headers?.script?.args !== undefined ? { headersScriptArgs: service.headers.script.args } : {}),
+    ...(service.request?.args !== undefined ? { requestArgs: service.request.args } : {}),
+    ...(service.response?.args !== undefined ? { responseArgs: service.response.args } : {}),
   };
   // 服务既有路由回显为可编辑行
   if (service.routes !== undefined && service.routes.length > 0) {
@@ -169,12 +234,12 @@ export function openEdit(service: Parameters<typeof authSelFromService>[0]): voi
 export function choosePreset(preset: Preset): void {
   formReset();
   serviceForm.presetId = preset.id;
+  serviceForm.apiForm = preset.apiForm;
   serviceForm.name = preset.id;
   serviceForm.port = String(preset.defaultPort);
   serviceForm.upstream = preset.baseUrl;
   serviceForm.customMatch = preset.matchDomains.join(", ");
   serviceForm.auth = authSelFromPreset(preset);
-  serviceForm.hooksScript = hooksScriptFromPreset(preset);
   serviceForm.routeRows = (preset.routes ?? []).map((route) => {
     const from = route.localPrefix ?? ROUTE_LOCAL_PREFIX[route.forms[0] ?? "openai-chat"];
     const to = toInputFromPrefix(route.upstreamPrefix ?? "");
@@ -188,7 +253,10 @@ export function chooseCustom(): void {
   formReset();
 }
 
-/** 路由行操作（零校验——形状归一在组装期）。 */
+// ---------------------------------------------------------------------------
+// 路由行操作（零校验——形状归一在组装期）
+// ---------------------------------------------------------------------------
+
 export function updateRouteFrom(row: ShareRouteRow, value: string): void {
   row.from = value;
   if (row.bound) row.to = value;
@@ -217,6 +285,51 @@ export function removeRouteRow(id: number): void {
   serviceForm.routeRows = serviceForm.routeRows.filter((row) => row.id !== id);
   if (serviceForm.routeRows.length === 0) serviceForm.routeRows = [makeRouteRow()];
 }
+
+// ---------------------------------------------------------------------------
+// headers 行操作
+// ---------------------------------------------------------------------------
+
+export function addHeaderRow(): void {
+  if (serviceForm.headerSetRows.length >= 32) return;
+  serviceForm.headerSetRows.push(makeHeaderRow());
+}
+export function removeHeaderRow(id: number): void {
+  serviceForm.headerSetRows = serviceForm.headerSetRows.filter((row) => row.id !== id);
+  if (serviceForm.headerSetRows.length === 0) serviceForm.headerSetRows = [makeHeaderRow()];
+}
+
+/** 脚本换绑时清除对应 args 透传（args 属于旧绑定，不可跟到新脚本）。 */
+export function setStageScript(slot: "headers" | "request" | "response", name: string): void {
+  if (slot === "headers") {
+    if (serviceForm.headersScript !== name && serviceForm.passthrough !== null) delete serviceForm.passthrough.headersScriptArgs;
+    serviceForm.headersScript = name;
+  } else if (slot === "request") {
+    if (serviceForm.requestScript !== name && serviceForm.passthrough !== null) delete serviceForm.passthrough.requestArgs;
+    serviceForm.requestScript = name;
+  } else {
+    if (serviceForm.responseScript !== name && serviceForm.passthrough !== null) delete serviceForm.passthrough.responseArgs;
+    serviceForm.responseScript = name;
+  }
+}
+
+/** auth 换选（script 族换绑时清除 args 透传）。 */
+export function setAuthSel(sel: AuthStageSel): void {
+  const prev = serviceForm.auth;
+  if (
+    prev.kind === "script" &&
+    sel.kind === "script" &&
+    prev.script !== sel.script &&
+    serviceForm.passthrough !== null
+  ) {
+    delete serviceForm.passthrough.authArgs;
+  }
+  serviceForm.auth = sel;
+}
+
+// ---------------------------------------------------------------------------
+// 组装
+// ---------------------------------------------------------------------------
 
 /** match 组装：手填域名 → suffix 规则；留空 → upstream hostname 单条 exact；
  *  失败 → null（维持既有校验错误文案）；legacy 非 suffix 规则透传附加。 */
@@ -259,7 +372,66 @@ export function routesInput(): ServiceAddInput["routes"] {
   return serviceForm.passthrough?.routes;
 }
 
-/** 校验（② → ③ / Dialog 保存共用）：名称、分组、upstream、端口。 */
+/** ② headers 组装：行/名单/脚本 → 契约槽；全空 → undefined（清除绑定）。 */
+export function headersSlotFromForm(): HeadersSlot | undefined {
+  const set: Record<string, string> = {};
+  for (const row of serviceForm.headerSetRows) {
+    const name = row.name.trim();
+    if (name === "") continue;
+    set[name] = row.value;
+  }
+  const remove = serviceForm.headerRemove
+    .split(/[\s,]+/)
+    .map((token) => token.trim())
+    .filter((token) => token !== "");
+  const script = serviceForm.headersScript.trim();
+  if (Object.keys(set).length === 0 && remove.length === 0 && script === "") return undefined;
+  const args = serviceForm.passthrough?.headersScriptArgs;
+  return {
+    ...(remove.length > 0 ? { remove } : {}),
+    ...(Object.keys(set).length > 0 ? { set } : {}),
+    ...(script !== ""
+      ? { script: { name: script, ...(args !== undefined && Object.keys(args).length > 0 ? { args } : {}) } }
+      : {}),
+  };
+}
+
+/** ③/④ 脚本槽组装："" → undefined；args 仅脚本名未变时透传。 */
+function stageScriptSlot(
+  name: string,
+  args: Record<string, string> | undefined,
+): { script: string; args?: Record<string, string> } | undefined {
+  const script = name.trim();
+  if (script === "") return undefined;
+  return { script, ...(args !== undefined && Object.keys(args).length > 0 ? { args } : {}) };
+}
+
+/** 当前 auth 草稿（TestConnection 连通测试与摘要共用）。 */
+export function authDraft(): AuthSlot | undefined {
+  const args = serviceForm.passthrough?.authArgs;
+  return authSlotFromSel(serviceForm.auth, args);
+}
+
+/** ③/④ 摘要行（管线行/向导摘要短文案）：none / 脚本名。 */
+export function stageSummary(name: string): string {
+  return name.trim() !== "" ? name.trim() : "none";
+}
+
+/** ② headers 摘要行：+n set / -n remove / script 名 / none。 */
+export function headersSummary(): string {
+  const parts: string[] = [];
+  const setCount = serviceForm.headerSetRows.filter((row) => row.name.trim() !== "").length;
+  const removeCount = serviceForm.headerRemove
+    .split(/[\s,]+/)
+    .map((token) => token.trim())
+    .filter((token) => token !== "").length;
+  if (setCount > 0) parts.push(`+${setCount} set`);
+  if (removeCount > 0) parts.push(`-${removeCount} remove`);
+  if (serviceForm.headersScript.trim() !== "") parts.push(`script ${serviceForm.headersScript.trim()}`);
+  return parts.length > 0 ? parts.join(" · ") : "none";
+}
+
+/** 校验（② → ③ / Dialog 保存共用）：名称、分组、upstream、端口、literal 值。 */
 export function validate(): string | null {
   if (serviceForm.name.trim() === "") return "service name is required";
   if (serviceForm.groupName.trim() === "") return "group name is required";
@@ -267,23 +439,25 @@ export function validate(): string | null {
   if (serviceForm.port.trim() !== "" && parsePositiveInt(serviceForm.port) === undefined) {
     return "port must be a positive integer";
   }
+  if (serviceForm.auth.kind === "literal" && serviceForm.auth.value.trim() === "") {
+    return "auth literal value is required";
+  }
   if (matchRules() === null) return "a valid upstream url is required to derive match rules";
   return null;
 }
 
-/** 组装完整 services.add 输入（认证/headerSet 合并透传）。 */
+/** 组装完整 services.add 输入（四槽 + rewrite/routes 透传）。 */
 export function composeInput(): { ok: true; input: ServiceAddInput } | { ok: false; message: string } {
   const problem = validate();
   if (problem !== null) return { ok: false, message: problem };
   const match = matchRules()!;
   const port = parsePositiveInt(serviceForm.port);
-  const authParts = authInput(serviceForm.auth);
-  const hooks = hooksField(serviceForm.hooksScript, serviceForm.auth);
-  const headerSet: Record<string, HeaderValue> = { ...(serviceForm.passthrough?.headerRest ?? {}) };
-  if (authParts.authorization !== undefined) {
-    headerSet["authorization"] = authParts.authorization;
-  }
+  const auth = authDraft();
+  const headers = headersSlotFromForm();
+  const request = stageScriptSlot(serviceForm.requestScript, serviceForm.passthrough?.requestArgs);
+  const response = stageScriptSlot(serviceForm.responseScript, serviceForm.passthrough?.responseArgs);
   const routes = routesInput();
+  const rewrite = serviceForm.passthrough?.rewrite;
   return {
     ok: true,
     input: {
@@ -291,9 +465,12 @@ export function composeInput(): { ok: true; input: ServiceAddInput } | { ok: fal
       upstream: serviceForm.upstream.trim(),
       match,
       ...(port !== undefined ? { defaultPort: port } : {}),
-      ...(hooks !== undefined ? { hooks } : {}),
+      ...(auth !== undefined ? { auth } : {}),
+      ...(headers !== undefined ? { headers } : {}),
+      ...(request !== undefined ? { request } : {}),
+      ...(response !== undefined ? { response } : {}),
       ...(routes !== undefined ? { routes } : {}),
-      ...(Object.keys(headerSet).length > 0 ? { rewrite: { headerSet } } : {}),
+      ...(rewrite !== undefined ? { rewrite } : {}),
     },
   };
 }
@@ -308,9 +485,11 @@ async function ensureGroupWithService(serviceName: string): Promise<void> {
     return;
   }
   const { services } = await call((c) => c.provider.services.list({}));
-  const target = services.find((service) => service.name === serviceName);
+  // legacy 失效壳不参与分组运算（hooks-lifecycle 2.3 联合输出分拣）
+  const live = services.filter(isFullService);
+  const target = live.find((service) => service.name === serviceName);
   const names = existing.serviceIds
-    .map((serviceId) => services.find((service) => service.serviceId === serviceId)?.name)
+    .map((serviceId) => live.find((service) => service.serviceId === serviceId)?.name)
     .filter((name): name is string => name !== undefined);
   if (target === undefined || existing.serviceIds.includes(target.serviceId)) return;
   await call((c) => c.provider.groups.setServices({ name: groupName, serviceNames: [...names, serviceName] }));
@@ -335,7 +514,9 @@ export async function submit(): Promise<void> {
     let prevEnabled: boolean | undefined;
     if (serviceForm.editingName !== "") {
       const { services } = await call((c) => c.provider.services.list({}));
-      prevEnabled = services.find((s) => s.name === serviceForm.editingName)?.enabled;
+      prevEnabled = services
+        .filter(isFullService)
+        .find((s) => s.name === serviceForm.editingName)?.enabled;
       await call((c) => c.provider.services.remove({ name: serviceForm.editingName }));
     }
     const input =
@@ -364,7 +545,7 @@ export async function ensureCreated(): Promise<string> {
   }
   let serviceName = parsed.input.name;
   const { services } = await call((c) => c.provider.services.list({}));
-  if (!services.some((s) => s.name === serviceName)) {
+  if (!services.some((s) => isFullService(s) && s.name === serviceName)) {
     const added = await call((c) => c.provider.services.add(parsed.input));
     serviceName = added.service.name;
   }

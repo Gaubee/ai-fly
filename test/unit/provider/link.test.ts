@@ -14,10 +14,12 @@ import {
   encodeShareLink,
   LinkError,
   previewShareLink,
+  SHARE_LINK_OUTDATED_MESSAGE,
   SHARE_LINK_PREFIX,
   SHARE_TTL_MAX_MS,
   SHARE_TTL_MIN_MS,
   STABLE_ENTRY_HINT,
+  type ShareLinkPayload,
 } from "../../../src/provider/link.ts";
 
 let dir: string;
@@ -31,7 +33,8 @@ beforeEach(() => {
     name: "ollama",
     upstream: "http://127.0.0.1:11434",
     match: [{ type: "suffix", value: ".local" }],
-    rewrite: { headerSet: { authorization: "$env:ZAI_KEY" } },
+    // hooks-lifecycle v2：$env 引用落 headers.set（detail 投影掩码语义不变）。
+    headers: { set: { authorization: "$env:ZAI_KEY" } },
   });
   serviceId = svc.serviceId;
   store.addGroup("friends", ["ollama"]);
@@ -85,9 +88,72 @@ describe("链接构成与编码", () => {
     const json = JSON.stringify(result.payload);
     expect(json).not.toContain("ZAI_KEY");
     expect(json).not.toContain("$env");
-    // detail 披露与 AUTH_OK 同规（$env 头值 ●）
-    const masked = result.payload.services[0]?.detail?.rewrite?.headerSet?.find((h) => h.name === "authorization");
-    expect(masked?.value).toBe("\u25cf");
+    // v2 投影瘦身：store v1 过渡期的 headerSet 改写不再进 detail（头字段已迁出 rewrite 槽）
+    expect(result.payload.services[0]?.detail?.rewrite).toEqual({});
+  });
+
+  it("分享 payload 携带 v2 四槽条目（encode/decode 往返保持形状）", () => {
+    const payload: ShareLinkPayload = {
+      v: 1,
+      invite: "dweb1.x",
+      key: "sk-aifly-aaaaaaaa",
+      keyId: "k1",
+      provider: { alias: "box", endpointId: "ep-12345678", relayUrls: [] },
+      group: "friends",
+      services: [
+        {
+          serviceId: "svc1",
+          name: "api",
+          match: [{ type: "suffix", value: ".local" }],
+          defaultPort: 11434,
+          detail: {
+            upstream: "https://api.upstream/v1",
+            match: [{ type: "exact", value: "api.example.com" }],
+            rewrite: {},
+            auth: { secret: "\u25cf", bearer: true },
+            headers: {
+              remove: ["x-drop"],
+              set: { "x-a": "\u25cf", "x-literal": "keep-me" },
+              script: { name: "\u25cf" },
+            },
+            request: { script: "\u25cf" },
+            response: { script: "\u25cf" },
+          },
+        },
+      ],
+    };
+    const decoded = decodeShareLink(encodeShareLink(payload));
+    expect(decoded).toEqual(payload);
+  });
+
+  it("旧格式链接（v1 条目形状）-> 明确报「分享链接格式已过期」", () => {
+    const v1 = {
+      v: 1,
+      invite: "dweb1.invitetoken123",
+      key: "sk-aifly-aaaaaaaa",
+      keyId: "k1",
+      provider: { alias: "box", endpointId: "ep-12345678", relayUrls: [] },
+      group: "friends",
+      services: [
+        {
+          serviceId: "svc1",
+          name: "api",
+          match: [{ type: "suffix", value: ".local" }],
+          defaultPort: 11434,
+          hooks: "env", // v1 顶层 hooks（v2 退役）
+          detail: {
+            upstream: "https://api.upstream/v1",
+            match: [],
+            rewrite: {
+              host: "api.upstream",
+              prefix: "/v1",
+              headerSet: [{ name: "authorization", value: "\u25cf" }], // v1 头改写披露
+            },
+          },
+        },
+      ],
+    };
+    expect(() => decodeShareLink(encodeShareLink(v1 as never))).toThrow(SHARE_LINK_OUTDATED_MESSAGE);
   });
 });
 

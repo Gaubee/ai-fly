@@ -638,3 +638,173 @@ describe("目录同步与 actualPorts 回写共存", () => {
     await conn.stop();
   });
 });
+
+// ---------------------------------------------------------------------------
+// AUTH_OK 二阶段目录同步失败（hooks-lifecycle v2：detail 投影解析失败）
+// ---------------------------------------------------------------------------
+
+describe("目录同步失败（detail 投影解析失败）", () => {
+  const MASK = "\u25cf";
+
+  it("不经 schemaDropped、会话 authed 可转发、旧目录与映射保留、lastError 呈现；成功 AUTH_OK 清错", async () => {
+    const ep = epId();
+    const ring = ringOf(ep, [{ keyId: "k", key: "sk-aifly-catalog-key-0001", group: "g" }]);
+    ring.services = [svc("svc-old", "old", 3000)]; // 旧视图（import 带来）
+    ring.ports = { "svc-old": 3456 };
+    saveKeyring(root, ring);
+    const host = fakeFactoryHost();
+    const catalogErrors: Array<{ providerId: string; message: string }> = [];
+    const conn = new ProviderConnection({
+      ring,
+      root,
+      factory: host.factory,
+      backoff: { baseMs: 5, capMs: 25 },
+      onCatalogError: (providerId, message) => catalogErrors.push({ providerId, message }),
+    });
+    cleanups.push(() => conn.stop());
+    conn.start();
+    const session = connectOk(host);
+    const provider = new ProviderSide(session.peerTransport);
+    await settle();
+
+    // v1 形状 detail：帧级 schema 宽松通过、二阶段严格复核失败
+    await provider.session.send(FRAME_TYPE.AUTH_OK, {
+      v: 1,
+      alias: "prov",
+      relayUrls: ["http://relay:1"],
+      groups: [
+        {
+          keyId: "k",
+          group: "g",
+          limits: {},
+          services: [
+            {
+              serviceId: "svc-new",
+              name: "new",
+              match: [],
+              defaultPort: 8787,
+              detail: { upstream: "https://u.example", match: [], rewrite: { headerSet: [{ name: "authorization", value: MASK }] } },
+            },
+          ],
+        },
+      ],
+    });
+    provider.session.markAuthed();
+    await settle();
+
+    expect(catalogErrors).toEqual([{ providerId: ep, message: expect.stringContaining("catalog") }]);
+    expect(conn.state).toBe("direct"); // AUTH 交换成功，会话保持可用
+    expect(conn.services.map((s) => s.serviceId)).toEqual(["svc-old"]); // 旧视图保留
+    expect(conn.ports).toEqual({ "svc-old": 3456 }); // 映射保留
+    expect(conn.status().lastError).toContain("catalog"); // 错误态可查询（status 导出）
+    expect(loadKeyring(root, ep)?.services.map((s) => s.serviceId)).toEqual(["svc-old"]); // 落盘未被坏目录覆盖
+    // 会话 authed：对旧视图服务的转发照常发出 REQ（不走 offline 快速失败）
+    conn.forward({ serviceId: "svc-old", method: "GET", path: "/x", body: new Uint8Array(0), upgrade: false }, HANDLERS());
+    await settle();
+    const req = provider.last<Extract<InboundFrame, { type: typeof FRAME_TYPE.REQ }>>(FRAME_TYPE.REQ);
+    expect(req?.header.serviceId).toBe("svc-old");
+
+    // 后续成功 AUTH_OK：覆盖视图并清错
+    await provider.authOk([{ keyId: "k", group: "g", services: [svc("svc-new", "new", 8787)] }], { refresh: true });
+    await settle();
+    expect(conn.services.map((s) => s.serviceId)).toEqual(["svc-new"]);
+    expect(conn.status().lastError).toBeUndefined();
+    expect(loadKeyring(root, ep)?.services.map((s) => s.serviceId)).toEqual(["svc-new"]);
+    await conn.stop();
+  });
+
+  it("ProviderManager 转发 onCatalogError（通知通道入口）；其它提供者不受影响", async () => {
+    const ep1 = epId();
+    const ep2 = epId();
+    const hosts = [fakeFactoryHost(), fakeFactoryHost()];
+    let i = 0;
+    const seen: Array<{ providerId: string; message: string }> = [];
+    const manager = new ProviderManager({
+      rings: [
+        { ...ringOf(ep1, [{ keyId: "k", key: "sk-aifly-m1-key-0000000001", group: "g" }]), services: [svc("svc-1", "one", 1)] },
+        { ...ringOf(ep2, [{ keyId: "k", key: "sk-aifly-m2-key-0000000001", group: "g" }]), services: [svc("svc-2", "two", 2)] },
+      ],
+      root,
+      sessionFactory: () => hosts[i++]!.factory,
+      backoff: { baseMs: 5, capMs: 25 },
+      onCatalogError: (providerId, message) => seen.push({ providerId, message }),
+    });
+    cleanups.push(() => manager.stop());
+    manager.start();
+    const s1 = connectOk(hosts[0]!);
+    const s2 = connectOk(hosts[1]!);
+    const p1 = new ProviderSide(s1.peerTransport);
+    const p2 = new ProviderSide(s2.peerTransport);
+    await settle();
+    // P1 推送坏 detail；P2 正常
+    await p1.session.send(FRAME_TYPE.AUTH_OK, {
+      v: 1,
+      alias: "p1",
+      relayUrls: [],
+      groups: [{ keyId: "k", group: "g", limits: {}, services: [{ serviceId: "svc-1", name: "one", match: [], defaultPort: 1, detail: 42 }] }],
+    });
+    p1.session.markAuthed();
+    await p2.authOk([{ keyId: "k", group: "g", services: [svc("svc-2", "two", 2)] }]);
+    await settle();
+    expect(seen.map((e) => e.providerId)).toEqual([ep1]);
+    expect(manager.connection(ep1)?.services.map((s) => s.serviceId)).toEqual(["svc-1"]); // P1 旧视图保留
+    expect(manager.connection(ep2)?.services.map((s) => s.serviceId)).toEqual(["svc-2"]); // P2 不受影响
+    await manager.stop();
+  });
+
+  it("runtime 生产装配（复核 R3-F1）：startEngine 透传 onCatalogError；网关保旧视图可路由；快照 lastError set/clear", async () => {
+    const { startEngine } = await import("../../../src/consumer/runtime.ts");
+    const ep = epId();
+    const ring = ringOf(ep, [{ keyId: "k", key: "sk-aifly-runtime-key-00000001", group: "g" }]);
+    ring.services = [svc("svc-old", "old", 47_201)]; // 旧视图（import 带来）
+    ring.ports = { "svc-old": 47_201 };
+    saveKeyring(root, ring);
+    const host = fakeFactoryHost();
+    const catalogErrors: Array<{ providerId: string; message: string }> = [];
+    const engine = await startEngine({
+      rings: [ring],
+      consumersRoot: root,
+      sessionFactoryFor: () => host.factory,
+      onCatalogError: (providerId, message) => catalogErrors.push({ providerId, message }),
+    });
+    cleanups.push(() => engine.stop());
+    const session = connectOk(host);
+    const provider = new ProviderSide(session.peerTransport);
+    await settle();
+
+    // 坏 detail（v1 形状）→ onCatalogError 经生产装配到达；网关旧视图仍在
+    await provider.session.send(FRAME_TYPE.AUTH_OK, {
+      v: 1,
+      alias: "prov",
+      relayUrls: ["http://relay:1"],
+      groups: [
+        {
+          keyId: "k",
+          group: "g",
+          limits: {},
+          services: [
+            {
+              serviceId: "svc-new",
+              name: "new",
+              match: [],
+              defaultPort: 8787,
+              detail: { upstream: "https://u.example", match: [], rewrite: { headerSet: [{ name: "authorization", value: MASK }] } },
+            },
+          ],
+        },
+      ],
+    });
+    provider.session.markAuthed();
+    await settle();
+    expect(catalogErrors).toEqual([{ providerId: ep, message: expect.stringContaining("catalog") }]);
+    expect(engine.gateway.listenerInfo().map((l) => l.serviceId)).toEqual(["svc-old"]); // 旧监听未被坏目录拆掉
+    expect(engine.manager.snapshot()[0]?.lastError).toContain("catalog"); // 快照携带错误态（host 轮询投影源）
+
+    // 后续成功 AUTH_OK：覆盖视图 + lastError 清除（diff 层据此发 consumer-catalog）
+    await provider.authOk([{ keyId: "k", group: "g", services: [svc("svc-new", "new", 8787)] }], { refresh: true });
+    await settle();
+    expect(engine.manager.snapshot()[0]?.lastError).toBeUndefined();
+    expect(engine.gateway.listenerInfo().map((l) => l.serviceId)).toEqual(["svc-new"]);
+    await engine.stop();
+  });
+});

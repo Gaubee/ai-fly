@@ -1,9 +1,10 @@
 // 内建 hooks 脚本：file —— JSON 文件取值（点径）。
-// 钩子清单：
-// - authHeader(ctx) -> string：读 args.path（支持 ~）+ args.jsonPath（.a.b 风格）；
-//   args.bearer 为 "true"/"1" 时返回值拼 "Bearer " 前缀。
-//   watch 模式示例（返回 AsyncIterable）：unwatchOnClose 实现见文档。
-module.exports.authHeader = function authHeader({ homedir, args }) {
+// 阶段矩阵：
+// - onRequestBearerAuthentication(ctx) -> string：① auth 阶段，读 args.path（支持 ~）
+//   + args.jsonPath（.a.b 风格），返回裸值（"Bearer " 前缀由服务 auth 槽的 bearer
+//   开关单源拼装——脚本不得自行加前缀）。watch 模式示例（返回 AsyncIterable）：
+//   unwatchOnClose 实现见文档。
+module.exports.onRequestBearerAuthentication = function onRequestBearerAuthentication({ homedir, args }) {
   const { readFileSync } = require("node:fs");
   const { join } = require("node:path");
   const path = args && args.path;
@@ -22,6 +23,5 @@ module.exports.authHeader = function authHeader({ homedir, args }) {
     cur = cur[seg];
   }
   if (typeof cur !== "string" || cur === "") throw new Error("json path value missing");
-  const bearer = args && (args.bearer === "true" || args.bearer === "1");
-  return bearer ? `Bearer ${cur}` : cur;
+  return cur;
 };
