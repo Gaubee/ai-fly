@@ -46,7 +46,6 @@
     coveredStagesOf,
     presetEligibleScripts,
     scriptsForStage,
-    STAGE_FN_NAMES,
     STAGE_LABELS,
   } from "$lib/lifecycle.ts";
   /** 未覆盖阶段的缺省语义（UI delta「未覆盖阶段显示缺省语义」——复核 R1-P3）。 */
@@ -66,6 +65,9 @@
   const coveredStages = $derived(
     serviceForm.presetScript === "" ? [] : coveredStagesOf(hooksPanel.scripts, serviceForm.presetScript),
   );
+  /** 预设模式下该阶段是否由所选脚本接管（readonly 值与提示的判据）。 */
+  const coveredStage = (stage: string): boolean =>
+    serviceForm.presetScript !== "" && (coveredStages as string[]).includes(stage);
 
   // 挂载即拉取 hooks 清单（复核 R4-P1）：预设模式不渲染 AuthSourcePicker——
   // 其 onMount 的 loadHooks() 是唯一装载点，干净会话（分享向导直达 codex 预设）
@@ -212,9 +214,29 @@
     >{t("share.routes.add")}</PressButton>
   </div>
 
-  <!-- Request lifecycle（双模式——Owner 2026-09-15）：custom = 四阶段纵向管线
-       （编号 + 左侧连接线；①②默认展开，③④折叠收纳）；preset = 整段脚本绑定
-       （选择器 + 覆盖阶段徽章）。两模式互斥，切换清空另一侧。 -->
+  <!-- Request lifecycle（双模式——Owner 2026-09-15 / 同表单复用 Owner 2026-09-16）：
+       两模式渲染同一套四阶段纵向管线（编号 + 左侧连接线；①②默认展开，③④折叠
+       收纳）；preset 仅多一个整段脚本选择器，且四阶段全部 readonly（值硬编码自
+       脚本 stages）。两模式互斥，切换清空另一侧。 -->
+  <!-- 预设模式同表单 readonly 行（Owner 2026-09-16）：与自定义模式同款控件外观，
+       disabled + 值/选项硬编码自脚本 stages；覆盖提示/缺省语义沿用矩阵文案。 -->
+  {#snippet presetStageRow(stage: string, noneLabel: string)}
+    <div class="flex flex-col gap-1.5">
+      <NativeSelect
+        disabled
+        aria-label={STAGE_LABELS[stage]}
+        value={coveredStage(stage) ? serviceForm.presetScript : ""}
+      >
+        <option value="">{noneLabel}</option>
+        {#if coveredStage(stage)}
+          <option value={serviceForm.presetScript}>{serviceForm.presetScript}</option>
+        {/if}
+      </NativeSelect>
+      <p class="text-[11px] leading-relaxed text-muted-foreground">
+        {coveredStage(stage) ? t("f.lifecycle.preset.covered") : t(STAGE_DEFAULTS[stage])}
+      </p>
+    </div>
+  {/snippet}
   <div class="flex flex-col gap-3">
     <div class="flex items-center gap-2">
       <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
@@ -234,8 +256,9 @@
       </span>
     </div>
     {#if serviceForm.lifecycleMode === "preset"}
-      <!-- 预设模式：整段脚本 + 覆盖阶段徽章（未覆盖阶段走缺省语义——③ 缺省
-           js-backend-fetch 直连） -->
+      <!-- 预设模式唯一可编辑控件：整段脚本选择（Owner 2026-09-16 裁决：两模式
+           渲染同一套四阶段表单；预设 = 同表单整段 readonly——值硬编码自所选
+           脚本的 stages 矩阵，不再另写一套呈现样式） -->
       <div class="flex flex-col gap-1.5">
         <NativeSelect
           aria-label={t("f.lifecycle.mode.preset")}
@@ -247,24 +270,9 @@
             <option value={cand.name}>{cand.name}</option>
           {/each}
         </NativeSelect>
-        {#if serviceForm.presetScript !== ""}
-          <div class="flex flex-col gap-1">
-            {#each STAGE_FN_NAMES as stage (stage)}
-              {@const covered = coveredStages.includes(stage)}
-              <div class="flex items-center gap-1.5">
-                <span class="rounded-sm px-1.5 py-0.5 font-mono text-[11px] {covered ? 'bg-primary/15 text-foreground' : 'bg-muted text-muted-foreground'}">{STAGE_LABELS[stage]}</span>
-                {#if covered}
-                  <span class="text-[11px] text-muted-foreground">{t("f.lifecycle.preset.covered")}</span>
-                {:else}
-                  <span class="text-[11px] text-muted-foreground">{t(STAGE_DEFAULTS[stage])}</span>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        {/if}
         <p class="text-[11px] leading-relaxed text-muted-foreground">{t("f.lifecycle.preset.hint")}</p>
       </div>
-    {:else}
+    {/if}
     <div class="relative">
       <!-- 管线连接线（badge 列中垂线；badge 本身 z-10 压线） -->
       <span class="absolute bottom-3 left-3 top-3 w-px bg-border" aria-hidden="true"></span>
@@ -274,9 +282,13 @@
           <span class="relative z-10 flex size-6 flex-none items-center justify-center rounded-full border border-border bg-card font-mono text-[11px] text-muted-foreground">1</span>
           <div class="min-w-0 flex-1 pb-1">
             <AccordionItem open={true}>
-              {#snippet summary()}{t("f.lifecycle.auth")} · <span class="font-mono normal-case tracking-normal">{authSelSummary(serviceForm.auth)}</span>{/snippet}
+              {#snippet summary()}{t("f.lifecycle.auth")} · <span class="font-mono normal-case tracking-normal">{serviceForm.lifecycleMode === "preset" ? (coveredStage("onRequestBearerAuthentication") ? serviceForm.presetScript : t("f.lifecycle.none")) : authSelSummary(serviceForm.auth)}</span>{/snippet}
               <div class="pt-1.5">
-                <AuthSourcePicker value={serviceForm.auth} onchange={(sel) => setAuthSel(sel)} />
+                {#if serviceForm.lifecycleMode === "preset"}
+                  {@render presetStageRow("onRequestBearerAuthentication", t("f.lifecycle.none"))}
+                {:else}
+                  <AuthSourcePicker value={serviceForm.auth} onchange={(sel) => setAuthSel(sel)} />
+                {/if}
               </div>
             </AccordionItem>
           </div>
@@ -286,9 +298,13 @@
           <span class="relative z-10 flex size-6 flex-none items-center justify-center rounded-full border border-border bg-card font-mono text-[11px] text-muted-foreground">2</span>
           <div class="min-w-0 flex-1 pb-1">
             <AccordionItem open={true}>
-              {#snippet summary()}{t("f.lifecycle.headers")} · <span class="font-mono normal-case tracking-normal">{headersSummary()}</span>{/snippet}
+              {#snippet summary()}{t("f.lifecycle.headers")} · <span class="font-mono normal-case tracking-normal">{serviceForm.lifecycleMode === "preset" ? (coveredStage("onRequestHeaders") ? serviceForm.presetScript : t("f.lifecycle.none")) : headersSummary()}</span>{/snippet}
               <div class="pt-1.5">
-                <HeaderKVEditor />
+                {#if serviceForm.lifecycleMode === "preset"}
+                  {@render presetStageRow("onRequestHeaders", t("f.lifecycle.none"))}
+                {:else}
+                  <HeaderKVEditor />
+                {/if}
               </div>
             </AccordionItem>
           </div>
@@ -298,19 +314,23 @@
           <span class="relative z-10 flex size-6 flex-none items-center justify-center rounded-full border border-border bg-card font-mono text-[11px] text-muted-foreground">3</span>
           <div class="min-w-0 flex-1">
             <AccordionItem>
-              {#snippet summary()}{t("f.lifecycle.request")} · <span class="font-mono normal-case tracking-normal">{serviceForm.requestScript.trim() !== "" ? serviceForm.requestScript.trim() : t("f.lifecycle.request.unbound")}</span>{/snippet}
+              {#snippet summary()}{t("f.lifecycle.request")} · <span class="font-mono normal-case tracking-normal">{serviceForm.lifecycleMode === "preset" ? (coveredStage("onRequest") ? serviceForm.presetScript : t("f.lifecycle.request.unbound")) : (serviceForm.requestScript.trim() !== "" ? serviceForm.requestScript.trim() : t("f.lifecycle.request.unbound"))}</span>{/snippet}
               <div class="flex flex-col gap-1.5 pt-1.5">
-                <NativeSelect
-                  aria-label={t("f.lifecycle.request")}
-                  value={serviceForm.requestScript}
-                  onchange={(event) => setStageScript("request", event.currentTarget.value)}
-                >
-                  <option value="">{t("f.lifecycle.request.unbound")}</option>
-                  {#each requestScripts as scriptName (scriptName)}
-                    <option value={scriptName}>{scriptName}</option>
-                  {/each}
-                </NativeSelect>
-                <p class="text-[11px] leading-relaxed text-muted-foreground">{t("f.lifecycle.request.hint")}</p>
+                {#if serviceForm.lifecycleMode === "preset"}
+                  {@render presetStageRow("onRequest", t("f.lifecycle.request.unbound"))}
+                {:else}
+                  <NativeSelect
+                    aria-label={t("f.lifecycle.request")}
+                    value={serviceForm.requestScript}
+                    onchange={(event) => setStageScript("request", event.currentTarget.value)}
+                  >
+                    <option value="">{t("f.lifecycle.request.unbound")}</option>
+                    {#each requestScripts as scriptName (scriptName)}
+                      <option value={scriptName}>{scriptName}</option>
+                    {/each}
+                  </NativeSelect>
+                  <p class="text-[11px] leading-relaxed text-muted-foreground">{t("f.lifecycle.request.hint")}</p>
+                {/if}
               </div>
             </AccordionItem>
           </div>
@@ -320,26 +340,29 @@
           <span class="relative z-10 flex size-6 flex-none items-center justify-center rounded-full border border-border bg-card font-mono text-[11px] text-muted-foreground">4</span>
           <div class="min-w-0 flex-1">
             <AccordionItem>
-              {#snippet summary()}{t("f.lifecycle.response")} · <span class="font-mono normal-case tracking-normal">{serviceForm.responseScript.trim() !== "" ? serviceForm.responseScript.trim() : t("f.lifecycle.none")}</span>{/snippet}
+              {#snippet summary()}{t("f.lifecycle.response")} · <span class="font-mono normal-case tracking-normal">{serviceForm.lifecycleMode === "preset" ? (coveredStage("onResponse") ? serviceForm.presetScript : t("f.lifecycle.none")) : (serviceForm.responseScript.trim() !== "" ? serviceForm.responseScript.trim() : t("f.lifecycle.none"))}</span>{/snippet}
               <div class="flex flex-col gap-1.5 pt-1.5">
-                <NativeSelect
-                  aria-label={t("f.lifecycle.response")}
-                  value={serviceForm.responseScript}
-                  onchange={(event) => setStageScript("response", event.currentTarget.value)}
-                >
-                  <option value="">{t("f.lifecycle.script.none")}</option>
-                  {#each responseScripts as scriptName (scriptName)}
-                    <option value={scriptName}>{scriptName}</option>
-                  {/each}
-                </NativeSelect>
-                <p class="text-[11px] leading-relaxed text-muted-foreground">{t("f.lifecycle.response.hint")}</p>
+                {#if serviceForm.lifecycleMode === "preset"}
+                  {@render presetStageRow("onResponse", t("f.lifecycle.script.none"))}
+                {:else}
+                  <NativeSelect
+                    aria-label={t("f.lifecycle.response")}
+                    value={serviceForm.responseScript}
+                    onchange={(event) => setStageScript("response", event.currentTarget.value)}
+                  >
+                    <option value="">{t("f.lifecycle.script.none")}</option>
+                    {#each responseScripts as scriptName (scriptName)}
+                      <option value={scriptName}>{scriptName}</option>
+                    {/each}
+                  </NativeSelect>
+                  <p class="text-[11px] leading-relaxed text-muted-foreground">{t("f.lifecycle.response.hint")}</p>
+                {/if}
               </div>
             </AccordionItem>
           </div>
         </div>
       </Accordion>
     </div>
-    {/if}
   </div>
 
   <TestConnection
