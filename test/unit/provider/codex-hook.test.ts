@@ -9,8 +9,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const codex = require("../../../hooks/codex.cjs") as {
-  onRequestBearerAuthentication: (ctx: { homedir: string }) => string;
-  onRequestHeaders: (ctx: { homedir: string }) => { set: Record<string, string> };
+  onRequestBearerAuthentication: (ctx: {
+    homedir: string;
+    env?: (name: string) => string | undefined;
+  }) => string;
+  onRequestHeaders: (ctx: {
+    homedir: string;
+    env?: (name: string) => string | undefined;
+  }) => { set: Record<string, string> };
   onRequest: (ctx: Record<string, unknown>) => Promise<unknown>;
 };
 
@@ -47,6 +53,27 @@ describe("codex 全生命周期脚本（预设模式）", () => {
     expect(set["openai-beta"]).toBe("responses=experimental");
     expect(set["user-agent"]).toContain("codex_cli_rs/");
     expect(set["user-agent"]).toContain(join(dir, ".codex"));
+  });
+
+  it("CODEX_HOME 隔离通道（Owner 2026-09-16）：①② 读 $CODEX_HOME/auth.json 而非 <homedir>/.codex", () => {
+    const isolated = join(dir, "isolated-codex");
+    mkdirSync(isolated, { recursive: true });
+    writeFileSync(
+      join(isolated, "auth.json"),
+      JSON.stringify({
+        tokens: { access_token: "tok-iso-9", account_id: "acc-iso", refresh_token: "rt", id_token: "id" },
+      }),
+    );
+    const env = (name: string) => (name === "CODEX_HOME" ? isolated : undefined);
+    expect(codex.onRequestBearerAuthentication({ homedir: dir, env })).toBe("tok-iso-9");
+    const { set } = codex.onRequestHeaders({ homedir: dir, env });
+    expect(set["chatgpt-account-id"]).toBe("acc-iso");
+    expect(set["user-agent"]).toContain(isolated);
+    expect(set["user-agent"]).not.toContain(join(dir, ".codex"));
+  });
+
+  it("CODEX_HOME 空串视为未设置 → 回落 <homedir>/.codex", () => {
+    expect(codex.onRequestBearerAuthentication({ homedir: dir, env: () => "" })).toBe("tok-codex-1");
   });
 
   it("①② 缺凭据字段 → 抛错（引擎归 secret_missing / hook_failed）", () => {

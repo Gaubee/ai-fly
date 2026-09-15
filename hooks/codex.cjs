@@ -1,5 +1,7 @@
 // 内建 hooks 脚本：codex —— ChatGPT Codex backend 全生命周期（只读登录态）。
-// 只读 ~/.codex/auth.json —— ai-fly 永不写凭据文件（Owner 2026-09-14 裁决）。
+// 凭据定位镜像 codex CLI 官方语义：$CODEX_HOME/auth.json，未设置时回落
+// <homedir>/.codex/auth.json —— ai-fly 永不写凭据文件（Owner 2026-09-14 裁决）；
+// CODEX_HOME 为本机 ~/.codex 承载其它配置时的隔离通道（Owner 2026-09-16）。
 // 阶段矩阵（按四阶段导出名被发现）：
 // - onRequestBearerAuthentication(ctx) -> string：① auth 阶段，返回 ChatGPT
 //   Codex backend 的 Bearer 认证头裸值（"Bearer " 前缀由服务 auth 槽的 bearer
@@ -16,8 +18,14 @@ const { join } = require("node:path");
 const ORIGINATOR = "codex_cli_rs";
 const CODEX_VERSION = "0.154.0"; // 与 models_cache.json 的 client_version 对齐
 
-function readAuth(homedir) {
-  const auth = JSON.parse(readFileSync(join(homedir, ".codex", "auth.json"), "utf8"));
+/** 凭据目录：CODEX_HOME 优先（空串视为未设置），回落 <homedir>/.codex。 */
+function codexHomeOf(ctx) {
+  const override = typeof ctx.env === "function" ? ctx.env("CODEX_HOME") : undefined;
+  return typeof override === "string" && override !== "" ? override : join(ctx.homedir, ".codex");
+}
+
+function readAuth(codexHome) {
+  const auth = JSON.parse(readFileSync(join(codexHome, "auth.json"), "utf8"));
   const tokens = auth && auth.tokens;
   if (tokens === undefined || typeof tokens !== "object") {
     throw new Error("codex auth.json missing tokens");
@@ -25,14 +33,15 @@ function readAuth(homedir) {
   return tokens;
 }
 
-module.exports.onRequestBearerAuthentication = function onRequestBearerAuthentication({ homedir }) {
-  const token = readAuth(homedir).access_token;
+module.exports.onRequestBearerAuthentication = function onRequestBearerAuthentication(ctx) {
+  const token = readAuth(codexHomeOf(ctx)).access_token;
   if (typeof token !== "string" || token === "") throw new Error("codex auth.json missing access_token");
   return token;
 };
 
-module.exports.onRequestHeaders = function onRequestHeaders({ homedir }) {
-  const tokens = readAuth(homedir);
+module.exports.onRequestHeaders = function onRequestHeaders(ctx) {
+  const codexHome = codexHomeOf(ctx);
+  const tokens = readAuth(codexHome);
   const accountId = tokens.account_id;
   if (typeof accountId !== "string" || accountId === "") {
     throw new Error("codex auth.json missing account_id");
@@ -42,7 +51,7 @@ module.exports.onRequestHeaders = function onRequestHeaders({ homedir }) {
       "chatgpt-account-id": accountId,
       originator: ORIGINATOR,
       "openai-beta": "responses=experimental",
-      "user-agent": `${ORIGINATOR}/${CODEX_VERSION} (Mac OS 26.0; arm64) ${join(homedir, ".codex")}`,
+      "user-agent": `${ORIGINATOR}/${CODEX_VERSION} (Mac OS 26.0; arm64) ${codexHome}`,
     },
   };
 };

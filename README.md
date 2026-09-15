@@ -80,8 +80,10 @@ Every service runs a four-stage pipeline around the upstream call:
   `{status, headers, body, signal}`, returns `{status?, headers?, body?}`.
 
 Hook scripts export one function per stage they implement — the export name is the
-stage name. Builtin library: `codex` (reads `~/.codex/auth.json` — read-only, ai-fly
-never writes credential files), plus `env` / `file` / `secret` bridges for stage 1.
+stage name. Builtin library: `codex` (reads `$CODEX_HOME/auth.json`, falling back to
+`~/.codex/auth.json` — read-only, ai-fly never writes credential files; set
+`CODEX_HOME` when your `~/.codex` holds a different Codex CLI config), plus `env` /
+`file` / `secret` bridges for stage 1.
 All stage fns receive `{homedir, args, secrets, env}`; stages 1-2 additionally get
 the request-level `{method, path, headers}`. Returned streams (3/4 bodies) are
 cancelled when the engine aborts the request.
@@ -125,9 +127,11 @@ Lifecycle config has two **mutually exclusive** modes (Owner ruling 2026-09-15):
   runtime backend's fetch, Node/Deno/Bun alike).
 
 The `codex` preset runs in preset mode: the built-in `codex` script provides the
-complete lifecycle — ① auth token from `~/.codex/auth.json` (read-only), ② the
-codex CLI header set (`chatgpt-account-id`, `originator`, `openai-beta`,
-user-agent), ③ outbound via the **rust-fetch** sidecar.
+complete lifecycle — ① auth token from `$CODEX_HOME/auth.json` (falling back to
+`~/.codex/auth.json`, read-only), ② the codex CLI header set (`chatgpt-account-id`,
+`originator`, `openai-beta`, user-agent), ③ outbound via the **rust-fetch** sidecar.
+Launch e.g. `CODEX_HOME=~/.ai-fly/codex-home pnpm app:dev` to keep that credential
+copy fully isolated from your own `~/.codex`.
 
 `rust-fetch` (rustls TLS + HTTP/2, a client stack distinct from
 js-backend-fetch) replaces the outbound HTTPS call — empirical A/B against

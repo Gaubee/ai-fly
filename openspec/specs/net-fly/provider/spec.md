@@ -291,6 +291,10 @@ CLI 同步提供 `group set-services` / `group remove`。
   RESP_META 白名单三头 + `content-type`（引擎投影至 RESP_META 独立 contentType
   字段；status 204/304 时 contentType 归一为空；③ 返回 headers 中的
   `content-type` 同样投影）；调用时机为上游响应归一后、RESP_META 下发前。
+- **内建 codex 脚本凭据定位**（Owner 2026-09-14 只读裁决 + 2026-09-16 隔离
+  通道）：镜像 codex CLI 官方语义——读 `$CODEX_HOME/auth.json`，`CODEX_HOME`
+  未设置或为空串时回落 `<homedir>/.codex/auth.json`；只读，ai-fly 永不写凭据
+  文件。`CODEX_HOME` 供本机 `~/.codex` 承载其它 Codex CLI 配置时做完全隔离。
 
 **出站归一层**：js-backend-fetch 结果与 ③ 脚本结果 SHALL 统一归一为
 `{ status, headers, body: AsyncIterable<Uint8Array> }`，转发循环只消费归一形；
