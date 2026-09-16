@@ -247,3 +247,18 @@ strings below are exactly what the UI shows.
     it back. Remove on the consumer keeps the entry hidden-but-revivable —
     `ai-fly services` still lists it as `disabled`, and starting it again
     works without re-importing.
+12. **Codex e2e through the gateway** — with a provider exposing a codex
+    subscription service and a consumer gateway running, point Codex CLI at
+    the mapped port (`OPENAI_BASE_URL=http://127.0.0.1:<port>/v1` with the
+    group key): a chat completion streams through, tool calls round-trip, and
+    `ai-fly status --verbose` shows the served count climbing.
+13. **SSE mid-stream connection swap (kernel continuity)** — start a long
+    streaming request through the gateway (e.g. a slow/long codex response),
+    then kill the provider's network path mid-stream (`ai-fly` fabric reset
+    injection or simply restart the provider process within the recovery
+    window): the stream continues in order with **no duplicated tokens**, the
+    upstream request is NOT re-executed (provider logs show one execution),
+    and `ai-fly status` shows the provider flipping to offline then back —
+    the client never sees an error. Kill the provider for longer than the
+    recovery window: in-flight requests fail with a network error and only
+    *new* requests get 503 `provider_offline`.

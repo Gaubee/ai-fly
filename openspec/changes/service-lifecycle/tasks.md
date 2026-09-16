@@ -44,7 +44,12 @@
       语义边界记录：consumer 停用记录在 provider 目录移除该服务时被修剪
       （applyCatalog 防泄漏），provider 重新暴露后服务自动复活——"可复活"
       的深层路径，跨 provider 目录变化不持久
-- [ ] 4.3 README（EN+zh）services 命令章节 + openspec 归档
+- [x] 4.3 README（EN+zh）services 命令章节 + openspec 归档
+      —— EN 章节已由 0d5e5ff/d4fcb48 落地（quick-start 命令块 49-53 行 +
+      service lifecycle 段 + 手册回归条目 11）；zh README 镜像为文档政策
+      决策（仓库用户面 EN ASCII 无 zh 先例）→ 归档到下里程碑决策清单；
+      2026-09-16 手册清单补 codex e2e（12）与 SSE 断线续传（13）条目
+      （opendweb-kernel-migration 5.1）后归档
 
 ## 5. 提供方级管理（Owner 走查反馈，2026-09-14 追加）
 
