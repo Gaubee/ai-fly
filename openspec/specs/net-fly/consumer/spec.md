@@ -71,6 +71,7 @@ fabric 实例（同进程多实例已由 SDK 实证），数据目录按提供�
 
 - **WHEN** 使用方升级后钥环文件中某提供者的内嵌服务条目为旧形状
 - **THEN** 加载时该批条目被丢弃而提供者记录与密钥保留；该提供者在线的下轮目录同步后服务视图完整重建
+
 ### Requirement: 端口映射与冲突
 
 使用方网关（`ai-fly run --data <dir>` 长驻，或 `import --run` 一步到位）SHALL
@@ -131,6 +132,7 @@ ABORT（WS 场景发 CLOSE）帧并清理在途状态；本地客户端消费过
 
 - **WHEN** 提供者分别在响应头下发前与流式进行中回送 ERROR(hook_failed)
 - **THEN** 前者本地客户端收到 502 与脱敏 message；后者本地连接被关闭（已发头部不回退），观感与上游流中断一致
+
 ### Requirement: 目录同步处理
 
 网关 SHALL 处理提供者的 refresh AUTH_OK：以全量替换更新服务视图、relay 入口
@@ -181,3 +183,25 @@ jitter 的指数退避重连（起点 1s、上限 60s），并以 `linkStatus()`
 
 - **WHEN** 提供方撤销使用方钥环中全部密钥
 - **THEN** 网关状态显示 key_all_invalid，请求返回 503 并提示需要提供方重新签发；`key add` 新钥后自动恢复
+
+### Requirement: 消费侧服务启停与可复活语义
+
+`ai-fly services` SHALL 列出跨分组服务（状态 + 端口 + 环级停用标注）；
+`services stop <provider>`（单参）停用该提供者**全部**服务，`services stop
+<provider> <service>` 停用单服务（本地监听关闭，秒级生效）；`services start`
+恢复（单服务停用态跨环级停用保持）。`services rm <provider>` SHALL 为
+forget 语义（keyring + fabric 身份移除，真删）。consumer 侧停用条目在
+provider 目录移除该服务时 SHALL 被修剪（防泄漏），provider 重新暴露后服务
+自动复活（可复活语义：跨 provider 目录变化不持久化停用态）。
+
+#### Scenario: 停用-恢复往返
+
+- **WHEN** 消费者停用一个运行中的服务再启动
+- **THEN** 端口秒级关闭后恢复同端口；期间 `ai-fly services` 列出
+  `(off)`/`disabled` 标注
+
+#### Scenario: forget 真删
+
+- **WHEN** 消费者执行 `services rm <provider>`
+- **THEN** 该提供者 keyring 与 fabric 身份被移除，服务列表不再出现
+  （与停用的可复活语义不同）

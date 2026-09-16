@@ -129,6 +129,7 @@ request 接管不适用于 WS）。上游 4xx/5xx 按 `upstream_status` 原样�
 
 - **WHEN** 上游返回 401 与 JSON 正文
 - **THEN** 使用方本地客户端收到 401 与原始正文，contentType 一致
+
 ### Requirement: 限额
 
 提供方 SHALL 支持分组级可选限额：并发在途请求数（`maxConcurrency`）、每日请求数
@@ -180,6 +181,7 @@ wire 目录、不入分享链接、不入任何 status/detail 载荷；名称同
 
 - **WHEN** 用户在密钥面板添加 `openai = Bearer sk-xxx` 后删除之
 - **THEN** list 先返回含 openai 名称的条目列表再返回空；文件内容与 0600 权限保持；任何 RPC 响应不含 `sk-xxx`
+
 ### Requirement: 密钥引用解析（$secret:）
 
 headers `set` 头值与 auth `literal` 值 SHALL 支持 `$secret:<name>`：请求期从
@@ -192,6 +194,7 @@ headers `set` 头值与 auth `literal` 值 SHALL 支持 `$secret:<name>`：请�
 
 - **WHEN** 服务 headers.set 为 `authorization: $secret:openai` 且密钥库含 openai
 - **THEN** 上游收到替换后的完整头值；删除 openai 后同请求返回 `secret_missing`，错误信息不含密钥名
+
 ### Requirement: 上游连通性测试
 
 提供方 SHALL 支持对「草稿或已存服务形状」（upstream、apiForm、**auth 槽草稿**
@@ -223,6 +226,7 @@ secretName 单字段形态）。
 
 - **WHEN** 对 models.dev 不覆盖的自定义上游发起测试且未指定模型，上游 /models 可达
 - **THEN** 引擎用探测所得模型（便宜档优先）发单轮请求；探测也不可达时返回要求显式指定模型的结果级错误，不发出业务请求
+
 ### Requirement: 密钥值语义（裸 key + Bearer 前缀开关）
 
 密钥库条目 SHALL 不再携带前缀开关（`bearerPrefix` 退役）：Bearer 前缀拼接由
@@ -237,6 +241,7 @@ secretName 单字段形态）。
 
 - **WHEN** 用户在面板存入裸密钥（未手写 Bearer）并以默认 auth.bearer=true 选中注入
 - **THEN** 上游收到 `authorization: Bearer <key>`；服务级关闭 bearer 开关后按原样注入
+
 ### Requirement: 分组管理对齐密钥面
 
 分组 SHALL 支持行级管理：限额更新（`setLimits`，省略=清除为无限）与删除
@@ -401,3 +406,23 @@ HTTP/2 ALPN——客户端栈不同于 js-backend-fetch，Owner 2026-09-15 裁�
 
 - **WHEN** AIFLY_RUST_FETCH_BIN 指向不存在的路径，或 sidecar exit≠0 / 输出元信息行非法
 - **THEN** 该请求以 `hook_failed` 固定脱敏文案终结，零信息泄漏（不含路径与 stderr 内容）
+
+### Requirement: 服务生命周期与启停传导
+
+提供者 SHALL 支持服务级与提供者级（环级）启停：`service stop <name>` 暂停
+暴露（目录同步剔除该服务，配置保留）——consumer 侧该服务端口关闭、在途请求
+中止、目录表现为 404；`service start` 恢复暴露（consumer 端口复活）。环级
+`Keyring.disabled` 开关 SHALL 叠加生效：环停用即该环全部服务停止暴露，环
+恢复时**单服务的既有停用态保持**（不因环级恢复而重置）。启停传导经目录同步
+（物化/watch 全链过滤停用项），SHALL NOT 删除任何持久化配置。
+
+#### Scenario: 服务停用目录剔除
+
+- **WHEN** 提供者对在线 consumer 停用一个服务
+- **THEN** consumer 目录在秒级剔除该服务（本地端口关闭），提供者侧配置与
+  密钥不受影响；恢复后无需重新授权即复活
+
+#### Scenario: 环级开关叠加
+
+- **WHEN** 环内服务 A 已单独停用、B 运行中，随后环整体停用再恢复
+- **THEN** 恢复后 B 回到运行、A 保持停用（环级操作不重置单服务状态）
