@@ -36,6 +36,16 @@ const maybeTest = HAS_CONTINUITY ? test : test.skip;
 const httpMod = await import("@jixo/opendweb-client-sdk/http");
 const serveHttpGlue = /** @type {any} */ (httpMod).serveHttp ?? /** @type {any} */ (httpMod).default?.serveHttp;
 
+// 门禁 fail-closed：迁移后的 SDK 承载面（openSession + serveHttp）缺席即硬败
+// （曾为整体 skip 的 fail-open——旧 SDK 也能全绿，无法证明消费的是迁移目标）。
+if (!HAS_CONTINUITY || typeof serveHttpGlue !== "function") {
+  test("kernel SDK continuity surface pinned (openSession + serveHttp)", () => {
+    assert.fail(
+      `SDK continuity surface missing: openSession=${HAS_CONTINUITY}, serveHttp=${typeof serveHttpGlue === "function"} — expected @jixo/opendweb-client-sdk with continuity API`,
+    );
+  });
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function waitFor(pred, ms, what) {
@@ -291,9 +301,11 @@ maybeTest("kernel e2e: SSE mid-stream continuityReset — ordered resume, zero d
     );
 
     // recovering 期间的新请求：不提前 503（内核 B4 缺陷下 open_stream 可能
-    // 504——断言收紧为「绝非 503 provider_offline」；快恢复时通常 200）
-    const probePromise = fetch(`http://127.0.0.1:${stack.port}/slow`, { method: "POST", body: "probe" }).catch(
-      () => null,
+    // 504——断言收紧为「请求不失败 + 绝非 503 provider_offline」；快恢复时 200）
+    const probePromise = withTimeout(
+      fetch(`http://127.0.0.1:${stack.port}/slow`, { method: "POST", body: "probe" }),
+      30_000,
+      "probe during recovery",
     );
 
     const res = await resPromise;
@@ -308,12 +320,10 @@ maybeTest("kernel e2e: SSE mid-stream continuityReset — ordered resume, zero d
     assert.equal(res2.status, 200);
     assert.equal(await res2.text(), "slow-ok");
 
-    // recovering 探针：绝非 503（快恢复下 200；内核 B4 下可能 504）
-    const probe = await withTimeout(probePromise, 30_000, "probe during recovery");
-    if (probe !== null) {
-      await probe.text();
-      assert.notEqual(probe.status, 503, "recovering 期间不提前 503 provider_offline");
-    }
+    // recovering 探针：请求不失败（挂起后完成）且绝非 503
+    const probe = await probePromise;
+    await probe.text();
+    assert.notEqual(probe.status, 503, "recovering 期间不提前 503 provider_offline");
 
     // 上游副作用恰好一次 + 状态回 direct
     await waitFor(() => exec >= 1, 5_000, "upstream exec recorded");
@@ -363,11 +373,9 @@ maybeTest("kernel e2e: provider restart (REQUEST_STATE_LOST) — in-flight 504, 
       "in-flight response",
     );
 
-    // 注入断连 + provider 重启（内核会话注册表随进程态丢失）。注意：这里只
-    // 关闭 fabric（serve 任务随内核 abort、未决 handler 被丢弃）——不走
-    // engine.shutdown() 的 server.close()：SDK /http 胶水对 close 后完成的
-    // handler 结算会同步抛 [session] unknown request id（未捕获拒绝；已记录
-    // 为 SDK 缺陷，ai-fly 侧以不触发路径规避）。
+    // 注入断连 + provider 重启（内核会话注册表随进程态丢失）。fabric 级关闭是
+    // 场景保真（模拟进程死亡——engine/server 层完好退出由文件尾部 shutdown
+    // 有界性段覆盖）；在途 handler 随内核 abort 被丢弃。
     await p.consumer.continuityReset(p.provider.endpointId);
     await p.provider.shutdown();
 
@@ -418,8 +426,21 @@ maybeTest("kernel e2e: provider restart (REQUEST_STATE_LOST) — in-flight 504, 
     assert.equal(ok.status, 200);
     assert.equal((await ok.json()).body, "after-restart");
     assert.ok(stack.conn.servedCount >= 2);
+
+    // shutdown 有界性（handle() 永挂 hack 拆除后回归钉）：在途请求挂于上游
+    //（gated 永不响应）时 engine.shutdown() 须有界完成——server.close 取消
+    // 结算在途 handler，本地请求随之终结（形态不限定：连接关或错误响应）。
+    const parkedSettled = fetch(`http://127.0.0.1:${stack.port}/gated`, { method: "POST", body: "parked" })
+      .then(
+        () => "settled",
+        () => "settled",
+      );
+    await withTimeout(engine2.shutdown(), 15_000, "engine shutdown with in-flight request (bounded)");
+    assert.equal(await parkedSettled, "settled", "parked request settled after shutdown");
   } finally {
     await stack?.stop();
+    await engine.shutdown().catch(() => undefined);
+    await engine2?.shutdown().catch(() => undefined);
     await provider2?.shutdown().catch(() => undefined);
     await p.provider.shutdown().catch(() => undefined);
     await p.consumer.shutdown();

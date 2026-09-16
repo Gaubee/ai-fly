@@ -69,6 +69,8 @@ export interface FetchHttpResponseLike {
   bodyNext(): Promise<Buffer | null>;
   /** keepOpen 隧道 client→provider 方向（WS 101 后）。 */
   sendTunnel?(data: Buffer): Promise<void>;
+  /** per-request 取消（SDK B1/B2 轮补齐面：取消内核流并终结在途 bodyNext）。 */
+  abort?(): void;
 }
 
 /** 会话状态快照（SDK SessionStateSnapshotJs 结构子集）。 */
@@ -315,8 +317,6 @@ export class ProviderConnection implements ProviderRoute {
   private authedSessionId: string | null = null;
   /** 会话缓存相位（forward 快速失败判定：dead/closed 才 503）。 */
   private sessionPhase: string = "closed";
-  /** 本会话自上次 AUTH 后经历过 recovering（恢复后重呈 AUTH 复核授权）。 */
-  private sessionResumed = false;
   /** watch 循环代次（会话替换/停止时递增使旧循环退出）。 */
   private watchGen = 0;
   /** AUTH 进行中（防 active 抖动重入）。 */
@@ -493,9 +493,15 @@ export class ProviderConnection implements ProviderRoute {
     return {
       id,
       abort: () => {
-        // 本地中止：停止回调投递（本阶段 NAPI 无 per-request cancel——内核侧
-        // journal 上限有界；SDK 补齐后接流取消）。
+        // 本地中止：停止回调投递 + best-effort 取消内核请求（SDK abort() 为
+        // B1/B2 轮补齐面——当前版本缺席时仅本地停泵；到位后取消内核流并使
+        // provider 侧在途 handler 经取消结算收敛）。
         aborted = true;
+        try {
+          tunnel?.abort?.();
+        } catch {
+          // 取消面失败不阻断本地中止
+        }
       },
       sendData: (bytes: Uint8Array) => {
         if (aborted || tunnel === null || tunnel.sendTunnel === undefined) return Promise.resolve();
@@ -576,9 +582,8 @@ export class ProviderConnection implements ProviderRoute {
         return;
       case "recovering":
         // 瞬断不直达：在途/新请求挂起（内核 auto-resume）；状态如实呈现 offline。
-        // 标记本会话经历断线——恢复后重呈 AUTH 复核授权（提供端撤钥/目录变更
-        // 经此收敛到 key_all_invalid / refresh；正常瞬断为一次廉价重校验）。
-        this.sessionResumed = true;
+        // 授权不随恢复重呈（spec：同 session 恢复不重 AUTH——提供端授权随会话
+        // 存续）；撤钥收敛改由 watch 401 失效路径承接（restartWatch 于 active）。
         this.setState("offline");
         return;
       case "active":
@@ -586,10 +591,6 @@ export class ProviderConnection implements ProviderRoute {
         if (this.authedSessionId === session.sessionId || this.ring.keys.length === 0) {
           if (this.ring.keys.length === 0) {
             this.setState("connected-unauthed"); // 空钥环（join-only）：不发起 AUTH
-          } else if (this.sessionResumed) {
-            // 断线恢复：重呈 AUTH（提供端缓存命中即 200；全撤 → 403 key_all_invalid）
-            this.sessionResumed = false;
-            void this.runAuth(session);
           } else {
             void this.projectPath();
             this.restartWatch(session);
@@ -609,7 +610,6 @@ export class ProviderConnection implements ProviderRoute {
         this.session = null;
         this.sessionPhase = s.phase;
         this.authedSessionId = null;
-        this.sessionResumed = false;
         this.watchGen++;
         if (wasAuthed) this.lastError = `session ${s.phase}`;
         // recovering 已置 offline——终态离线语义升级（瞬断→终态，新请求 503），

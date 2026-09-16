@@ -71,6 +71,9 @@ handler(request):
 
 - providers.ts：attemptConnect/scheduleRetry/poll()/retryTimer/pollTimer/
   connecting/intentionalTeardown/inflight/dataUpSeq/WireSession/rawSession
+  （边界澄清：dead/closed 终态后的**会话重建**重试保留同名 scheduleRetry/
+  retryTimer 助手——它只驱动 ensureSession 重建新会话，不参与连接级重连；
+  连接级恢复全部由内核 auto-resume 承接）
 - serve.ts：WireSession/FabricWireAdapter 装配
 - wire/mux.ts + wire/codec.ts + wire/fabric-adapter.ts：无引用后删除文件
   （wire/frames.ts schema 保留——share-link 依赖；wire-protocol spec 帧族

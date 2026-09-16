@@ -43,5 +43,5 @@
 
 ## 5. 收尾
 
-- [ ] 5.1 手工回归清单条目（codex e2e / SSE 断线）入 README
+- [x] 5.1 手工回归清单条目（codex e2e / SSE 断线）入 README
 - [ ] 5.2 Codex 复核（herdr；评分 + 阻塞项清零）后 archive

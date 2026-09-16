@@ -296,6 +296,7 @@ export class ProviderEngine {
     this.catalogSeq++;
     ps.grants = valid;
     ps.lastView = json;
+    this.keyIndex.track(ps); // 授权集变更后重登记（撤键裁剪后索引防过期；track 为替换语义）
     ps.notifyWatch(header);
   }
 
@@ -435,10 +436,12 @@ class ProviderPeerServer implements AuthSessionBinding {
   // -----------------------------------------------------------------------
 
   private async handle(req: CarrierRequest): Promise<CarrierResponse> {
-    // 已 disposed：入口即永挂（close 后任何结算都会触发 SDK /http 胶水对
-    // unknown request id 的同步抛——rejectRequest 路径未捕获，直成
-    // unhandledRejection；内核侧该请求已被取消结算，悬挂闭包随进程回收）。
-    if (this.disposed) await new Promise<void>(() => undefined);
+    // 已 disposed：回错误载体正常结算（SDK 结算面经 B6 加固后对 close 后
+    // unknown-id 的晚到/拒绝结算幂等静默——永挂规避已无必要，且回避了 handler
+    // 闭包与 server.close() 的无界等待）。
+    if (this.disposed) {
+      return errorCarrierResponse(ERROR_CODE.internal, "provider engine disposed");
+    }
     const barePath = req.path.split("?", 1)[0]!;
     let result: CarrierResponse;
     if (barePath === AIFLY_AUTH_PATH && req.method === "POST") {
@@ -448,8 +451,6 @@ class ProviderPeerServer implements AuthSessionBinding {
     } else {
       result = await this.handleForward(req);
     }
-    // 结算前再次复核：close 竞速窗口内完成的请求同样永挂（同上规避）。
-    if (this.disposed) await new Promise<void>(() => undefined);
     return result;
   }
 
