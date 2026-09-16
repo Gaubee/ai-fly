@@ -215,10 +215,15 @@ export async function startProviderDaemon(opts: DaemonOptions): Promise<RunningD
   const secretsStore = SecretsStore.open(opts.dataDir);
   const secrets = opts.secrets ?? ((name: string) => secretsStore.get(name));
   const fabric = await openOrCreateFabric(opts.dataDir, opts.relayUrls, opts.httpProxy);
+  // /http 胶水（fetchHttp/serveHttp 规范签名）懒加载：真实实现仅在 daemon 进程
+  // 内触原生模块（单测注入内存假体，不 import 本路径）。
+  const http = await import("@jixo/opendweb-client-sdk/http");
   const engine = new ProviderEngine({
     fabric,
     store,
     dataDir: opts.dataDir,
+    serveHttp: (f, peerId, handler) =>
+      http.serveHttp(f, peerId, handler as Parameters<typeof http.serveHttp>[2]),
     limits,
     opts: {
       alias: opts.alias,

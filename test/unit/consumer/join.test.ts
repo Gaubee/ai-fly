@@ -78,11 +78,14 @@ function fakeFabric(opts: { me?: string; members?: FabricMember[]; failJoin?: bo
       endpointId: me,
       connect: async () => undefined,
       disconnect: async () => undefined,
-      send: async () => undefined,
-      linkStatus: async () => "direct",
+      relayStatus: async () => ({ urls: [] }),
       on: () => () => undefined,
       members: async () => opts.members ?? [],
       shutdown: async () => undefined,
+      openSession: async () => {
+        throw new Error("join test: openSession not expected");
+      },
+      continuitySnapshot: async () => ({ path: "direct" }),
     },
   };
 }

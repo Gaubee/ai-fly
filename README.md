@@ -168,6 +168,35 @@ Node >= 20. License: MIT OR Apache-2.0. The fabric dependency
 `@jixo/opendweb-client-sdk` ships native binaries for darwin-arm64 and win32-x64
 (no Linux yet).
 
+### Local link development against the opendweb kernel
+
+The consumer/provider data plane rides the opendweb session-continuity kernel
+(`Fabric.openSession` / `fetchHttp` / `serveHttp`; the aifly envelope wire
+protocol is retired). While iterating against the opendweb workspace, link the
+SDK instead of installing from the registry:
+
+```bash
+# one-time, inside the opendweb workspace
+cd /path/to/opendweb/packages/client-sdk && npm link
+
+# then in this repo (replaces the registry install with a symlink)
+npm link @jixo/opendweb-client-sdk
+```
+
+Notes:
+
+- Do **not** run `pnpm install` in this repo while the link is in place — it
+  resolves the symlink back to the registry version. Add new dependencies in a
+  separate step and re-link afterwards.
+- `test/e2e/kernel-migration.test.mjs` is the real-kernel acceptance suite
+  (dual in-process fabrics + serveHttp/fetchHttp; SSE mid-stream resume, dead
+  semantics, provider restart, WS tunnel). It runs via
+  `node --import tsx --test --test-force-exit ...` (the native runtime keeps
+  the event loop alive; force-exit is required, mirroring the SDK's own test
+  script).
+- The `package.json` version stays on the published semver (`^0.5.0` line once
+  the dual-release milestone lands); the link is a dev-time override only.
+
 ## Manual regression checklist
 
 Desktop-shell behaviors that automated suites do not cover. Run before any

@@ -1,6 +1,6 @@
-// 内存成对 FakeFabric（engine 单测用）：实现 Fabric 公共面，send 路由到配对侧的
-// message 事件（模拟 QUIC envelope 双向到达）；peer-connected/relay 事件可手动注入。
-// 不加载原生 SDK（vitest worker 池约束）。
+// 内存成对 FakeFabric（engine 单测用）：实现 Fabric 公共面（continuity 面为
+// 抛错桩——引擎单测注入内存 serveHttp 假体，不触内核会话），peer-connected/
+// relay 事件可手动注入。不加载原生 SDK（vitest worker 池约束）。
 
 import type { Fabric, FabricEventJs, RelayStatusJs } from "@jixo/opendweb-client-sdk";
 import type { Member } from "@jixo/opendweb-client-sdk";
@@ -102,7 +102,26 @@ export class FakeFabric implements Fabric {
     return "dwebkey1.fake";
   }
 
+  // ---- continuity 面：抛错桩（引擎单测经注入的 serveHttp 假体驱动，不触内核） ----
+
+  async openSession(): Promise<never> {
+    throw new Error("fake fabric: openSession not supported (inject serveHttp fake instead)");
+  }
+
+  async continuitySnapshot(): Promise<never> {
+    throw new Error("fake fabric: continuitySnapshot not supported");
+  }
+
+  async continuityReset(): Promise<void> {}
+
+  async addKnownAddr(): Promise<void> {}
+
+  async serveHttp(): Promise<never> {
+    throw new Error("fake fabric: serveHttp not supported (inject serveHttp fake instead)");
+  }
+
   async shutdown(): Promise<void> {
     this.shutdownCount += 1;
   }
 }
+

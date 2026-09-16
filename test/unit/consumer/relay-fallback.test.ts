@@ -1,10 +1,12 @@
-// createFabricProviderTransport 的 relay 透传（Owner 裁决 2026-09-13：链接
+// createFabricSessionFactory 的 relay 透传（Owner 裁决 2026-09-13：链接
 // 带来的会合点优先）：info.relayUrls 非空 → factory.open 收到 relayUrls；
 // 空/缺省 → 不带（走工厂层解析）。假 FabricFactory 记录 open 入参。
+// opendweb-kernel-migration：工厂面自传输会话工厂（openSession 即 connect）
+// 改为底层 fabric 工厂（open 幂等复用）——透传断言语义不变。
 
 import { describe, expect, it } from "vitest";
 import {
-  createFabricProviderTransport,
+  createFabricSessionFactory,
   type FabricFactory,
   type FabricLike,
 } from "../../../src/consumer/providers.ts";
@@ -23,38 +25,37 @@ function recordingFactory() {
   return { opens, factory };
 }
 
-describe("createFabricProviderTransport relay 透传", () => {
-  it("info.relayUrls 非空 → open 收到（会话开启即触发一次 open）", async () => {
+describe("createFabricSessionFactory relay 透传", () => {
+  it("info.relayUrls 非空 → open 收到；重复 open 幂等复用单实例", async () => {
     const { opens, factory } = recordingFactory();
-    const transport = createFabricProviderTransport(factory, {
+    const session = createFabricSessionFactory(factory, {
       dataDir: "/tmp/ring-a/fabric",
       providerEndpointId: "ep-1",
       relayUrls: ["http://127.0.0.1:3340"],
     });
-    // openSession 需要真 connect/on——只验 open 透传：直接经内部 getFabric
-    // 不可达，改由 openSession 触发（connect 抛错不影响 open 已被记录）
-    await transport.openSession().catch(() => undefined);
+    await session.open();
+    await session.open(); // 幂等：底层 fabric 一次
     expect(opens).toEqual([{ dataDir: "/tmp/ring-a/fabric", relayUrls: ["http://127.0.0.1:3340"] }]);
   });
 
   it("relayUrls 空数组 → 不带字段（走工厂层 flag>env>file 解析）", async () => {
     const { opens, factory } = recordingFactory();
-    const transport = createFabricProviderTransport(factory, {
+    const session = createFabricSessionFactory(factory, {
       dataDir: "/tmp/ring-b/fabric",
       providerEndpointId: "ep-2",
       relayUrls: [],
     });
-    await transport.openSession().catch(() => undefined);
+    await session.open();
     expect(opens).toEqual([{ dataDir: "/tmp/ring-b/fabric" }]);
   });
 
   it("relayUrls 缺省 → 同样不带字段", async () => {
     const { opens, factory } = recordingFactory();
-    const transport = createFabricProviderTransport(factory, {
+    const session = createFabricSessionFactory(factory, {
       dataDir: "/tmp/ring-c/fabric",
       providerEndpointId: "ep-3",
     });
-    await transport.openSession().catch(() => undefined);
+    await session.open();
     expect(opens).toEqual([{ dataDir: "/tmp/ring-c/fabric" }]);
   });
 });

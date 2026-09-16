@@ -438,10 +438,15 @@ test(
       );
       const residue3 = fs.readdirSync(c3Dir).filter((e) => !e.startsWith("."));
       assert.deepEqual(residue3, [], "离线导入失败不残留");
-      // 离线窗口：c2 快速失败
+      // 离线窗口：c2 确定错误（kernel-migration 语义：会话 recovering 期间新请求
+      // 不提前 503——内核 fetch 面对死通道给确定失败，消费端映射 504 session_lost；
+      // 恢复窗口耗尽（90s）后才转为 503 provider_offline。此处断言确定错误二态）。
       await waitFor(
-        async () => (await fetch(`http://127.0.0.1:${c2Port}/v1/models`).catch(() => null))?.status === 503,
-        { timeoutMs: 40_000, label: "c2 503 while provider down" },
+        async () => {
+          const r = await fetch(`http://127.0.0.1:${c2Port}/v1/models`).catch(() => null);
+          return r !== null && (r.status === 503 || r.status === 504);
+        },
+        { timeoutMs: 40_000, label: "c2 deterministic error while provider down" },
       );
       // 重启（同 --data）：EndpointId 复用 + consumer 自动恢复
       serve = cliProc(["serve", "--data", providerDir, "--relay", relayUrl]);

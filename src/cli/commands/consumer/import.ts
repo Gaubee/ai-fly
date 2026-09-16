@@ -9,7 +9,7 @@ import { UsageError } from "../../errors.ts";
 import { consumersRoot, listKeyrings } from "../../../consumer/store.ts";
 import { decodeShareLink, formatKeyringSummary, formatLinkPreview, importLink } from "../../../consumer/join.ts";
 import { startEngine } from "../../../consumer/runtime.ts";
-import { createFabricProviderTransport } from "../../../consumer/providers.ts";
+import { createFabricSessionFactory } from "../../../consumer/providers.ts";
 import {
   createSdkFabricFactory,
   ctxHomedir,
@@ -73,7 +73,7 @@ export async function run(argv: readonly string[], ctx: CommandContext = {}): Pr
       rings: ringsForRun(rings),
       consumersRoot: root,
       sessionFactoryFor: (ring) =>
-        createFabricProviderTransport(factory, {
+        createFabricSessionFactory(factory, {
           dataDir: `${root}/${ring.endpointId.slice(0, 8)}/fabric`,
           providerEndpointId: ring.endpointId,
           // 链接带来的会合点优先（Owner 裁决 2026-09-13）：ring 内嵌 relay 逐环传给 fabric

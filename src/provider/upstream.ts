@@ -1,29 +1,33 @@
-// HTTP 上游转发：REQ（重组完成）-> 出站归一层 -> RESP_META / RESP_CHUNK /
-// RESP_END / ERROR。超时族（design A6）：连接期 10s（TCP 探测，fetch 不暴露连接
-// 建立，探测失败/超时回 upstream_unreachable；绑定 ③ request 脚本时跳过——连接
-// 语义归脚本）、首字节 600s（fetch resolve / ③ 脚本返回 = 响应头到达）、流停滞
-// 120s（分片间）、首字节等待期每 30s PING(id) 并挂起提供方侧空闲计时。
+// HTTP 上游转发：请求（重组完成）-> 出站归一层 -> 响应投影（ResponseSink）。
+// opendweb-kernel-migration：承载面自 WireSession 帧发送改为 ResponseSink
+// （resp meta / chunk / end / error / WS data / close 回调）——本阶段由内核
+// serveHttp 载体消费（静态 chunks 聚齐后 resolve；见 provider/engine.ts 装配），
+// 测试可用收集假体。转发管线本体（rewrite 头链/③④ 脚本/超时族/错误分族/
+// SSE 逐块消费循环）零变更；旧承载面的 waitOutboundQueue 队列门控与
+// suspendProviderIdle/PING 活度信号随 mux 退役（背压归内核 journal；内核
+// 会话层自带活度）。
+// 超时族（design A6）：连接期 10s（TCP 探测，fetch 不暴露连接建立，探测失败/
+// 超时回 upstream_unreachable；绑定 ③ request 脚本时跳过——连接语义归脚本）、
+// 首字节 600s（fetch resolve / ③ 脚本返回 = 响应头到达）、流停滞 120s（分片间）。
 // hooks-lifecycle v2 出站归一层（任务 4.2/4.3）：js-backend-fetch 结果与 ③ onRequest
 // 脚本结果统一归一为 {status, headers, body: AsyncIterable<Uint8Array>}，转发
-// 循环只消费归一形（SSE 逐块、禁止缓冲攒齐；waitOutboundQueue 背压门控保留）；
-// ③ 返回 headers 小写化/last-wins/经 RESP_META 白名单过滤（content-type 独立
-// 投影 contentType）；④ onResponse 在归一后、RESP_META 下发前插入（局部覆盖
-// status/白名单内头/流式 body）；引擎中止 cancel 归一迭代器（ReadableStream 走
-// cancel、AsyncIterable 调 return()）传播到脚本流。fetchImpl 测试注入缝在 js-backend
-// 路径保留。错误分族：HookStageError（②③④ 缺席/抛错/形状非法/流中途失败）→
-// ERROR(hook_failed)；① HookMissingError 与 $secret 缺失 → secret_missing。
+// 循环只消费归一形（SSE 逐块、禁止缓冲攒齐）；③ 返回 headers 小写化/last-wins/
+// 经白名单过滤（content-type 独立投影 contentType）；④ onResponse 在归一后、
+// meta 下发前插入（局部覆盖 status/白名单内头/流式 body）；引擎中止 cancel
+// 归一迭代器（ReadableStream 走 cancel、AsyncIterable 调 return()）传播到脚本流。
+// fetchImpl 测试注入缝在 js-backend 路径保留。错误分族：HookStageError（②③④
+// 缺席/抛错/形状非法/流中途失败）→ hook_failed；① HookMissingError 与 $secret
+// 缺失 → secret_missing。
 // 正交意图（本文件不实现）：
 // - 授权/限额（引擎在拨号前完成；本层只转发已放行请求）；
-// - REQ 重组（mux + 引擎；本层收到的是完整正文）；
+// - 请求体重组（承载面在引擎；本层收到的是完整正文）；
 // - WS 升级通道（ws-upstream.ts；本文件在构造 plan 后分流——①② 头链对 WS
 //   生效，③ request 接管不适用于 WS）。
-// 上游 URL 目标仅来自本地服务配置（rewrite 断言过），帧内字段不影响 origin（防SSRF）。
+// 上游 URL 目标仅来自本地服务配置（rewrite 断言过），请求内字段不影响 origin（防SSRF）。
 
 import { connect as netConnect } from "node:net";
-import type { ReqHeader, ErrorCodeValue } from "../wire/frames.ts";
-import { ERROR_CODE, FRAME_TYPE, RESP_META_HEADER_WHITELIST } from "../wire/frames.ts";
-import { DEFAULT_BODY_CHUNK_BYTES } from "../wire/codec.ts";
-import type { WireSession } from "../wire/mux.ts";
+import type { ReqHeader, RespMetaHeader, ErrorHeader, ErrorCodeValue } from "../wire/frames.ts";
+import { ERROR_CODE, RESP_META_HEADER_WHITELIST } from "../wire/frames.ts";
 import type { ServiceConfig } from "./store.ts";
 import type { UsageRecord } from "./limits.ts";
 import {
@@ -80,7 +84,8 @@ class ProbeFailedError extends Error {
 }
 
 export interface ForwardCtx {
-  session: WireSession;
+  /** 响应投影承载面（内核 serveHttp 载体 / 测试收集假体）。 */
+  sink: ResponseSink;
   id: string;
   service: ServiceConfig;
   req: ReqHeader;
@@ -103,9 +108,36 @@ export interface ForwardCtx {
   /** 连接期探测（默认 TCP 探测；测试注入；绑定 ③ request 脚本时跳过）。 */
   probeConnect?: ((url: URL, ms: number) => Promise<void>) | undefined;
   fetchImpl?: typeof fetch | undefined;
-  /** WS 中继句柄回挂（引擎 DATA_UP / CLOSE 路由用）。 */
+  /** WS 中继句柄回挂（引擎隧道上行路由用）。 */
   onWsRelay?: ((relay: WsRelayHandle) => void) | undefined;
 }
+
+// ---------------------------------------------------------------------------
+// 响应投影承载面（opendweb-kernel-migration：替代 WireSession 帧发送）
+// ---------------------------------------------------------------------------
+
+/**
+ * 响应投影：既有管线（RESP_META/RESP_CHUNK/RESP_END/ERROR/DATA_DOWN/CLOSE
+ * 语义）在新承载面上的等价回调。实现方保证单请求内调用次序（meta 先于
+ * chunk/end；error 与 end 互斥）。返回 Promise 时转发循环按序 await。
+ */
+export interface ResponseSink {
+  /** 响应元信息（WS 101 时含 sec-websocket-accept 白名单头）。 */
+  meta(header: RespMetaHeader): void | Promise<void>;
+  /** 响应字节分片（SSE 逐块；WS 101 后为隧道下行帧载荷）。 */
+  chunk(body: Uint8Array): void | Promise<void>;
+  /** 成功终结（HTTP 流 EOF；WS 路径不触发——终结走 wsClose）。 */
+  end(): void | Promise<void>;
+  /** 错误终结（code/message 语义与旧 ERROR 帧一致）。 */
+  error(header: ErrorHeader): void | Promise<void>;
+  /** WS：下行隧道字节（101 后；与 chunk 同为隧道下行，语义分立便于载体分流）。 */
+  wsData?(body: Uint8Array): void | Promise<void>;
+  /** WS：终结（code 透传；undefined = 无码关闭）。 */
+  wsClose?(code: number | undefined): void | Promise<void>;
+}
+
+/** 响应分片缺省上限（旧 wire 层 256KiB 分片上限的平移；载体侧分片观测粒度）。 */
+export const DEFAULT_BODY_CHUNK_BYTES = 256 * 1024;
 
 // ---------------------------------------------------------------------------
 // 共用小件（ws-upstream 同族逻辑）
@@ -198,7 +230,7 @@ export async function forwardRequest(ctx: ForwardCtx): Promise<void> {
       err instanceof HookMissingError
         ? err.message
         : "request rewrite failed";
-    await sendError(ctx.session, ctx.id, code, message);
+    await ctx.sink.error({ id: ctx.id, code, message });
     ctx.onUsage?.({
       ts: Date.now(),
       keyId: ctx.keyId,
@@ -218,15 +250,15 @@ export async function forwardRequest(ctx: ForwardCtx): Promise<void> {
 }
 
 async function sendError(
-  session: WireSession,
+  sink: ResponseSink,
   id: string,
   code: ErrorCodeValue,
   message: string,
 ): Promise<void> {
   try {
-    await session.send(FRAME_TYPE.ERROR, { id, code, message });
+    await sink.error({ id, code, message });
   } catch {
-    // 连接已坏：由关闭路径处置
+    // 承载面已坏：由其关闭路径处置
   }
 }
 
@@ -322,8 +354,8 @@ export function projectRespMeta(
   id: string,
   status: number,
   headers: Record<string, string>,
-): Record<string, unknown> {
-  const meta: Record<string, unknown> = {
+): RespMetaHeader {
+  const meta: RespMetaHeader = {
     id,
     status,
     contentType: status === 204 || status === 304 ? "" : (headers["content-type"] ?? ""),
@@ -349,7 +381,7 @@ function stageBaseOf(ctx: ForwardCtx): StageResolveBase {
 // ---------------------------------------------------------------------------
 
 async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeouts): Promise<void> {
-  const { session, id } = ctx;
+  const { sink, id } = ctx;
   let settled = false;
   let bytes = 0;
 
@@ -359,7 +391,7 @@ async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeo
   const finishWithError = async (code: ErrorCodeValue, message: string): Promise<void> => {
     if (settled) return;
     settled = true;
-    await sendError(session, id, code, message);
+    await sendError(sink, id, code, message);
     recordUsage(code);
   };
 
@@ -380,7 +412,6 @@ async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeo
   const ctrl = new AbortController();
   let firstByteTimer: ReturnType<typeof setTimeout> | null = null;
   let stallTimer: ReturnType<typeof setTimeout> | null = null;
-  let pingTimer: ReturnType<typeof setInterval> | null = null;
   // 本地超时中止的原因（首字节/停滞计时器触发；外部信号另有 abortCodeOf 分类）。
   let localAbortCode: ErrorCodeValue | undefined;
   /** 归一 body 句柄（获取响应后登记；中止/清理路径取消传播）。 */
@@ -388,12 +419,6 @@ async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeo
   /** 被 ④ 变换替换下的原始 body（完成后取消，释放上游连接）。 */
   const supersededBodies: NormalizedBodyHandle[] = [];
 
-  const stopPing = (): void => {
-    if (pingTimer !== null) {
-      clearInterval(pingTimer);
-      pingTimer = null;
-    }
-  };
   const clearTimers = (): void => {
     if (firstByteTimer !== null) {
       clearTimeout(firstByteTimer);
@@ -403,7 +428,6 @@ async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeo
       clearTimeout(stallTimer);
       stallTimer = null;
     }
-    stopPing();
   };
 
   // 外部信号（ABORT / idle / 断连）：中止上游（fetch 拒绝路径）+ cancel 归一
@@ -416,15 +440,8 @@ async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeo
   if (ctx.signal.aborted) onExternalAbort();
   else ctx.signal.addEventListener("abort", onExternalAbort, { once: true });
 
-  // 首字节等待期：挂起提供方侧空闲计时 + 30s PING（活度由 PING 节奏与首字节超时
-  // 管辖；③ 脚本调用期同窗覆盖——脚本返回 = 响应头到达）。
-  session.suspendProviderIdle(id);
-  if (t.pingMs > 0) {
-    pingTimer = setInterval(() => {
-      void session.send(FRAME_TYPE.PING, { id }).catch(() => undefined);
-    }, t.pingMs);
-  }
-
+  // 首字节等待期：首字节超时管辖（③ 脚本调用期同窗覆盖——脚本返回 = 响应头
+  // 到达）。旧承载面的 30s PING 活度信号随 mux 退役（内核会话层自带活度）。
   const abortWith = (code: ErrorCodeValue): void => {
     if (localAbortCode === undefined) localAbortCode = code;
     ctrl.abort();
@@ -560,10 +577,9 @@ async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeo
 
     // 响应元信息（白名单头 + contentType 投影；204/304 contentType 空）；
     // 4xx/5xx 亦原样透传（upstream_status 语义）。
-    await session.send(FRAME_TYPE.RESP_META, projectRespMeta(id, normalized.status, normalized.headers));
+    await sink.meta(projectRespMeta(id, normalized.status, normalized.headers));
 
     // 正文流：逐块转发（SSE 不得缓冲拼齐），停滞计时每块重置。
-    let seq = 0;
     const armStall = (): void => {
       if (stallTimer !== null) clearTimeout(stallTimer);
       stallTimer = setTimeout(() => abortWith(ERROR_CODE.idle_timeout), t.stallMs);
@@ -586,9 +602,7 @@ async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeo
         if (result.done === true) break;
         armStall();
         for (const piece of splitBodyChunks(result.value)) {
-          await session.waitOutboundQueue(id); // 队列门控（暂停读上游）
-          await session.send(FRAME_TYPE.RESP_CHUNK, { id, seq }, piece);
-          seq += 1;
+          await sink.chunk(piece); // 分片投影（内核 journal 承接背压）
           bytes += piece.length;
         }
       }
@@ -606,7 +620,7 @@ async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeo
       else settled = true;
       return;
     }
-    await session.send(FRAME_TYPE.RESP_END, { id });
+    await sink.end();
     settled = true;
     recordUsage(normalized.status);
   } catch {

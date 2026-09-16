@@ -14,7 +14,7 @@ import { CliError, UsageError, reportCliError } from "../../errors.ts";
 import { consumersRoot, listKeyrings } from "../../../consumer/store.ts";
 import { startEngine } from "../../../consumer/runtime.ts";
 import { watchServiceLifecycle } from "../../../consumer/lifecycle-watch.ts";
-import { createFabricProviderTransport } from "../../../consumer/providers.ts";
+import { createFabricSessionFactory } from "../../../consumer/providers.ts";
 import {
   clearPid,
   daemonDir,
@@ -146,7 +146,7 @@ async function start(runArgv: readonly string[], home: string, ctx: CommandConte
     rings: engineRings,
     consumersRoot: root,
     sessionFactoryFor: (ring) =>
-      createFabricProviderTransport(factory, {
+      createFabricSessionFactory(factory, {
         dataDir: `${root}/${ring.endpointId.slice(0, 8)}/fabric`,
         providerEndpointId: ring.endpointId,
         // 链接带来的会合点优先（Owner 裁决 2026-09-13）：ring 内嵌 relay 逐环传给 fabric

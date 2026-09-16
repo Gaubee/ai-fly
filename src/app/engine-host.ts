@@ -18,8 +18,8 @@ import {
   type RunningDaemon,
 } from "../provider/serve.ts";
 import { ProviderStore } from "../provider/store.ts";
-import type { FabricFactory, FabricLike, ProviderStatus, ProviderTransportSessionFactory } from "../consumer/providers.ts";
-import { createFabricProviderTransport } from "../consumer/providers.ts";
+import type { FabricFactory, FabricLike, ProviderStatus, ProviderSessionFactory } from "../consumer/providers.ts";
+import { createFabricSessionFactory } from "../consumer/providers.ts";
 import { startEngine, type Engine as ConsumerEngine } from "../consumer/runtime.ts";
 import { listKeyrings, loadKeyring, type Keyring } from "../consumer/store.ts";
 import { loadSdk } from "../sdk.ts";
@@ -271,8 +271,8 @@ export class EngineHost {
     const engine = await startEngine({
       rings: engineRings,
       consumersRoot: this.consumersRoot,
-      sessionFactoryFor: (ring: Keyring): ProviderTransportSessionFactory =>
-        createFabricProviderTransport(factory, {
+      sessionFactoryFor: (ring: Keyring): ProviderSessionFactory =>
+        createFabricSessionFactory(factory, {
           dataDir: join(this.consumersRoot, ring.endpointId.slice(0, 8), "fabric"),
           providerEndpointId: ring.endpointId,
           // 链接带来的会合点优先（Owner 裁决 2026-09-13）：ring 内嵌 relay 逐环

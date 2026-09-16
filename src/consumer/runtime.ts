@@ -3,16 +3,15 @@
 // 目录回调驱动网关全量同步。
 // 正交意图：纯装配层，不含 CLI、不含 Fabric 构造（sessionFactoryFor 注入）。
 
-import { ProviderManager, type ProviderTransportSessionFactory } from "./providers.ts";
+import { ProviderManager, type ProviderSessionFactory } from "./providers.ts";
 import { Gateway } from "./gateway.ts";
 import { setActualPorts, type Keyring } from "./store.ts";
 
 export interface EngineOptions {
   rings: readonly Keyring[];
   consumersRoot: string;
-  sessionFactoryFor: (ring: Keyring) => ProviderTransportSessionFactory;
+  sessionFactoryFor: (ring: Keyring) => ProviderSessionFactory;
   strictPorts?: boolean;
-  pollIntervalMs?: number;
   backoff?: { baseMs?: number; capMs?: number };
   /** 目录同步失败（AUTH_OK 二阶段 detail 投影解析失败）回调——生产装配转
    *  通知事件驱动 UI 重拉/呈现（hooks-lifecycle 复核 R3-F1）。 */
@@ -38,7 +37,6 @@ export async function startEngine(opts: EngineOptions): Promise<Engine> {
     rings: opts.rings,
     root: opts.consumersRoot,
     sessionFactory: opts.sessionFactoryFor,
-    ...(opts.pollIntervalMs !== undefined ? { pollIntervalMs: opts.pollIntervalMs } : {}),
     ...(opts.backoff !== undefined ? { backoff: opts.backoff } : {}),
     onCatalog: (providerId, alias, services, ports) => {
       void gateway.syncProviderServices(providerId, alias, services, ports);

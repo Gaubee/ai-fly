@@ -1,133 +1,226 @@
-// consumer/providers 单测（mock Fabric + 内存 loopback 传输，对侧用真实 WireSession
-// provider 角色说话）：连接→AUTH→AUTH_OK 状态机、AUTH_ERR→key_all_invalid、refresh
-// 目录全量替换（relay 变更/服务增删/落盘/密钥元数据回填）、REQ/REQ_BODY 帧构造、
-// WS DATA_UP 保序、protocol_seq 毒化重建、断连退避重连、离线快速失败、linkStatus
-// 轮询复核、key_all_invalid 环变化恢复；full jitter 退避纯函数边界。
+// consumer/providers 单测（FakeSessionHandle + 可编程 fetchHttp 对端）：连接→
+// AUTH（/_aifly/auth POST）→AUTH_OK 状态机与目录落盘、403→key_all_invalid（不
+// 重建会话）、空钥环保持 connected-unauthed、relay 路径投影、catalog-watch
+// refresh 目录全量替换、forward fetchHttp 投影（头构造/meta/chunk/end 白名单）、
+// WS keepOpen 隧道（sendTunnel 上行 + 下行 onWsData + 关闭码）、recovering 不
+// 提前 503、dead → offline 快速失败 + 会话重建重 AUTH、openSession 失败退避
+// 重试、refreshRing 重授权；full jitter 退避纯函数边界。
+// opendweb-kernel-migration：状态机由 SessionHandle.onState 驱动（假体手动
+// emitPhase）；对端为脚本化 fetchHttp 处理器（AUTH/watch/forward 三端点）。
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FRAME_TYPE, type AuthHeader, type ErrorHeader, type ReqHeader, type ServiceEntry } from "../../../src/wire/frames.ts";
-import { WireSession, type InboundFrame } from "../../../src/wire/mux.ts";
-import { createLoopbackPair, type LoopbackTransport } from "../wire/loopback.ts";
+import type { ErrorHeader } from "../../../src/wire/frames.ts";
+import type { ServiceEntry } from "../../../src/wire/frames.ts";
 import { randomZ32 } from "../../../src/wire/z32.ts";
 import {
   OfflineError,
   ProviderConnection,
   ProviderManager,
   fullJitterDelayMs,
+  type FabricLike,
+  type FetchHttpInitLike,
+  type FetchHttpResponseLike,
   type ForwardHandlers,
-  type ProviderTransportSession,
-  type ProviderTransportSessionFactory,
+  type ProviderSessionFactory,
+  type SessionHandleLike,
+  type SessionStateLike,
 } from "../../../src/consumer/providers.ts";
-import { loadKeyring, saveKeyring, setActualPorts, type Keyring } from "../../../src/consumer/store.ts";
+import { loadKeyring, saveKeyring, type Keyring } from "../../../src/consumer/store.ts";
 
 // ---------------------------------------------------------------------------
-// 测试基建：可控的会话工厂 + provider 侧真实 WireSession
+// 测试基建：FakeSessionHandle + 可编程 fetchHttp 对端
 // ---------------------------------------------------------------------------
 
-interface FakeSession extends ProviderTransportSession {
-  peerTransport: LoopbackTransport;
-  linkResult: "direct" | "relay" | "unknown";
-  tornDown: number;
+/** fetchHttp 调用记录。 */
+interface FetchCall {
+  init: FetchHttpInitLike;
+  /** 测试以 respond() 结算该调用。 */
+  respond(resp: FakeResponse): void;
+  /** 受控应答（bodyNext/sendTunnel 语义由测试驱动）。 */
+  respondRaw(resp: FetchHttpResponseLike): void;
+  fail(err: Error): void;
 }
 
-function newFakeSession(): FakeSession {
-  const { a, b } = createLoopbackPair();
-  const s: FakeSession = {
-    transport: a,
-    peerTransport: b,
-    linkResult: "direct",
-    tornDown: 0,
-    linkStatus: () => Promise.resolve(s.linkResult),
-    teardown: async () => {
-      s.tornDown++;
-      a.close("fake-teardown");
+interface FakeResponse {
+  status: number;
+  headers?: Array<{ name: string; value: string }>;
+  bodyChunks?: Uint8Array[];
+}
+
+function respOf(resp: FakeResponse): FetchHttpResponseLike {
+  const chunks = (resp.bodyChunks ?? []).map((c) => Buffer.from(c));
+  let i = 0;
+  const tunnel: Buffer[] = [];
+  return {
+    status: resp.status,
+    headers: resp.headers ?? [],
+    streamId: 1,
+    bodyNext: async () => (i < chunks.length ? chunks[i++]! : null),
+    sendTunnel: async (data: Buffer) => {
+      tunnel.push(data);
     },
   };
-  return s;
+}
+
+/** 受控 WS 隧道响应：deliver 推下行块；finish 结束（bodyNext → null）。 */
+function liveTunnelResponse(
+  status: number,
+  headers: Array<{ name: string; value: string }>,
+): { resp: FetchHttpResponseLike; deliver(chunks: Uint8Array[]): void; finish(): void; tunnel: Buffer[] } {
+  const pending: Buffer[] = [];
+  const tunnel: Buffer[] = [];
+  let done = false;
+  let wake: (() => void) | null = null;
+  const waitNext = (): Promise<void> =>
+    new Promise<void>((resolve) => {
+      wake = resolve;
+    });
+  const resp: FetchHttpResponseLike = {
+    status,
+    headers,
+    streamId: 1,
+    bodyNext: async () => {
+      for (;;) {
+        if (pending.length > 0) return pending.shift()!;
+        if (done) return null;
+        await waitNext();
+        wake = null;
+      }
+    },
+    sendTunnel: async (data: Buffer) => {
+      tunnel.push(data);
+    },
+  };
+  return {
+    resp,
+    tunnel,
+    deliver(chunks: Uint8Array[]): void {
+      for (const c of chunks) pending.push(Buffer.from(c));
+      wake?.();
+    },
+    finish(): void {
+      done = true;
+      wake?.();
+    },
+  };
+}
+
+class FakeSessionHandle implements SessionHandleLike {
+  readonly peerId: string;
+  sessionId: string;
+  phase: string = "active";
+  private cb: ((s: SessionStateLike) => void) | undefined;
+  /** 测试脚本：按 path 分派（缺省 404）。 */
+  script: (call: FetchCall) => void = () => undefined;
+  readonly calls: FetchCall[] = [];
+  closed = false;
+
+  constructor(peerId: string, sessionId: string) {
+    this.peerId = peerId;
+    this.sessionId = sessionId;
+  }
+
+  async state(): Promise<SessionStateLike> {
+    return { peerId: this.peerId, sessionId: this.sessionId, phase: this.phase };
+  }
+
+  onState(callback: (s: SessionStateLike) => void): () => void {
+    this.cb = callback;
+    return () => {
+      if (this.cb === callback) this.cb = undefined;
+    };
+  }
+
+  emitPhase(phase: string): void {
+    this.phase = phase;
+    this.cb?.({ peerId: this.peerId, sessionId: this.sessionId, phase });
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+  }
+
+  fetchHttp(init: FetchHttpInitLike): Promise<FetchHttpResponseLike> {
+    return new Promise<FetchHttpResponseLike>((resolve, reject) => {
+      const call: FetchCall = {
+        init,
+        respond: (resp) => resolve(respOf(resp)),
+        respondRaw: (resp) => resolve(resp),
+        fail: (err) => reject(err),
+      };
+      this.calls.push(call);
+      this.script(call);
+    });
+  }
 }
 
 interface FakeFactoryHost {
-  factory: ProviderTransportSessionFactory;
-  /** 待决 openSession（测试手动 resolve/reject 驱动连接时序） */
-  pending: Array<{ resolve: (s: FakeSession) => void; reject: (err: Error) => void }>;
-  sessions: FakeSession[];
+  factory: ProviderSessionFactory;
+  /** 待决 openSession（测试手动 resolve/reject 驱动时序）。 */
+  pending: Array<{ resolve: (s: FakeSessionHandle) => void; reject: (err: Error) => void }>;
+  sessions: FakeSessionHandle[];
   openCalls: number;
   shutdowns: number;
-  /** 下一次 openSession 自动成功的便捷开关 */
   autoConnect: boolean;
+  path: "direct" | "relay" | "unknown";
+  fabric: FabricLike;
 }
 
-function fakeFactoryHost(): FakeFactoryHost {
-  const host: FakeFactoryHost = {
-    pending: [],
-    sessions: [],
+function fakeFactoryHost(peerOf: () => FakeSessionHandle): FakeFactoryHost {
+  const host = {
+    pending: [] as Array<{ resolve: (s: FakeSessionHandle) => void; reject: (err: Error) => void }>,
+    sessions: [] as FakeSessionHandle[],
     openCalls: 0,
     shutdowns: 0,
     autoConnect: false,
-    factory: {
-      openSession: () => {
-        host.openCalls++;
-        return new Promise<FakeSession>((resolve, reject) => {
-          if (host.autoConnect) {
-            const s = newFakeSession();
-            host.sessions.push(s);
-            resolve(s);
-            return;
-          }
-          host.pending.push({ resolve, reject });
-        });
-      },
-      shutdown: async () => {
-        host.shutdowns++;
-      },
+    path: "direct" as "direct" | "relay" | "unknown",
+    fabric: undefined as unknown as FabricLike,
+    factory: undefined as unknown as ProviderSessionFactory,
+  };
+  host.fabric = {
+    endpointId: "self",
+    connect: async () => undefined,
+    disconnect: async () => undefined,
+    on: () => () => undefined,
+    members: async () => [],
+    relayStatus: async () => ({ urls: [] }),
+    shutdown: async () => undefined,
+    openSession: async (_peerId: string) => {
+      host.openCalls++;
+      return new Promise<FakeSessionHandle>((resolve, reject) => {
+        if (host.autoConnect) {
+          const s = peerOf();
+          host.sessions.push(s);
+          resolve(s);
+          return;
+        }
+        host.pending.push({ resolve, reject });
+      });
+    },
+    continuitySnapshot: async () => ({ path: host.path }),
+  };
+  host.factory = {
+    open: async () => host.fabric,
+    shutdown: async () => {
+      host.shutdowns++;
     },
   };
   return host;
 }
 
-/** 测试驱动的连接应答：把 pending 的 openSession 全部兑现。 */
-function connectOk(host: FakeFactoryHost): FakeSession {
-  const s = newFakeSession();
-  host.sessions.push(s);
+/** 测试驱动的连接应答。 */
+function connectOk(host: FakeFactoryHost, session?: FakeSessionHandle): FakeSessionHandle {
+  const s = session ?? host.sessions[0] ?? new FakeSessionHandle("peer", `sid-${host.openCalls}`);
+  if (!host.sessions.includes(s)) host.sessions.push(s);
   for (const p of host.pending.splice(0)) p.resolve(s);
   return s;
 }
 
 function connectFail(host: FakeFactoryHost, err: Error): void {
   for (const p of host.pending.splice(0)) p.reject(err);
-}
-
-/** provider 侧真实 WireSession（协议级对端）。 */
-class ProviderSide {
-  session: WireSession;
-  frames: InboundFrame[] = [];
-  constructor(transport: LoopbackTransport) {
-    this.session = new WireSession({
-      role: "provider",
-      transport,
-      hooks: { onFrame: (f) => this.frames.push(f) },
-    });
-  }
-  last<T extends InboundFrame>(type: number): T | undefined {
-    const hit = [...this.frames].reverse().find((f) => f.type === type);
-    return hit as T | undefined;
-  }
-  async authOk(groups: Array<{ keyId: string; group: string; services: ServiceEntry[] }>, opts: { relayUrls?: string[]; alias?: string; refresh?: boolean } = {}): Promise<void> {
-    await this.session.send(FRAME_TYPE.AUTH_OK, {
-      v: 1,
-      alias: opts.alias ?? "prov",
-      relayUrls: opts.relayUrls ?? ["http://relay:1"],
-      groups: groups.map((g) => ({ keyId: g.keyId, group: g.group, limits: {}, services: g.services })),
-      ...(opts.refresh === true ? { refresh: true } : {}),
-    });
-    this.session.markAuthed();
-  }
-  async authErr(): Promise<void> {
-    await this.session.send(FRAME_TYPE.AUTH_ERR, { v: 1, code: "key_all_invalid" });
-  }
 }
 
 async function settle(ms = 10): Promise<void> {
@@ -158,7 +251,7 @@ const HANDLERS = (): ForwardHandlers & { events: string[] } => {
     onWsClose: () => events.push("wsclose"),
     onTerminate: (cause) => events.push(`terminate:${cause.source}`),
   };
-};
+}
 
 let root: string;
 const cleanups: Array<() => void> = [];
@@ -172,16 +265,75 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function makeConnection(ring: Keyring, host = fakeFactoryHost(), opts: { pollIntervalMs?: number } = {}): ProviderConnection {
+function makeConnection(ring: Keyring, host: FakeFactoryHost): ProviderConnection {
   const conn = new ProviderConnection({
     ring,
     root,
     factory: host.factory,
-    ...(opts.pollIntervalMs !== undefined ? { pollIntervalMs: opts.pollIntervalMs } : {}),
     backoff: { baseMs: 5, capMs: 25 },
   });
   cleanups.push(() => conn.stop());
   return conn;
+}
+
+/** AUTH_OK 载荷构造（对端脚本用）。 */
+function authOkBody(groups: Array<{ keyId: string; group: string; services: ServiceEntry[] }>, opts: { alias?: string; relayUrls?: string[]; refresh?: boolean } = {}): Uint8Array {
+  const header = {
+    v: 1,
+    alias: opts.alias ?? "prov",
+    relayUrls: opts.relayUrls ?? ["http://relay:1"],
+    groups: groups.map((g) => ({ keyId: g.keyId, group: g.group, limits: {}, services: g.services })),
+    ...(opts.refresh === true ? { refresh: true } : {}),
+  };
+  return new TextEncoder().encode(JSON.stringify(header));
+}
+
+/** 对端脚本：AUTH（记录 keys）/watch/forward 三端点。 */
+interface ProviderScript {
+  keysSeen: string[] | undefined;
+  authStatus: number;
+  watchCalls: FetchCall[];
+  forwardCalls: Array<FetchHttpInitLike>;
+  forwardRespond: (call: FetchCall) => void;
+}
+
+function scriptProvider(session: FakeSessionHandle, script: Partial<ProviderScript> = {}): ProviderScript {
+  const s: ProviderScript = {
+    keysSeen: undefined,
+    authStatus: 200,
+    watchCalls: [],
+    forwardCalls: [],
+    forwardRespond: script.forwardRespond ?? ((call) => call.respond({ status: 200, headers: [{ name: "content-type", value: "text/plain" }], bodyChunks: [new TextEncoder().encode("ok")] })),
+    ...script,
+  };
+  session.script = (call) => {
+    const path = call.init.path.split("?", 1)[0]!;
+    if (path === "/_aifly/auth") {
+      const body = call.init.body ? Buffer.concat(call.init.body.map((b) => Buffer.from(b))) : Buffer.alloc(0);
+      s.keysSeen = (JSON.parse(body.toString("utf8")) as { keys: string[] }).keys;
+      if (s.authStatus === 200) {
+        call.respond({
+          status: 200,
+          headers: [
+            { name: "content-type", value: "application/json" },
+            { name: "x-aifly-catalog-seq", value: "0" },
+          ],
+          bodyChunks: [authOkBody([{ keyId: "k", group: "g", services: [svc("svc-a", "ollama", 11434)] }])],
+        });
+      } else {
+        call.respond({ status: 403, bodyChunks: [new TextEncoder().encode(JSON.stringify({ v: 1, code: "key_all_invalid" }))] });
+      }
+      return;
+    }
+    if (path === "/_aifly/catalog-watch") {
+      // 挂起（测试手动结算）：watch 调用由测试经 watchCalls 驱动
+      s.watchCalls.push(call);
+      return;
+    }
+    s.forwardCalls.push(call.init);
+    s.forwardRespond(call);
+  };
+  return s;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,29 +341,40 @@ function makeConnection(ring: Keyring, host = fakeFactoryHost(), opts: { pollInt
 // ---------------------------------------------------------------------------
 
 describe("连接状态机", () => {
-  it("连接 → AUTH（钥环全量呈交）→ AUTH_OK → direct + 目录落盘", async () => {
+  it("连接 → AUTH（/_aifly/auth POST 钥环全量呈交）→ AUTH_OK → direct + 目录落盘", async () => {
     const ep = epId();
     const ring = ringOf(ep, [
       { keyId: "kid1", key: "sk-aifly-key-one-11111111", group: "g1" },
       { keyId: "kid2", key: "sk-aifly-key-two-22222222", group: "g2" },
     ]);
     saveKeyring(root, ring);
-    const host = fakeFactoryHost();
+    const host = fakeFactoryHost(() => new FakeSessionHandle(ep, "sid-1"));
+    const script: { keysSeen?: string[] } = {};
     const conn = makeConnection(ring, host);
     conn.start();
     expect(conn.state).toBe("not-connected");
+    await settle();
     const session = connectOk(host);
-    const provider = new ProviderSide(session.peerTransport);
-    await settle();
-    // 连接后立即 AUTH，呈交全部密钥
-    const auth = provider.last<Extract<InboundFrame, { type: typeof FRAME_TYPE.AUTH }>>(FRAME_TYPE.AUTH);
-    expect(auth?.header.keys.sort()).toEqual([...ring.keys.map((k) => k.key)].sort());
-    expect(conn.state).toBe("connected-unauthed");
-    const services = [svc("svc-a", "ollama", 11434)];
-    await provider.authOk([{ keyId: "kid1", group: "g1", services }]);
-    await settle();
-    expect(conn.state).toBe("direct"); // fake linkStatus = direct
-    // 目录已落盘（含 detail 与端口记录基础）
+    session.script = (call) => {
+      if (call.init.path === "/_aifly/auth") {
+        const body = call.init.body ? Buffer.concat(call.init.body.map((b) => Buffer.from(b))) : Buffer.alloc(0);
+        script.keysSeen = (JSON.parse(body.toString("utf8")) as { keys: string[] }).keys;
+        call.respond({
+          status: 200,
+          headers: [
+            { name: "content-type", value: "application/json" },
+            { name: "x-aifly-catalog-seq", value: "0" },
+          ],
+          bodyChunks: [authOkBody([{ keyId: "kid1", group: "g1", services: [svc("svc-a", "ollama", 11434)] }])],
+        });
+        return;
+      }
+      // catalog-watch 等端点：挂起（避免假体同步应答驱动 watch 热循环）
+    };
+    await settle(30);
+    expect(script.keysSeen?.sort()).toEqual([...ring.keys.map((k) => k.key)].sort());
+    expect(conn.state).toBe("direct"); // continuitySnapshot path=direct
+    // 目录已落盘
     const persisted = loadKeyring(root, ep);
     expect(persisted?.services.map((s) => s.serviceId)).toEqual(["svc-a"]);
     expect(persisted?.relayUrls).toEqual(["http://relay:1"]);
@@ -219,35 +382,38 @@ describe("连接状态机", () => {
     await conn.stop();
   });
 
-  it("linkStatus=relay → relay 状态", async () => {
+  it("continuitySnapshot path=relay → relay 状态", async () => {
     const ep = epId();
     const ring = ringOf(ep, [{ keyId: "k", key: "sk-aifly-relay-key-000001", group: "g" }]);
-    const host = fakeFactoryHost();
+    const host = fakeFactoryHost(() => new FakeSessionHandle(ep, "sid-r"));
+    host.path = "relay";
     const conn = makeConnection(ring, host);
     conn.start();
-    const session = connectOk(host);
-    session.linkResult = "relay";
-    const provider = new ProviderSide(session.peerTransport);
     await settle();
-    await provider.authOk([{ keyId: "k", group: "g", services: [] }]);
+    const session = connectOk(host);
+    scriptProvider(session);
     await settle(30);
     expect(conn.state).toBe("relay");
     await conn.stop();
   });
 
-  it("AUTH_ERR → key_all_invalid，不再自动重连（无新 openSession）", async () => {
+  it("AUTH 403 → key_all_invalid，不重建会话（无新 openSession）", async () => {
     const ep = epId();
     const ring = ringOf(ep, [{ keyId: "k", key: "sk-aifly-rejected-0000001", group: "g" }]);
-    const host = fakeFactoryHost();
+    const host = fakeFactoryHost(() => new FakeSessionHandle(ep, "sid-e"));
     const conn = makeConnection(ring, host);
     conn.start();
-    const session = connectOk(host);
-    const provider = new ProviderSide(session.peerTransport);
     await settle();
-    await provider.authErr();
-    await settle(60); // 超过若干退避窗口
+    const session = connectOk(host);
+    const script = scriptProvider(session);
+    await settle(30);
+    expect(conn.state).toBe("direct");
+    // 置 403 后经 refreshRing（钥变化）重呈 → key_all_invalid
+    script.authStatus = 403;
+    conn.refreshRing({ ...ring, keys: [{ keyId: "k2", key: "sk-aifly-still-bad-00001", group: "g" }] });
+    await settle(30);
     expect(conn.state).toBe("key-all-invalid");
-    expect(host.openCalls).toBe(1);
+    expect(host.openCalls).toBe(1); // 会话不重建
     // 快速失败：key_all_invalid 含别名
     expect(() => conn.forward({ serviceId: "s", method: "GET", path: "/", body: new Uint8Array(0), upgrade: false }, HANDLERS())).toThrowError(OfflineError);
     try {
@@ -259,14 +425,32 @@ describe("连接状态机", () => {
     await conn.stop();
   });
 
+  it("空钥环：保持 connected-unauthed，不发起 AUTH", async () => {
+    const ep = epId();
+    const host = fakeFactoryHost(() => new FakeSessionHandle(ep, "sid-u"));
+    const conn = makeConnection(ringOf(ep), host);
+    conn.start();
+    await settle();
+    const session = connectOk(host);
+    let authCalls = 0;
+    session.script = (call) => {
+      if (call.init.path === "/_aifly/auth") authCalls++;
+    };
+    await settle(20);
+    expect(conn.state).toBe("connected-unauthed");
+    expect(authCalls).toBe(0);
+    await conn.stop();
+  });
+
   it("未连接/离线：forward 快速失败 provider_offline", async () => {
-    const conn = makeConnection(ringOf(epId()));
+    const conn = makeConnection(ringOf(epId()), fakeFactoryHost(() => new FakeSessionHandle("p", "s")));
     expect(() =>
       conn.forward({ serviceId: "s", method: "GET", path: "/", body: new Uint8Array(0), upgrade: false }, HANDLERS()),
     ).toThrowError(/offline/);
-    const host = fakeFactoryHost();
-    const conn2 = makeConnection(ringOf(epId()), host);
+    const host = fakeFactoryHost(() => new FakeSessionHandle("p", "s"));
+    const conn2 = makeConnection(ringOf(epId(), [{ keyId: "k", key: "sk-aifly-x-key-000000001", group: "g" }]), host);
     conn2.start();
+    await settle();
     connectFail(host, new Error("dial failed"));
     await settle();
     expect(conn2.state).toBe("offline");
@@ -274,31 +458,64 @@ describe("连接状态机", () => {
       conn2.forward({ serviceId: "s", method: "GET", path: "/", body: new Uint8Array(0), upgrade: false }, HANDLERS()),
     ).toThrowError(OfflineError);
   });
+
+  it("openSession 失败 → 退避重试 → 成功后 AUTH", async () => {
+    const ep = epId();
+    const ring = ringOf(ep, [{ keyId: "k", key: "sk-aifly-retry-key-000001", group: "g" }]);
+    const host = fakeFactoryHost(() => new FakeSessionHandle(ep, "sid-x"));
+    const conn = makeConnection(ring, host);
+    conn.start();
+    await settle();
+    connectFail(host, new Error("peer away"));
+    await settle(5);
+    expect(conn.state).toBe("offline");
+    expect(host.openCalls).toBeGreaterThanOrEqual(1);
+    // 退避窗口（baseMs=5/cap=25）后重试（openSession 挂起等待应答）
+    await settle(60);
+    const session = connectOk(host);
+    scriptProvider(session);
+    await settle(30);
+    expect(host.openCalls).toBeGreaterThanOrEqual(2);
+    expect(conn.state).toBe("direct");
+    await conn.stop();
+  });
 });
 
 // ---------------------------------------------------------------------------
-// 请求转发帧构造
+// forward 投影（fetchHttp）
 // ---------------------------------------------------------------------------
 
-describe("forward 帧构造", () => {
-  async function authedConn(): Promise<{ conn: ProviderConnection; provider: ProviderSide; host: FakeFactoryHost; ep: string }> {
+describe("forward 投影", () => {
+  async function authedConn(): Promise<{ conn: ProviderConnection; session: FakeSessionHandle; script: ProviderScript; ep: string }> {
     const ep = epId();
     const ring = ringOf(ep, [{ keyId: "k", key: "sk-aifly-forward-key-0001", group: "g" }]);
-    const host = fakeFactoryHost();
+    const host = fakeFactoryHost(() => new FakeSessionHandle(ep, "sid-f"));
     const conn = makeConnection(ring, host);
     conn.start();
+    await settle();
     const session = connectOk(host);
-    const provider = new ProviderSide(session.peerTransport);
-    await settle();
-    await provider.authOk([{ keyId: "k", group: "g", services: [svc("svc-a", "ollama", 11434)] }]);
-    await settle();
-    return { conn, provider, host, ep };
+    const script = scriptProvider(session);
+    await settle(30);
+    expect(conn.state).toBe("direct");
+    return { conn, session, script, ep };
   }
 
-  it("小请求单帧 REQ（头/正文/方法/路径/查询串）", async () => {
-    const { conn, provider } = await authedConn();
+  it("HTTP：fetchHttp 入参（方法/路径/头集/content-type/service 路由头）与 meta/chunk/end 投影", async () => {
+    const { conn, script } = await authedConn();
+    const events = HANDLERS();
+    const metaHeader = { status: 200, contentType: "application/json" };
+    script.forwardRespond = (call) =>
+      call.respond({
+        status: 200,
+        headers: [
+          { name: "content-type", value: "application/json" },
+          { name: "x-request-id", value: "req-9" },
+          { name: "x-dropped", value: "no" },
+        ],
+        bodyChunks: [new TextEncoder().encode('{"a":1}')],
+      });
     const body = new TextEncoder().encode('{"q":1}');
-    conn.forward(
+    const handle = conn.forward(
       {
         serviceId: "svc-a",
         method: "POST",
@@ -308,503 +525,227 @@ describe("forward 帧构造", () => {
         body,
         upgrade: false,
       },
-      HANDLERS(),
+      { ...events, onMeta: (h) => { events.events.push("meta"); metaHeader.status = h.status; metaHeader.contentType = h.contentType; (metaHeader as { headers?: Record<string, string> | undefined }).headers = h.headers; } },
     );
-    await settle();
-    const req = provider.last<Extract<InboundFrame, { type: typeof FRAME_TYPE.REQ }>>(FRAME_TYPE.REQ);
-    expect(req?.header.serviceId).toBe("svc-a");
-    expect(req?.header.method).toBe("POST");
-    expect(req?.header.path).toBe("/v1/chat/completions?stream=1");
-    expect(req?.header.contentType).toBe("application/json");
-    expect(req?.header.headers).toMatchObject({ "x-custom": "v", "anthropic-version": "2023-06-01" });
-    expect(req?.header.bodyLen).toBe(body.byteLength);
-    expect(new Uint8Array(req!.body)).toEqual(body);
+    await settle(20);
+    expect(script.forwardCalls).toHaveLength(1);
+    const init = script.forwardCalls[0]!;
+    expect(init.method).toBe("POST");
+    expect(init.path).toBe("/v1/chat/completions?stream=1");
+    const headerMap = Object.fromEntries((init.headers ?? []).map((h) => [h.name, h.value]));
+    expect(headerMap["x-aifly-service"]).toBe("svc-a");
+    expect(headerMap["content-type"]).toBe("application/json");
+    expect(headerMap["x-custom"]).toBe("v");
+    expect(headerMap["anthropic-version"]).toBe("2023-06-01");
+    expect(Buffer.concat((init.body ?? []).map((b) => Buffer.from(b))).toString()).toBe('{"q":1}');
+    // 投影：meta（白名单三头）+ chunk + end + terminate(peer)
+    expect(metaHeader.status).toBe(200);
+    expect(metaHeader.contentType).toBe("application/json");
+    expect((metaHeader as { headers?: Record<string, string> }).headers).toEqual({ "x-request-id": "req-9" });
+    expect(events.events).toEqual(["meta", "chunk", "end", "terminate:peer"]);
+    void handle;
   });
 
-  it("大正文 >256KiB：REQ 空体 + REQ_BODY 分片（seq 0..n 递增、end 收尾）", async () => {
-    const { conn, provider } = await authedConn();
-    const big = new Uint8Array(600 * 1024).fill(0x61);
-    conn.forward({ serviceId: "svc-a", method: "POST", path: "/big", body: big, upgrade: false }, HANDLERS());
-    await settle();
-    const req = provider.last<Extract<InboundFrame, { type: typeof FRAME_TYPE.REQ }>>(FRAME_TYPE.REQ);
-    expect(req?.header.bodyLen).toBe(big.byteLength);
-    expect(req?.body.length).toBe(0); // 超限正文全部走续帧
-    const bodies = provider.frames.filter((f) => f.type === FRAME_TYPE.REQ_BODY);
-    expect(bodies.length).toBe(3);
-    expect(bodies.map((f) => (f.header as { seq: number }).seq)).toEqual([0, 1, 2]);
-    expect(bodies.map((f) => (f.header as { end: boolean }).end)).toEqual([false, false, true]);
-    const total = bodies.reduce((n, f) => n + f.body.length, 0);
-    expect(total).toBe(big.byteLength);
+  it("WS：keepOpen + 101 → onWsData/onWsClose（关闭码头透传）+ sendData 走 sendTunnel", async () => {
+    const { conn, script } = await authedConn();
+    const events = HANDLERS();
+    const live = liveTunnelResponse(101, [
+      { name: "sec-websocket-accept", value: "accept-value" },
+      { name: "x-aifly-ws-close", value: "1000" },
+    ]);
+    script.forwardRespond = (call) => call.respondRaw(live.resp);
+    const handle = conn.forward(
+      {
+        serviceId: "svc-a",
+        method: "GET",
+        path: "/ws",
+        headers: { connection: "Upgrade", upgrade: "websocket", "sec-websocket-version": "13", "sec-websocket-key": "k==" },
+        upgrade: true,
+        body: new Uint8Array(0),
+      },
+      events,
+    );
+    await settle(10);
+    expect((script.forwardCalls[0] as { keepOpen?: boolean } | undefined)?.keepOpen).toBe(true);
+    // 上行 → sendTunnel
+    await handle.sendData(new TextEncoder().encode("up-1"));
+    await handle.sendData(new TextEncoder().encode("up-2"));
+    await settle(5);
+    expect(live.tunnel.map((b) => b.toString())).toEqual(["up-1", "up-2"]);
+    // 下行投递 → onWsData；finish → onWsClose（关闭码经响应头透传）+ terminate(peer)
+    live.deliver([new TextEncoder().encode("down-1"), new TextEncoder().encode("down-2")]);
+    await settle(10);
+    expect(events.events.filter((e) => e === "meta")).toHaveLength(1); // 101 meta 一次
+    expect(events.events.filter((e) => e === "wsdata")).toHaveLength(2);
+    live.finish();
+    await settle(10);
+    expect(events.events).toContain("wsclose");
+    expect(events.events).toContain("terminate:peer");
   });
 
-  it("响应帧路由到 handlers：META → CHUNK → END", async () => {
-    const { conn, provider } = await authedConn();
-    const h = HANDLERS();
-    conn.forward({ serviceId: "svc-a", method: "GET", path: "/x", body: new Uint8Array(0), upgrade: false }, h);
-    await settle();
-    const id = provider.last<Extract<InboundFrame, { type: typeof FRAME_TYPE.REQ }>>(FRAME_TYPE.REQ)!.header.id;
-    await provider.session.send(FRAME_TYPE.RESP_META, { id, status: 200, contentType: "text/event-stream" });
-    await provider.session.send(FRAME_TYPE.RESP_CHUNK, { id, seq: 0 }, new TextEncoder().encode("data: 1\n\n"));
-    await provider.session.send(FRAME_TYPE.RESP_CHUNK, { id, seq: 1 }, new TextEncoder().encode("data: [DONE]\n\n"));
-    await provider.session.send(FRAME_TYPE.RESP_END, { id });
-    await settle();
-    expect(h.events).toEqual(["meta", "chunk", "chunk", "end", "terminate:peer"]);
-  });
-
-  it("WS：DATA_UP 保序（seq 连续）+ CLOSE 终结", async () => {
-    const { conn, provider } = await authedConn();
-    const h = HANDLERS();
-    const handle = conn.forward({ serviceId: "svc-a", method: "GET", path: "/ws", headers: { connection: "Upgrade", upgrade: "websocket", "sec-websocket-key": "k1", "sec-websocket-version": "13" }, body: new Uint8Array(0), upgrade: true }, h);
-    await settle();
-    void handle.sendData(new TextEncoder().encode("hello"));
-    void handle.sendData(new TextEncoder().encode("world"));
-    await settle();
-    const ups = provider.frames.filter((f) => f.type === FRAME_TYPE.DATA_UP);
-    expect(ups.map((f) => (f.header as { seq: number }).seq)).toEqual([0, 1]);
-    const id = provider.last<Extract<InboundFrame, { type: typeof FRAME_TYPE.REQ }>>(FRAME_TYPE.REQ)!.header.id;
-    await provider.session.send(FRAME_TYPE.DATA_DOWN, { v: 1, id, seq: 0 }, new TextEncoder().encode("echo"));
-    await provider.session.send(FRAME_TYPE.CLOSE, { id, code: 1000 });
-    await settle();
-    expect(h.events).toContain("wsdata");
-    expect(h.events).toContain("wsclose");
-    expect(h.events).toContain("terminate:peer");
-  });
-
-  it("客户端 ABORT（本地终结）→ 提供方收到 ABORT 帧", async () => {
-    const { conn, provider } = await authedConn();
-    const h = HANDLERS();
-    const handle = conn.forward({ serviceId: "svc-a", method: "GET", path: "/x", body: new Uint8Array(0), upgrade: false }, h);
-    await settle();
-    handle.abort();
-    await settle();
-    expect(provider.frames.some((f) => f.type === FRAME_TYPE.ABORT)).toBe(true);
-    expect(h.events).toContain("terminate:local");
+  it("会话终态在途：onError(session_lost)（504 语义）", async () => {
+    const { conn, script } = await authedConn();
+    const events = HANDLERS();
+    script.forwardRespond = (call) => call.fail(new Error("[session] stream ended"));
+    conn.forward({ serviceId: "svc-a", method: "GET", path: "/x", body: new Uint8Array(0), upgrade: false }, events);
+    await settle(10);
+    expect(events.events).toContain("error:session_lost");
+    expect(events.events).toContain("terminate:disconnected");
   });
 });
 
 // ---------------------------------------------------------------------------
-// 目录同步（refresh 全量替换）
+// recovering / dead 会话语义
 // ---------------------------------------------------------------------------
 
-describe("refresh 目录同步", () => {
-  it("全量替换：新增/删除/relay 变更落盘 + onCatalog 回调 + 裸密钥元数据回填", async () => {
+describe("会话状态语义", () => {
+  it("recovering：状态 offline 但 forward 不快速失败（挂起）", async () => {
     const ep = epId();
-    const ring = ringOf(ep, [{ keyId: "kid1", key: "sk-aifly-refresh-key-001", group: "g1" }]);
-    saveKeyring(root, ring);
-    const host = fakeFactoryHost();
-    const catalogs: Array<{ services: readonly ServiceEntry[]; ports: Readonly<Record<string, number>> }> = [];
-    const conn = new ProviderConnection({
-      ring,
-      root,
-      factory: host.factory,
-      backoff: { baseMs: 5, capMs: 25 },
-      onCatalog: (_c, updated) => catalogs.push({ services: updated.services, ports: updated.ports }),
-    });
-    cleanups.push(() => conn.stop());
-    conn.start();
-    const session = connectOk(host);
-    const provider = new ProviderSide(session.peerTransport);
-    await settle();
-    await provider.authOk([{ keyId: "kid1", group: "g1", services: [svc("svc-a", "a", 1), svc("svc-del", "del", 2)] }]);
-    await settle();
-    expect(catalogs[0]!.services.map((s) => s.serviceId).sort()).toEqual(["svc-a", "svc-del"]);
-    // refresh：删 svc-del、加 svc-new、relay 变更；同时回填一枚新裸钥（kid-fresh）
-    const withBare = { ...loadKeyring(root, ep)!, keys: [...loadKeyring(root, ep)!.keys, { keyId: "", key: "sk-aifly-bare-refill-001", group: "" }] };
-    saveKeyring(root, withBare);
-    conn.refreshRing(withBare); // 在线追加密钥路径下 re-AUTH 由实现触发，此处只刷环
-    await provider.authOk(
-      [
-        { keyId: "kid1", group: "g1", services: [svc("svc-a", "a", 1), svc("svc-new", "new", 3)] },
-        { keyId: "kid-fresh", group: "g9", services: [] },
-      ],
-      { relayUrls: ["http://new-relay:2"], refresh: true },
-    );
-    await settle();
-    const persisted = loadKeyring(root, ep)!;
-    expect(persisted.services.map((s) => s.serviceId).sort()).toEqual(["svc-a", "svc-new"]);
-    expect(persisted.relayUrls).toEqual(["http://new-relay:2"]);
-    expect(persisted.keys.find((k) => k.key === "sk-aifly-bare-refill-001")).toEqual({ keyId: "kid-fresh", key: "sk-aifly-bare-refill-001", group: "g9" });
-    expect(catalogs[1]!.services.map((s) => s.serviceId).sort()).toEqual(["svc-a", "svc-new"]);
-    await conn.stop();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 毒化 / 断连重连 / 轮询复核 / 环变化恢复
-// ---------------------------------------------------------------------------
-
-describe("毒化与重连", () => {
-  async function connected(host: FakeFactoryHost): Promise<{ conn: ProviderConnection; provider: ProviderSide; session: FakeSession }> {
-    const ring = ringOf(epId(), [{ keyId: "k", key: "sk-aifly-poison-key-00001", group: "g" }]);
+    const ring = ringOf(ep, [{ keyId: "k", key: "sk-aifly-rec-key-00000001", group: "g" }]);
+    const host = fakeFactoryHost(() => new FakeSessionHandle(ep, "sid-rec"));
     const conn = makeConnection(ring, host);
     conn.start();
+    await settle();
     const session = connectOk(host);
-    const provider = new ProviderSide(session.peerTransport);
-    await settle();
-    await provider.authOk([{ keyId: "k", group: "g", services: [svc("svc-a", "a", 1)] }]);
-    await settle();
-    return { conn, provider, session };
-  }
-
-  it("RESP_CHUNK 序号缺断 → 毒化 → 重建（teardown + 新 openSession）", async () => {
-    const host = fakeFactoryHost();
-    const { conn, provider } = await connected(host);
-    const h = HANDLERS();
-    conn.forward({ serviceId: "svc-a", method: "GET", path: "/x", body: new Uint8Array(0), upgrade: false }, h);
-    await settle();
-    const id = provider.last<Extract<InboundFrame, { type: typeof FRAME_TYPE.REQ }>>(FRAME_TYPE.REQ)!.header.id;
-    await provider.session.send(FRAME_TYPE.RESP_META, { id, status: 200, contentType: "application/json" });
-    await provider.session.send(FRAME_TYPE.RESP_CHUNK, { id, seq: 0 }, new Uint8Array(1));
-    await provider.session.send(FRAME_TYPE.RESP_CHUNK, { id, seq: 2 }, new Uint8Array(1)); // 缺断
-    await settle(50);
-    expect(h.events).toContain("terminate:protocol-seq");
-    // 重建：旧会话 teardown、新 openSession 发起
-    expect(host.sessions[0]!.tornDown).toBeGreaterThanOrEqual(1);
-    expect(host.openCalls).toBe(2);
-    expect(conn.state === "offline" || conn.state === "not-connected" || conn.state === "connected-unauthed").toBe(true);
-    await conn.stop();
-  });
-
-  it("对端断连 → offline + 退避重连（full jitter base 5ms cap 25ms）→ 恢复续用", async () => {
-    const host = fakeFactoryHost();
-    const { conn, provider } = await connected(host);
-    const h = HANDLERS();
-    conn.forward({ serviceId: "svc-a", method: "GET", path: "/x", body: new Uint8Array(0), upgrade: false }, h);
-    await settle();
-    provider.session.dispose("peer gone"); // 对端断开
-    await settle();
-    expect(conn.state).toBe("offline");
-    expect(h.events).toContain("terminate:disconnected");
-    // 退避窗口（≤25ms + 余量）后自动重连成功并恢复 AUTH
-    await settle(80);
-    const session2 = connectOk(host);
-    const provider2 = new ProviderSide(session2.peerTransport);
-    await settle();
-    await provider2.authOk([{ keyId: "k", group: "g", services: [svc("svc-a", "a", 1)] }]);
-    await settle();
+    scriptProvider(session);
+    await settle(30);
     expect(conn.state).toBe("direct");
+    session.emitPhase("recovering");
+    expect(conn.state).toBe("offline");
+    // 不提前 503：forward 正常入队（fetchHttp 挂起）
+    const events = HANDLERS();
+    let resolved = false;
+    session.script = (call) => {
+      if (call.init.path === "/v1/x") void call; // 挂起不结算
+    };
+    const handle = conn.forward({ serviceId: "svc-a", method: "GET", path: "/v1/x", body: new Uint8Array(0), upgrade: false }, events);
+    void handle;
+    await settle(10);
+    resolved = events.events.length === 0;
+    expect(resolved).toBe(true); // 无错误直达
     await conn.stop();
   });
 
-  it("linkStatus 轮询：unknown → 事件丢失兜底重建", async () => {
-    const host = fakeFactoryHost();
-    const { conn, session } = await connected(host);
-    session.linkResult = "unknown";
-    const before = host.openCalls;
-    await settle(80); // pollInterval 默认 30s——此处用短轮询构建
-    expect(host.openCalls).toBe(before); // 默认 30s 不触发；换短轮询重验
-    await conn.stop();
-    // 显式短轮询验证
-    const host2 = fakeFactoryHost();
-    const ring = ringOf(epId(), [{ keyId: "k", key: "sk-aifly-poll-key-0000001", group: "g" }]);
-    const conn2 = new ProviderConnection({ ring, root, factory: host2.factory, pollIntervalMs: 15, backoff: { baseMs: 5, capMs: 25 } });
-    cleanups.push(() => conn2.stop());
-    conn2.start();
-    const s2 = connectOk(host2);
-    const p2 = new ProviderSide(s2.peerTransport);
-    await settle();
-    await p2.authOk([{ keyId: "k", group: "g", services: [] }]);
-    await settle();
-    expect(conn2.state).toBe("direct");
-    s2.linkResult = "unknown";
-    await settle(60);
-    expect(s2.tornDown).toBeGreaterThanOrEqual(1);
-    expect(host2.openCalls).toBe(2);
-    await conn2.stop();
-  });
-
-  it("key_all_invalid 后 key add（环文件变化）→ 轮询重载 → 重连重 AUTH", async () => {
+  it("dead：状态 offline + forward 快速失败 provider_offline + 会话重建重 AUTH", async () => {
     const ep = epId();
-    const ring = ringOf(ep, [{ keyId: "k1", key: "sk-aifly-allinvalid-0001", group: "g" }]);
-    saveKeyring(root, ring);
-    const host = fakeFactoryHost();
-    const conn = new ProviderConnection({
-      ring,
-      root,
-      factory: host.factory,
-      pollIntervalMs: 15,
-      backoff: { baseMs: 5, capMs: 25 },
-      reloadRing: (endpointId) => loadKeyring(root, endpointId),
-    });
-    cleanups.push(() => conn.stop());
+    const ring = ringOf(ep, [{ keyId: "k", key: "sk-aifly-dead-key-00000001", group: "g" }]);
+    const host = fakeFactoryHost(() => new FakeSessionHandle(ep, "sid-d"));
+    const conn = makeConnection(ring, host);
     conn.start();
+    await settle();
     const session = connectOk(host);
-    const provider = new ProviderSide(session.peerTransport);
+    const script = scriptProvider(session);
+    await settle(30);
+    expect(conn.state).toBe("direct");
+    expect(script.keysSeen).toBeDefined();
+    session.emitPhase("dead");
+    await settle(5);
+    expect(conn.state).toBe("offline");
+    expect(() => conn.forward({ serviceId: "s", method: "GET", path: "/", body: new Uint8Array(0), upgrade: false }, HANDLERS())).toThrowError(OfflineError);
+    // 重建：ensureSession 再次 openSession（autoConnect 关闭 → 手动应答第二个会话）
+    await settle(10);
+    expect(host.openCalls).toBeGreaterThanOrEqual(2);
+    const session2 = new FakeSessionHandle(ep, "sid-d2");
+    const script2 = scriptProvider(session2);
+    connectOk(host, session2);
+    await settle(30);
+    expect(conn.state).toBe("direct"); // 新会话重 AUTH 后恢复
+    expect(script2.keysSeen).toBeDefined();
+    await conn.stop();
+  });
+
+  it("catalog-watch refresh：目录全量替换（服务增删）", async () => {
+    const ep = epId();
+    const ring = ringOf(ep, [{ keyId: "k", key: "sk-aifly-watch-key-000001", group: "g" }]);
+    const host = fakeFactoryHost(() => new FakeSessionHandle(ep, "sid-w"));
+    const conn = makeConnection(ring, host);
+    conn.start();
     await settle();
-    await provider.authErr();
+    const session = connectOk(host);
+    const script = scriptProvider(session);
+    await settle(30);
+    // 等待 watch 调用出现
+    await settle(20);
+    expect(script.watchCalls.length).toBeGreaterThanOrEqual(1);
+    script.watchCalls[0]!.respond({
+      status: 200,
+      headers: [
+        { name: "content-type", value: "application/json" },
+        { name: "x-aifly-catalog-seq", value: "5" },
+      ],
+      bodyChunks: [authOkBody([{ keyId: "k", group: "g", services: [svc("svc-a", "ollama", 11434), svc("svc-b", "extra", 8081)] }], { refresh: true })],
+    });
+    await settle(20);
+    const persisted = loadKeyring(root, ep);
+    expect(persisted?.services.map((s) => s.serviceId).sort()).toEqual(["svc-a", "svc-b"]);
+    await conn.stop();
+  });
+
+  it("refreshRing：钥变化在线重呈 AUTH（重授权）", async () => {
+    const ep = epId();
+    const ring = ringOf(ep, [{ keyId: "k1", key: "sk-aifly-ring-key-00000001", group: "g" }]);
+    const host = fakeFactoryHost(() => new FakeSessionHandle(ep, "sid-rr"));
+    const conn = makeConnection(ring, host);
+    conn.start();
     await settle();
-    expect(conn.state).toBe("key-all-invalid");
-    // 另一进程 key add：环文件新增密钥
-    const updated = loadKeyring(root, ep)!;
-    updated.keys.push({ keyId: "", key: "sk-aifly-fresh-added-000001", group: "" });
-    saveKeyring(root, updated);
-    await settle(60);
-    expect(conn.state).not.toBe("key-all-invalid"); // 已发起重连
-    expect(host.openCalls).toBe(2);
-    const session2 = connectOk(host);
-    const provider2 = new ProviderSide(session2.peerTransport);
-    await settle();
-    const auth = provider2.last<InboundFrame & { header: AuthHeader }>(FRAME_TYPE.AUTH);
-    expect(auth?.header.keys).toContain("sk-aifly-fresh-added-000001");
+    const session = connectOk(host);
+    const script = scriptProvider(session);
+    await settle(30);
+    expect(script.keysSeen).toEqual([ring.keys[0]!.key]);
+    const newKey = "sk-aifly-ring-key-00000002";
+    conn.refreshRing({ ...ring, keys: [{ keyId: "k2", key: newKey, group: "g" }] });
+    await settle(30);
+    expect(script.keysSeen).toEqual([newKey]);
     await conn.stop();
   });
 });
 
 // ---------------------------------------------------------------------------
-// 多提供者并存（管理器层）
-// ---------------------------------------------------------------------------
-
-describe("ProviderManager 多提供者并存", () => {
-  it("P1 断连不影响 P2 路由", async () => {
-    const ep1 = epId();
-    const ep2 = epId();
-    const hosts = [fakeFactoryHost(), fakeFactoryHost()];
-    let i = 0;
-    const manager = new ProviderManager({
-      rings: [ringOf(ep1, [{ keyId: "k", key: "sk-aifly-p1-key-0000000001", group: "g" }]), ringOf(ep2, [{ keyId: "k", key: "sk-aifly-p2-key-0000000001", group: "g" }])],
-      root,
-      sessionFactory: () => hosts[i++]!.factory,
-      backoff: { baseMs: 5, capMs: 25 },
-    });
-    cleanups.push(() => manager.stop());
-    manager.start();
-    const s1 = connectOk(hosts[0]!);
-    const s2 = connectOk(hosts[1]!);
-    const p1 = new ProviderSide(s1.peerTransport);
-    const p2 = new ProviderSide(s2.peerTransport);
-    await settle();
-    await p1.authOk([{ keyId: "k", group: "g", services: [svc("svc-p1", "p1", 1)] }]);
-    await p2.authOk([{ keyId: "k", group: "g", services: [svc("svc-p2", "p2", 2)] }]);
-    await settle();
-    expect(manager.routeFor(ep1)?.state).toBe("direct");
-    expect(manager.routeFor(ep2)?.state).toBe("direct");
-    p1.session.dispose("p1 gone");
-    await settle();
-    expect(manager.routeFor(ep1)?.state).toBe("offline");
-    expect(manager.routeFor(ep2)?.state).toBe("direct");
-    await manager.stop();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// full jitter 退避纯函数（1s→60s 边界）
+// full jitter 纯函数（边界）
 // ---------------------------------------------------------------------------
 
 describe("fullJitterDelayMs", () => {
-  it("attempt 0：窗口 [0, base]", () => {
-    expect(fullJitterDelayMs(0, { baseMs: 1000, capMs: 60000, random: () => 0 })).toBe(0);
-    const hi = fullJitterDelayMs(0, { baseMs: 1000, capMs: 60000, random: () => 0.999999 });
-    expect(hi).toBeLessThanOrEqual(1000);
-    expect(fullJitterDelayMs(0, { baseMs: 1000, capMs: 60000, random: () => 1 })).toBe(1000);
-  });
-
-  it("指数增长到 cap 后恒为 [0, cap]", () => {
-    expect(fullJitterDelayMs(5, { baseMs: 1000, capMs: 60000, random: () => 1 })).toBe(32000);
-    expect(fullJitterDelayMs(6, { baseMs: 1000, capMs: 60000, random: () => 1 })).toBe(60000);
-    expect(fullJitterDelayMs(20, { baseMs: 1000, capMs: 60000, random: () => 1 })).toBe(60000);
-    expect(fullJitterDelayMs(20, { baseMs: 1000, capMs: 60000, random: () => 0 })).toBe(0);
-    const mid = fullJitterDelayMs(9, { baseMs: 1000, capMs: 60000, random: () => 0.5 });
-    expect(mid).toBe(30000);
-  });
-
-  it("默认参数 1s→60s", () => {
-    expect(fullJitterDelayMs(0, { random: () => 1 })).toBe(1000);
-    expect(fullJitterDelayMs(7, { random: () => 1 })).toBe(60000);
+  it("attempt 0：窗口 [0, base]；封顶后窗口 [0, cap]", () => {
+    expect(fullJitterDelayMs(0, { baseMs: 100, capMs: 60_000, random: () => 0 })).toBe(0);
+    expect(fullJitterDelayMs(0, { baseMs: 100, capMs: 60_000, random: () => 0.999 })).toBe(99);
+    expect(fullJitterDelayMs(30, { baseMs: 1_000, capMs: 2_000, random: () => 0.5 })).toBe(1_000);
+    expect(fullJitterDelayMs(-5, { baseMs: 100, capMs: 200, random: () => 0.5 })).toBe(50); // 负 attempt 按 0
   });
 });
 
 // ---------------------------------------------------------------------------
-// 目录同步 × actualPorts 回写共存（cli-hardening 修复的回归锚点）
-// ---------------------------------------------------------------------------
-describe("目录同步与 actualPorts 回写共存", () => {
-  it("AUTH_OK refresh 不覆写磁盘侧 actualPorts（引擎回写的错开端口保留）", async () => {
-    const ep = epId();
-    const ring = ringOf(ep, [{ keyId: "k", key: "sk-aifly-test-000000000001", group: "g" }]);
-    saveKeyring(root, ring);
-    const host = fakeFactoryHost();
-    const conn = makeConnection(ring, host);
-    conn.start();
-    const session = connectOk(host);
-    const provider = new ProviderSide(session.peerTransport);
-    await settle();
-    await provider.authOk([{ keyId: "k", group: "g", services: [svc("s1", "s1", 4481)] }]);
-    await settle();
-    // 引擎监听回写：端口 4481 被占，实际落在 53001
-    setActualPorts(root, ep, { s1: 53001 });
-    // 目录 refresh 到达——必须保留磁盘侧 actualPorts，不得用构造期内存快照清空
-    await provider.authOk([{ keyId: "k", group: "g", services: [svc("s1", "s1", 4481)] }]);
-    await settle();
-    expect(loadKeyring(root, ep)?.actualPorts).toEqual({ s1: 53001 });
-    await conn.stop();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// AUTH_OK 二阶段目录同步失败（hooks-lifecycle v2：detail 投影解析失败）
+// ProviderManager 装配
 // ---------------------------------------------------------------------------
 
-describe("目录同步失败（detail 投影解析失败）", () => {
-  const MASK = "\u25cf";
-
-  it("不经 schemaDropped、会话 authed 可转发、旧目录与映射保留、lastError 呈现；成功 AUTH_OK 清错", async () => {
-    const ep = epId();
-    const ring = ringOf(ep, [{ keyId: "k", key: "sk-aifly-catalog-key-0001", group: "g" }]);
-    ring.services = [svc("svc-old", "old", 3000)]; // 旧视图（import 带来）
-    ring.ports = { "svc-old": 3456 };
-    saveKeyring(root, ring);
-    const host = fakeFactoryHost();
-    const catalogErrors: Array<{ providerId: string; message: string }> = [];
-    const conn = new ProviderConnection({
-      ring,
-      root,
-      factory: host.factory,
-      backoff: { baseMs: 5, capMs: 25 },
-      onCatalogError: (providerId, message) => catalogErrors.push({ providerId, message }),
-    });
-    cleanups.push(() => conn.stop());
-    conn.start();
-    const session = connectOk(host);
-    const provider = new ProviderSide(session.peerTransport);
-    await settle();
-
-    // v1 形状 detail：帧级 schema 宽松通过、二阶段严格复核失败
-    await provider.session.send(FRAME_TYPE.AUTH_OK, {
-      v: 1,
-      alias: "prov",
-      relayUrls: ["http://relay:1"],
-      groups: [
-        {
-          keyId: "k",
-          group: "g",
-          limits: {},
-          services: [
-            {
-              serviceId: "svc-new",
-              name: "new",
-              match: [],
-              defaultPort: 8787,
-              detail: { upstream: "https://u.example", match: [], rewrite: { headerSet: [{ name: "authorization", value: MASK }] } },
-            },
-          ],
-        },
-      ],
-    });
-    provider.session.markAuthed();
-    await settle();
-
-    expect(catalogErrors).toEqual([{ providerId: ep, message: expect.stringContaining("catalog") }]);
-    expect(conn.state).toBe("direct"); // AUTH 交换成功，会话保持可用
-    expect(conn.services.map((s) => s.serviceId)).toEqual(["svc-old"]); // 旧视图保留
-    expect(conn.ports).toEqual({ "svc-old": 3456 }); // 映射保留
-    expect(conn.status().lastError).toContain("catalog"); // 错误态可查询（status 导出）
-    expect(loadKeyring(root, ep)?.services.map((s) => s.serviceId)).toEqual(["svc-old"]); // 落盘未被坏目录覆盖
-    // 会话 authed：对旧视图服务的转发照常发出 REQ（不走 offline 快速失败）
-    conn.forward({ serviceId: "svc-old", method: "GET", path: "/x", body: new Uint8Array(0), upgrade: false }, HANDLERS());
-    await settle();
-    const req = provider.last<Extract<InboundFrame, { type: typeof FRAME_TYPE.REQ }>>(FRAME_TYPE.REQ);
-    expect(req?.header.serviceId).toBe("svc-old");
-
-    // 后续成功 AUTH_OK：覆盖视图并清错
-    await provider.authOk([{ keyId: "k", group: "g", services: [svc("svc-new", "new", 8787)] }], { refresh: true });
-    await settle();
-    expect(conn.services.map((s) => s.serviceId)).toEqual(["svc-new"]);
-    expect(conn.status().lastError).toBeUndefined();
-    expect(loadKeyring(root, ep)?.services.map((s) => s.serviceId)).toEqual(["svc-new"]);
-    await conn.stop();
-  });
-
-  it("ProviderManager 转发 onCatalogError（通知通道入口）；其它提供者不受影响", async () => {
+describe("ProviderManager", () => {
+  it("多提供者并存：P1 离线不影响 P2 路由", async () => {
     const ep1 = epId();
     const ep2 = epId();
-    const hosts = [fakeFactoryHost(), fakeFactoryHost()];
-    let i = 0;
-    const seen: Array<{ providerId: string; message: string }> = [];
+    const host1 = fakeFactoryHost(() => new FakeSessionHandle(ep1, "m1"));
+    const host2 = fakeFactoryHost(() => new FakeSessionHandle(ep2, "m2"));
+    const rings = [
+      ringOf(ep1, [{ keyId: "a", key: "sk-aifly-mgr-key-00000001", group: "g" }]),
+      ringOf(ep2, [{ keyId: "b", key: "sk-aifly-mgr-key-00000002", group: "g" }]),
+    ];
+    const conns: ProviderConnection[] = [];
     const manager = new ProviderManager({
-      rings: [
-        { ...ringOf(ep1, [{ keyId: "k", key: "sk-aifly-m1-key-0000000001", group: "g" }]), services: [svc("svc-1", "one", 1)] },
-        { ...ringOf(ep2, [{ keyId: "k", key: "sk-aifly-m2-key-0000000001", group: "g" }]), services: [svc("svc-2", "two", 2)] },
-      ],
+      rings,
       root,
-      sessionFactory: () => hosts[i++]!.factory,
-      backoff: { baseMs: 5, capMs: 25 },
-      onCatalogError: (providerId, message) => seen.push({ providerId, message }),
+      sessionFactory: (ring) => {
+        const host = ring.endpointId === ep1 ? host1 : host2;
+        return host.factory;
+      },
     });
-    cleanups.push(() => manager.stop());
+    cleanups.push(() => void manager.stop());
     manager.start();
-    const s1 = connectOk(hosts[0]!);
-    const s2 = connectOk(hosts[1]!);
-    const p1 = new ProviderSide(s1.peerTransport);
-    const p2 = new ProviderSide(s2.peerTransport);
     await settle();
-    // P1 推送坏 detail；P2 正常
-    await p1.session.send(FRAME_TYPE.AUTH_OK, {
-      v: 1,
-      alias: "p1",
-      relayUrls: [],
-      groups: [{ keyId: "k", group: "g", limits: {}, services: [{ serviceId: "svc-1", name: "one", match: [], defaultPort: 1, detail: 42 }] }],
-    });
-    p1.session.markAuthed();
-    await p2.authOk([{ keyId: "k", group: "g", services: [svc("svc-2", "two", 2)] }]);
-    await settle();
-    expect(seen.map((e) => e.providerId)).toEqual([ep1]);
-    expect(manager.connection(ep1)?.services.map((s) => s.serviceId)).toEqual(["svc-1"]); // P1 旧视图保留
-    expect(manager.connection(ep2)?.services.map((s) => s.serviceId)).toEqual(["svc-2"]); // P2 不受影响
-    await manager.stop();
-  });
-
-  it("runtime 生产装配（复核 R3-F1）：startEngine 透传 onCatalogError；网关保旧视图可路由；快照 lastError set/clear", async () => {
-    const { startEngine } = await import("../../../src/consumer/runtime.ts");
-    const ep = epId();
-    const ring = ringOf(ep, [{ keyId: "k", key: "sk-aifly-runtime-key-00000001", group: "g" }]);
-    ring.services = [svc("svc-old", "old", 47_201)]; // 旧视图（import 带来）
-    ring.ports = { "svc-old": 47_201 };
-    saveKeyring(root, ring);
-    const host = fakeFactoryHost();
-    const catalogErrors: Array<{ providerId: string; message: string }> = [];
-    const engine = await startEngine({
-      rings: [ring],
-      consumersRoot: root,
-      sessionFactoryFor: () => host.factory,
-      onCatalogError: (providerId, message) => catalogErrors.push({ providerId, message }),
-    });
-    cleanups.push(() => engine.stop());
-    const session = connectOk(host);
-    const provider = new ProviderSide(session.peerTransport);
-    await settle();
-
-    // 坏 detail（v1 形状）→ onCatalogError 经生产装配到达；网关旧视图仍在
-    await provider.session.send(FRAME_TYPE.AUTH_OK, {
-      v: 1,
-      alias: "prov",
-      relayUrls: ["http://relay:1"],
-      groups: [
-        {
-          keyId: "k",
-          group: "g",
-          limits: {},
-          services: [
-            {
-              serviceId: "svc-new",
-              name: "new",
-              match: [],
-              defaultPort: 8787,
-              detail: { upstream: "https://u.example", match: [], rewrite: { headerSet: [{ name: "authorization", value: MASK }] } },
-            },
-          ],
-        },
-      ],
-    });
-    provider.session.markAuthed();
-    await settle();
-    expect(catalogErrors).toEqual([{ providerId: ep, message: expect.stringContaining("catalog") }]);
-    expect(engine.gateway.listenerInfo().map((l) => l.serviceId)).toEqual(["svc-old"]); // 旧监听未被坏目录拆掉
-    expect(engine.manager.snapshot()[0]?.lastError).toContain("catalog"); // 快照携带错误态（host 轮询投影源）
-
-    // 后续成功 AUTH_OK：覆盖视图 + lastError 清除（diff 层据此发 consumer-catalog）
-    await provider.authOk([{ keyId: "k", group: "g", services: [svc("svc-new", "new", 8787)] }], { refresh: true });
-    await settle();
-    expect(engine.manager.snapshot()[0]?.lastError).toBeUndefined();
-    expect(engine.gateway.listenerInfo().map((l) => l.serviceId)).toEqual(["svc-new"]);
-    await engine.stop();
+    connectFail(host1, new Error("p1 away"));
+    const s2 = connectOk(host2);
+    scriptProvider(s2);
+    await settle(30);
+    expect(manager.routeFor(ep1)?.state).toBe("offline");
+    expect(manager.routeFor(ep2)?.state).toBe("direct");
+    expect(manager.snapshot()).toHaveLength(2);
+    void conns;
   });
 });

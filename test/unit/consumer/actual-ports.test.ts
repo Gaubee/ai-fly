@@ -16,7 +16,7 @@ import {
   type Keyring,
 } from "../../../src/consumer/store.ts";
 import { startEngine } from "../../../src/consumer/runtime.ts";
-import type { ProviderTransportSession } from "../../../src/consumer/providers.ts";
+import type { ProviderSessionFactory } from "../../../src/consumer/providers.ts";
 import type { ServiceEntry } from "../../../src/wire/frames.ts";
 
 const roots: string[] = [];
@@ -77,12 +77,13 @@ describe("engine: 启动回写实际端口", () => {
     const r = ring("ep4444444441", [svc("s1", 47_141)]);
     saveKeyring(root, r);
     const notices: string[] = [];
-    // session 工厂保持 pending（离线态）——仅验证监听物化与回写，不触原生模块
-    const pending = (): Promise<ProviderTransportSession> => new Promise(() => {});
+    // fabric 工厂保持 pending（离线态）——仅验证监听物化与回写，不触原生模块
+    const pending = (): Promise<never> => new Promise(() => {});
+    const factory: ProviderSessionFactory = { open: pending, shutdown: async () => {} };
     const engine = await startEngine({
       rings: [r],
       consumersRoot: root,
-      sessionFactoryFor: () => ({ openSession: pending, shutdown: async () => {} }),
+      sessionFactoryFor: () => factory,
       onNotice: (line) => notices.push(line),
     });
     try {

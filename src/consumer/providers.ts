@@ -1,21 +1,33 @@
-// 使用方提供者管理器（consumer spec「提供者在线性与离线语义」「目录同步处理」）：
-// 每个已导入提供者一个 Fabric 实例 + FabricWireAdapter + WireSession(role consumer)；
-// 连接状态机（未连接/direct/relay/已连接未AUTH/离线/key_all_invalid）；连接后立即
-// AUTH（呈交钥环全部密钥）；full jitter 指数退避重连（1s→60s）+ linkStatus 30s 轮询
-// 复核 + path 事件驱动；refresh AUTH_OK 全量替换服务视图并同步本地存储与端口映射；
-// onPoison(protocol_seq) 重建该提供者连接；离线/AUTH 全拒对新请求快速失败。
+// 使用方提供者管理器（consumer spec「提供者在线性与离线语义」「目录同步处理」；
+// opendweb-kernel-migration）：每个已导入提供者一个 Fabric 实例 + 内核
+// SessionHandle（Fabric.openSession——auto-resume 驱动在 SDK 内核，断线续传对
+// JS 透明）；状态机消费 SessionHandle.onState（design §1 映射表：negotiating→
+// not-connected；active+未 AUTH→connected-unauthed；active+AUTH 过→按
+// continuitySnapshot.path 投影 direct/relay；recovering→offline 瞬断语义（在途
+// 挂起不提前 503）；dead/closed→offline 终态（新请求 503 provider_offline））。
+// 第二套连接生命周期（full-jitter 退避重连/linkStatus 30s 轮询/peer-disconnected
+// 事件重建/REQ-RESP 多路复用记账）全部退役——仅在会话 dead（恢复窗口耗尽或
+// REQUEST_STATE_LOST）后重建会话（openSession 收敛重试有界，失败按退避重试）。
+// AUTH HTTP 化：session active 后 POST /_aifly/auth（空钥环保持
+// connected-unauthed；全拒 → key-all-invalid，不重建会话）；目录刷新经
+// /_aifly/catalog-watch 长轮询（refresh 全量替换，走既有 onCatalog 路径）。
 // 正交意图：
 // - Fabric 事实全部经 FabricLike/FabricFactory 结构接口注入（vitest 与 SDK 原生模块
 //   隔离；真实接线在 CLI 层 lazy import SDK）；
-// - 传输会话经 ProviderTransportSessionFactory 注入（真实实现包装 Fabric+适配器，
-//   单测用内存 loopback 成对传输，与 test/unit/wire 同手法）；
-// - 请求转发只经 wire 帧契约（frames.ts schema）；本地端口/HTTP/WS 还原在 gateway.ts。
+// - 会话事实经 SessionHandleLike 结构接口注入（真实 SessionHandle 结构满足；
+//   单测用内存假体）；
+// - 请求转发只经内核 HTTP 投影（fetchHttp/keepOpen 隧道）；本地端口/HTTP/WS
+//   还原在 gateway.ts。
 
-import type { Fabric } from "@jixo/opendweb-client-sdk";
-import { FabricWireAdapter } from "../wire/fabric-adapter.ts";
-import { splitBody } from "../wire/codec.ts";
 import {
-  FRAME_TYPE,
+  AIFLY_AUTH_PATH,
+  AIFLY_WATCH_PATH,
+  AIFLY_SERVICE_HEADER,
+  AIFLY_WS_CLOSE_HEADER,
+} from "../wire/http-protocol.ts";
+import {
+  AUTH_OK_HEADER_SCHEMA,
+  RESP_META_HEADER_WHITELIST,
   SERVICE_DETAIL_SCHEMA,
   type AuthOkHeader,
   type ErrorHeader,
@@ -23,16 +35,10 @@ import {
   type ServiceDetail,
   type ServiceEntry,
 } from "../wire/frames.ts";
-import {
-  WireSession,
-  type InboundFrame,
-  type TerminateCause,
-  type WireTransport,
-} from "../wire/mux.ts";
 import { applyCatalog, reconcileKeyMetadata, saveKeyring, loadKeyring, type Keyring } from "./store.ts";
 
 // ---------------------------------------------------------------------------
-// Fabric 结构接口（SDK Fabric 的消费侧子集；真实 Fabric 结构满足此接口）
+// Fabric / Session 结构接口（SDK 消费侧子集；真实结构满足此接口）
 // ---------------------------------------------------------------------------
 
 export interface FabricMember {
@@ -46,15 +52,56 @@ export type FabricEventLike =
   | { type: "message"; from: string; data: Buffer }
   | { type: "path-changed"; endpointId: string; status: "direct" | "relay" | "unknown" };
 
+/** fetchHttp 请求初始化（SDK FetchHttpInit 结构子集）。 */
+export interface FetchHttpInitLike {
+  method: string;
+  path: string;
+  headers?: Array<{ name: string; value: string }>;
+  body?: Array<Uint8Array> | null;
+  keepOpen?: boolean;
+}
+
+/** fetchHttp 响应（SDK HttpClientResponseJs 结构子集；pull-first bodyNext）。 */
+export interface FetchHttpResponseLike {
+  status: number;
+  headers: Array<{ name: string; value: string }>;
+  streamId: number;
+  bodyNext(): Promise<Buffer | null>;
+  /** keepOpen 隧道 client→provider 方向（WS 101 后）。 */
+  sendTunnel?(data: Buffer): Promise<void>;
+}
+
+/** 会话状态快照（SDK SessionStateSnapshotJs 结构子集）。 */
+export interface SessionStateLike {
+  peerId: string;
+  sessionId: string;
+  phase: string;
+  streamCount?: number | undefined;
+  journalBytes?: number | undefined;
+}
+
+/** 内核会话句柄（SDK SessionHandle 结构子集；auto-resume 驱动内建）。 */
+export interface SessionHandleLike {
+  readonly peerId: string;
+  readonly sessionId: string;
+  state(): Promise<SessionStateLike>;
+  onState(callback: (state: SessionStateLike) => void): () => void;
+  close(): Promise<void>;
+  fetchHttp(init: FetchHttpInitLike): Promise<FetchHttpResponseLike>;
+}
+
 export interface FabricLike {
   readonly endpointId: string;
   connect(endpointId: string): Promise<void>;
   disconnect(endpointId: string): Promise<void>;
-  send(endpointId: string, data: Buffer): Promise<void>;
-  linkStatus(endpointId: string): Promise<string>;
   on(callback: (event: FabricEventLike) => void): () => void;
   members(): Promise<FabricMember[]>;
+  relayStatus(): Promise<{ urls: string[] }>;
   shutdown(): Promise<void>;
+  /** 内核会话唯一创建入口（幂等：active/recovering 返回既有；dead 后新建）。 */
+  openSession(peerId: string): Promise<SessionHandleLike>;
+  /** 对端连接路径快照（direct/relay/unknown；path 投影用）。 */
+  continuitySnapshot(peerId: string): Promise<{ path: string }>;
 }
 
 /** Fabric 工厂（join/open）；CLI 层以 lazy import SDK 实现，测试注入 fake。 */
@@ -64,12 +111,17 @@ export interface FabricFactory {
 }
 
 // ---------------------------------------------------------------------------
-// 重连退避（full jitter 指数，1s→60s；纯函数便于边界测试）
+// 会话重建退避（full jitter 指数，1s→60s；纯函数便于边界测试）
 // ---------------------------------------------------------------------------
+// 语义变化（kernel-migration）：退避不再用于传输层重连竞速（内核 auto-resume
+// 承接 recovering），仅用于会话 dead 后的 openSession 重建重试（对端长期离线时
+// 避免热循环）。
 
 export const RECONNECT_BASE_MS = 1_000;
 export const RECONNECT_CAP_MS = 60_000;
-export const LINK_STATUS_POLL_MS = 30_000;
+/** 钥环文件复核间隔（key add 等外部进程写入的发现；与传输层轮询无关——
+ *  在线性归内核会话状态，此处仅复核磁盘钥环）。 */
+export const RING_POLL_MS = 30_000;
 
 /**
  * full jitter：delay = random() * min(cap, base * 2^attempt)。
@@ -90,7 +142,7 @@ export function fullJitterDelayMs(
 // 转发面契约（gateway.ts 消费）
 // ---------------------------------------------------------------------------
 
-/** 本地请求 → REQ 帧的入参（gateway 已剥离凭据头；contentType 独立字段承载）。 */
+/** 本地请求 → 内核 fetchHttp 的入参（gateway 已剥离凭据头；contentType 独立字段承载）。 */
 export interface ForwardInput {
   serviceId: string;
   method: string;
@@ -98,28 +150,37 @@ export interface ForwardInput {
   headers?: Record<string, string>;
   contentType?: string;
   body: Uint8Array;
-  /** true = WS 升级请求（握手头透传；走 DATA_UP/DOWN/CLOSE 流）。 */
+  /** true = WS 升级请求（握手头透传；走 keepOpen 字节隧道）。 */
   upgrade: boolean;
 }
+
+/** 请求终结原因（旧 wire 帧终结语义的承载面无关投影；gateway 消费）。 */
+export type TerminateCause =
+  | { source: "peer" }
+  | { source: "local" }
+  | { source: "disconnected"; reason?: string };
 
 export interface ForwardHandlers {
   onMeta(header: RespMetaHeader): void;
   onChunk(body: Uint8Array): void;
   onEnd(): void;
   onError(header: ErrorHeader): void;
-  /** WS：提供方 DATA_DOWN 字节。 */
+  /** WS：提供方隧道下行字节。 */
   onWsData(body: Uint8Array): void;
-  /** WS：提供方 CLOSE（终结帧）。 */
+  /** WS：提供方关闭（终结；code 缺省 = 无码关闭）。 */
   onWsClose(code: number | undefined): void;
-  /** 请求终结（断连/空闲/毒化/本地中止等；对端终结帧已先行经 onEnd/onError 路由）。 */
+  /** 请求终结（本地中止/会话终态等；对端终结已先行经 onEnd/onError/onWsClose 路由）。 */
   onTerminate(cause: TerminateCause): void;
 }
 
 export interface ForwardHandle {
   readonly id: string;
-  /** 本地客户端断开/缓冲超限：HTTP 发 ABORT，WS 发 CLOSE（终结帧）。 */
+  /**
+   * 本地客户端断开：停止回调投递并放弃内核响应流（本阶段 NAPI 无 per-request
+   * cancel 通道——提供端靠内核 journal 上限有界收敛；SDK 补齐后接流取消）。
+   */
   abort(opts?: { ws?: boolean; code?: number }): void;
-  /** WS 上行原始字节（DATA_UP；同 id 顺序 await 保序）。 */
+  /** WS 上行隧道字节（keepOpen sendTunnel；101 前到达静默丢弃）。 */
   sendData(bytes: Uint8Array): Promise<void>;
 }
 
@@ -136,11 +197,11 @@ export class OfflineError extends Error {
 }
 
 export type ProviderStateKind =
-  | "not-connected" // 未连接（启动前/首次连接尝试中）
-  | "connected-unauthed" // 已连接未 AUTH（含钥环为空只入网的提供者）
-  | "direct" // 直连且 AUTH 通过
-  | "relay" // 经 relay 且 AUTH 通过
-  | "offline" // 离线（断连/连接失败，退避重连中）
+  | "not-connected" // 未连接（启动前/会话建立中）
+  | "connected-unauthed" // 会话 active 且 AUTH 未过（含钥环为空只入网的提供者）
+  | "direct" // active 且 AUTH 过，路径直连
+  | "relay" // active 且 AUTH 过，路径经 relay
+  | "offline" // 会话 recovering（瞬断，在途挂起）或 dead/closed（终态，新请求 503）
   | "key-all-invalid"; // AUTH_ERR：全部密钥被拒（等待 key add / 重新签发）
 
 export interface ProviderStatus {
@@ -150,6 +211,7 @@ export interface ProviderStatus {
   services: ServiceEntry[];
   ports: Record<string, number>;
   servedCount: number;
+  /** 退役记账（kernel-migration：背压归内核 journal；恒 0，观测面为 journalBytes）。 */
   bufferOverflows: number;
   lastError?: string;
 }
@@ -159,36 +221,27 @@ export interface ProviderRoute {
   readonly alias: string;
   readonly state: ProviderStateKind;
   forward(input: ForwardInput, handlers: ForwardHandlers): ForwardHandle;
-  /** 接收缓冲超限记账（buffer_overflow 计数入 status）。 */
+  /** 兼容占位（bufferOverflows 记账退役；no-op）。 */
   noteBufferOverflow(): void;
 }
 
 // ---------------------------------------------------------------------------
-// 传输会话工厂抽象
+// 底层 fabric 工厂抽象
 // ---------------------------------------------------------------------------
 
-/** 一次与提供者的 wire 会话（transport + 路径观测 + 拆除）。 */
-export interface ProviderTransportSession {
-  readonly transport: WireTransport;
-  linkStatus(): Promise<"direct" | "relay" | "unknown">;
-  onPathChange?(cb: (status: "direct" | "relay" | "unknown") => void): void;
-  /** 拆除本会话（触发 transport close → 在途全量终结）；底层 Fabric 保留。 */
-  teardown(): Promise<void>;
-}
-
-export interface ProviderTransportSessionFactory {
-  /** 建立/复用底层并返回新会话（resolve 即视为 peer-connected）。 */
-  openSession(): Promise<ProviderTransportSession>;
+export interface ProviderSessionFactory {
+  /** 打开/复用底层 fabric（幂等；consumer 进程生命周期内一个实例）。 */
+  open(): Promise<FabricLike>;
   /** 底层实例彻底关闭（进程退出路径）。 */
   shutdown(): Promise<void>;
 }
 
 /**
- * 真实传输接线：一个 Fabric 实例（open 一次复用）+ connect(provider) + 每连接一个
- * FabricWireAdapter。FabricLike 是 SDK Fabric 的结构子集，适配器仅消费该子集，
- * 故经 unknown 收窄（SDK 类型仅 type import，vitest 不触原生模块）。
+ * 真实接线：一个 Fabric 实例（open 一次复用）。会话由 ProviderConnection 经
+ * Fabric.openSession 管理。FabricLike 是 SDK Fabric 的结构子集，经 unknown
+ * 收窄（SDK 类型仅 type import，vitest 不触原生模块）。
  */
-export function createFabricProviderTransport(
+export function createFabricSessionFactory(
   factory: FabricFactory,
   info: {
     dataDir: string;
@@ -196,44 +249,17 @@ export function createFabricProviderTransport(
     /** 该 ring 内嵌的 relay 入口（链接带来；缺省走工厂层解析）。 */
     relayUrls?: string[];
   },
-): ProviderTransportSessionFactory {
+): ProviderSessionFactory {
   let fabric: FabricLike | undefined;
-  const getFabric = async (): Promise<FabricLike> => {
-    fabric ??= await factory.open({
-      dataDir: info.dataDir,
-      ...(info.relayUrls !== undefined && info.relayUrls.length > 0
-        ? { relayUrls: info.relayUrls }
-        : {}),
-    });
-    return fabric;
-  };
   return {
-    openSession: async () => {
-      const f = await getFabric();
-      await f.connect(info.providerEndpointId);
-      const adapter = new FabricWireAdapter(f as unknown as Fabric, info.providerEndpointId);
-      let pathCb: ((status: "direct" | "relay" | "unknown") => void) | undefined;
-      const off = f.on((event) => {
-        if (event.type === "path-changed" && event.endpointId === info.providerEndpointId) {
-          pathCb?.(event.status);
-        }
+    open: async () => {
+      fabric ??= await factory.open({
+        dataDir: info.dataDir,
+        ...(info.relayUrls !== undefined && info.relayUrls.length > 0
+          ? { relayUrls: info.relayUrls }
+          : {}),
       });
-      return {
-        transport: adapter,
-        linkStatus: async () => {
-          const s = await f.linkStatus(info.providerEndpointId);
-          return s === "relay" ? "relay" : s === "direct" ? "direct" : "unknown";
-        },
-        onPathChange(cb) {
-          pathCb = cb;
-        },
-        teardown: async () => {
-          off();
-          adapter.dispose();
-          adapter.close("provider-teardown");
-          await f.disconnect(info.providerEndpointId).catch(() => undefined);
-        },
-      };
+      return fabric;
     },
     shutdown: async () => {
       const f = fabric;
@@ -244,12 +270,25 @@ export function createFabricProviderTransport(
 }
 
 // ---------------------------------------------------------------------------
-// 单提供者连接（状态机 + AUTH + 目录 + 重连/复核）
+// 单提供者连接（内核会话状态机 + AUTH + 目录 + watch）
 // ---------------------------------------------------------------------------
 
 interface BackoffOpts {
   baseMs?: number;
   capMs?: number;
+}
+
+/** 白名单响应头挑选（小写键；RESP_META 白名单三头约束保持）。 */
+function pickWhitelist(headers: Array<{ name: string; value: string }>): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const h of headers) {
+    if (RESP_META_HEADER_WHITELIST.has(h.name.toLowerCase())) out[h.name.toLowerCase()] = h.value;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function headerValue(headers: Array<{ name: string; value: string }>, name: string): string | undefined {
+  return headers.find((h) => h.name.toLowerCase() === name)?.value;
 }
 
 export class ProviderConnection implements ProviderRoute {
@@ -258,26 +297,36 @@ export class ProviderConnection implements ProviderRoute {
   state: ProviderStateKind = "not-connected";
 
   private readonly root: string;
-  private readonly factory: ProviderTransportSessionFactory;
+  private readonly factory: ProviderSessionFactory;
   private readonly backoff: BackoffOpts;
-  private readonly pollIntervalMs: number;
+  private readonly ringPollMs: number;
+  private ringTimer: ReturnType<typeof setInterval> | null = null;
   private readonly onCatalog: (conn: ProviderConnection, ring: Keyring) => void;
   private readonly onCatalogError: (providerId: string, message: string) => void;
   private readonly onStateChange: (conn: ProviderConnection) => void;
   private readonly reloadRing: (endpointId: string) => Keyring | undefined;
 
   private ring: Keyring;
-  private session: WireSession | null = null;
-  private rawSession: ProviderTransportSession | null = null;
-  private readonly inflight = new Map<string, ForwardHandlers>();
-  private readonly dataUpSeq = new Map<string, number>();
+  private fabric: FabricLike | null = null;
+  private session: SessionHandleLike | null = null;
+  private offState: (() => void) | null = null;
+  private offPathEvent: (() => void) | null = null;
+  /** 已完成 AUTH 的会话 id（会话重建后置空 → 重新 AUTH）。 */
+  private authedSessionId: string | null = null;
+  /** 会话缓存相位（forward 快速失败判定：dead/closed 才 503）。 */
+  private sessionPhase: string = "closed";
+  /** 本会话自上次 AUTH 后经历过 recovering（恢复后重呈 AUTH 复核授权）。 */
+  private sessionResumed = false;
+  /** watch 循环代次（会话替换/停止时递增使旧循环退出）。 */
+  private watchGen = 0;
+  /** AUTH 进行中（防 active 抖动重入）。 */
+  private authInFlight: Promise<void> | null = null;
+  private ensuringSession = false;
   private attempt = 0;
-  private connecting = false;
-  private intentionalTeardown = false;
-  private stopped = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastKeySnapshot = "";
+  private reqSeq = 0;
+  private stopped = false;
   servedCount = 0;
   bufferOverflows = 0;
   lastError: string | undefined;
@@ -285,9 +334,9 @@ export class ProviderConnection implements ProviderRoute {
   constructor(opts: {
     ring: Keyring;
     root: string;
-    factory: ProviderTransportSessionFactory;
+    factory: ProviderSessionFactory;
     backoff?: BackoffOpts;
-    pollIntervalMs?: number;
+    ringPollMs?: number;
     onCatalog?: (conn: ProviderConnection, ring: Keyring) => void;
     /** 目录同步失败通知（AUTH_OK 二阶段 detail 投影解析失败；保留旧视图）。 */
     onCatalogError?: (providerId: string, message: string) => void;
@@ -300,7 +349,7 @@ export class ProviderConnection implements ProviderRoute {
     this.root = opts.root;
     this.factory = opts.factory;
     this.backoff = opts.backoff ?? {};
-    this.pollIntervalMs = opts.pollIntervalMs ?? LINK_STATUS_POLL_MS;
+    this.ringPollMs = opts.ringPollMs ?? RING_POLL_MS;
     this.onCatalog = opts.onCatalog ?? (() => undefined);
     this.onCatalogError = opts.onCatalogError ?? (() => undefined);
     this.onStateChange = opts.onStateChange ?? (() => undefined);
@@ -328,14 +377,14 @@ export class ProviderConnection implements ProviderRoute {
       services: [...this.ring.services],
       ports: { ...this.ring.ports },
       servedCount: this.servedCount,
-      bufferOverflows: this.bufferOverflows,
+      bufferOverflows: 0,
     };
     if (this.lastError !== undefined) s.lastError = this.lastError;
     return s;
   }
 
   noteBufferOverflow(): void {
-    this.bufferOverflows++;
+    // 退役记账（内核 journal 反压承接）；保留方法以兼容 gateway 路由面。
   }
 
   // ------------------------------------------------------------------
@@ -344,100 +393,119 @@ export class ProviderConnection implements ProviderRoute {
 
   start(): void {
     if (this.stopped) return;
-    this.pollTimer = setInterval(() => void this.poll(), this.pollIntervalMs);
-    void this.attemptConnect();
+    // 钥环文件复核（key add/外部进程写入的发现；key_all_invalid 恢复路径）
+    if (this.ringTimer === null) {
+      this.ringTimer = setInterval(() => this.pollRing(), this.ringPollMs);
+      this.ringTimer.unref?.();
+    }
+    void this.ensureSession();
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.watchGen++;
     if (this.retryTimer !== null) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
-    if (this.pollTimer !== null) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
+    if (this.ringTimer !== null) {
+      clearInterval(this.ringTimer);
+      this.ringTimer = null;
     }
-    await this.teardownSession("stopped");
+    const session = this.session;
+    this.detachSession();
+    await session?.close().catch(() => undefined);
     await this.factory.shutdown().catch(() => undefined);
   }
 
   // ------------------------------------------------------------------
-  // 转发面
+  // 转发面（fetchHttp / keepOpen 隧道）
   // ------------------------------------------------------------------
 
   forward(input: ForwardInput, handlers: ForwardHandlers): ForwardHandle {
-    if (this.state !== "direct" && this.state !== "relay") {
-      throw new OfflineError(this.state === "key-all-invalid" ? "key_all_invalid" : "provider_offline", this.alias);
+    if (this.state === "key-all-invalid") {
+      throw new OfflineError("key_all_invalid", this.alias);
     }
     const session = this.session;
-    if (session === null || session.dead) {
+    // dead/closed（终态）才快速失败；recovering 期间在途/新请求挂起等续传
+    // （fetchHttp/bodyNext 在内核侧挂起，auto-resume 后原序继续）。
+    if (session === null || this.sessionPhase === "dead" || this.sessionPhase === "closed") {
       throw new OfflineError("provider_offline", this.alias);
     }
-    const id = session.allocId();
-    this.inflight.set(id, handlers);
     this.servedCount++;
-    const header: Record<string, unknown> = {
-      v: 1,
-      id,
-      serviceId: input.serviceId,
-      method: input.method,
-      path: input.path,
-      bodyLen: input.body.length,
-    };
-    if (input.headers !== undefined) header.headers = input.headers;
-    if (input.contentType !== undefined) header.contentType = input.contentType;
-    const plan = splitBody(input.body);
-    void (async () => {
+    const id = `r${++this.reqSeq}`;
+    const headers: Array<{ name: string; value: string }> = [];
+    for (const [name, value] of Object.entries(input.headers ?? {})) headers.push({ name, value });
+    if (input.contentType !== undefined && input.contentType !== "") {
+      headers.push({ name: "content-type", value: input.contentType });
+    }
+    headers.push({ name: AIFLY_SERVICE_HEADER, value: input.serviceId });
+    let aborted = false;
+    let tunnel: FetchHttpResponseLike | null = null;
+    const pump = (async () => {
       try {
-        await session.send(FRAME_TYPE.REQ, header, plan.firstInline ? plan.inlineBody : undefined);
-        for (const chunk of plan.chunks) {
-          await session.send(FRAME_TYPE.REQ_BODY, { id, seq: chunk.seq, end: chunk.end }, chunk.data);
+        const resp = await session.fetchHttp({
+          method: input.method,
+          path: input.path,
+          headers,
+          ...(input.body.length > 0 ? { body: [input.body] } : {}),
+          ...(input.upgrade ? { keepOpen: true } : {}),
+        });
+        if (aborted) return;
+        tunnel = resp;
+        const contentType = headerValue(resp.headers, "content-type") ?? "";
+        const picked = pickWhitelist(resp.headers);
+        const meta: RespMetaHeader = { id, status: resp.status, contentType, ...(picked !== undefined ? { headers: picked } : {}) };
+        if (input.upgrade && resp.status === 101) {
+          handlers.onMeta(meta);
+          for (;;) {
+            const c = await resp.bodyNext();
+            if (aborted) return;
+            if (c === null) break;
+            handlers.onWsData(new Uint8Array(c));
+          }
+          if (aborted) return;
+          const closeRaw = headerValue(resp.headers, AIFLY_WS_CLOSE_HEADER);
+          const code = closeRaw !== undefined ? Number(closeRaw) : undefined;
+          handlers.onWsClose(code !== undefined && Number.isInteger(code) && code >= 1000 && code <= 65535 ? code : undefined);
+          handlers.onTerminate({ source: "peer" });
+          return;
         }
+        handlers.onMeta(meta);
+        for (;;) {
+          const c = await resp.bodyNext();
+          if (aborted) return;
+          if (c === null) break;
+          handlers.onChunk(new Uint8Array(c));
+        }
+        if (aborted) return;
+        handlers.onEnd();
+        handlers.onTerminate({ source: "peer" });
       } catch {
-        // 发送失败：连接已坏（断连路径会全量终结）；兜底本地终结避免悬挂
-        if (this.inflight.has(id)) {
-          this.inflight.delete(id);
-          session.terminal(id);
-          handlers.onError({ id, code: "internal", message: "wire send failed" });
-          handlers.onTerminate({ source: "local" });
-        }
+        if (aborted) return;
+        // 确定错误（会话终态终结在途请求 / 内核响应头等待超时）：504 语义。
+        // code 超出 wire 帧枚举（帧族退役；shared 映射表按字符串查表）。
+        handlers.onError({ id, code: "session_lost", message: "provider session ended" } as unknown as ErrorHeader);
+        handlers.onTerminate({ source: "disconnected", reason: "session ended" });
       }
     })();
+    void pump.catch(() => undefined);
     return {
       id,
-      abort: (opts?: { ws?: boolean; code?: number }) => this.abortRequest(id, opts),
-      sendData: (bytes: Uint8Array) => this.sendWsData(id, session, bytes),
+      abort: () => {
+        // 本地中止：停止回调投递（本阶段 NAPI 无 per-request cancel——内核侧
+        // journal 上限有界；SDK 补齐后接流取消）。
+        aborted = true;
+      },
+      sendData: (bytes: Uint8Array) => {
+        if (aborted || tunnel === null || tunnel.sendTunnel === undefined) return Promise.resolve();
+        return tunnel.sendTunnel(Buffer.from(bytes)).catch(() => undefined);
+      },
     };
-  }
-
-  private abortRequest(id: string, opts?: { ws?: boolean; code?: number }): void {
-    const session = this.session;
-    const handlers = this.inflight.get(id);
-    this.inflight.delete(id);
-    this.dataUpSeq.delete(id);
-    if (session === null || session.dead) return;
-    if (opts?.ws === true) {
-      const header: Record<string, unknown> = { id };
-      if (opts.code !== undefined) header.code = opts.code;
-      // CLOSE 是终结帧（send 内部登记 terminal → onTerminate → gateway 清理）
-      void session.send(FRAME_TYPE.CLOSE, header).catch(() => undefined);
-    } else {
-      void session.send(FRAME_TYPE.ABORT, { id }).catch(() => undefined);
-      session.terminal(id);
-    }
-    if (handlers !== undefined) handlers.onTerminate({ source: "local" });
-  }
-
-  private sendWsData(id: string, session: WireSession, bytes: Uint8Array): Promise<void> {
-    if (!this.inflight.has(id)) return Promise.resolve(); // 已终结：静默丢弃
-    const seq = this.dataUpSeq.get(id) ?? 0;
-    this.dataUpSeq.set(id, seq + 1);
-    return session.send(FRAME_TYPE.DATA_UP, { v: 1, id, seq }, bytes);
   }
 
   // ------------------------------------------------------------------
-  // 连接 / AUTH / 重连
+  // 会话生命周期（openSession / onState 驱动 / dead 重建）
   // ------------------------------------------------------------------
 
   private setState(next: ProviderStateKind): void {
@@ -446,291 +514,296 @@ export class ProviderConnection implements ProviderRoute {
     this.onStateChange(this);
   }
 
-  private async attemptConnect(): Promise<void> {
-    if (this.stopped || this.connecting || this.session !== null) return;
-    this.connecting = true;
+  private detachSession(): void {
+    this.offState?.();
+    this.offState = null;
+    this.session = null;
+    this.sessionPhase = "closed";
+    this.authedSessionId = null;
+  }
+
+  private async ensureSession(): Promise<void> {
+    if (this.stopped || this.ensuringSession || this.session !== null) return;
+    this.ensuringSession = true;
     try {
-      const raw = await this.factory.openSession();
+      this.fabric ??= await this.factory.open();
+      const fabric = this.fabric;
+      const session = await fabric.openSession(this.endpointId);
       if (this.stopped) {
-        await raw.teardown().catch(() => undefined);
+        await session.close().catch(() => undefined);
         return;
       }
-      this.intentionalTeardown = false;
-      this.rawSession = raw;
-      this.session = new WireSession({
-        role: "consumer",
-        transport: raw.transport,
-        peerEndpointId: this.endpointId, // onCatalogError 的 providerId 来源（对端身份）
-        hooks: {
-          onFrame: (f) => this.handleFrame(f),
-          onCatalogError: (providerId, message) => this.handleCatalogError(providerId, message),
-          onPoison: (info) => this.handlePoison(info.id),
-          onIdleTimeout: (id) => this.handleIdleTimeout(id),
-          onDisconnect: (reason) => this.handleDisconnect(reason),
-          onTerminate: (id, cause) => this.handleTerminate(id, cause),
-        },
-      });
-      raw.onPathChange?.((status) => {
-        if (this.state === "direct" || this.state === "relay") {
-          this.setState(status === "relay" ? "relay" : status === "direct" ? "direct" : this.state);
+      this.session = session;
+      this.offState = session.onState((s) => this.handleState(s));
+      this.offPathEvent ??= fabric.on((event) => {
+        if (
+          event.type === "path-changed" &&
+          event.endpointId === this.endpointId &&
+          (this.state === "direct" || this.state === "relay")
+        ) {
+          this.setState(event.status === "relay" ? "relay" : event.status === "direct" ? "direct" : this.state);
         }
       });
-      this.setState("connected-unauthed");
-      if (this.ring.keys.length > 0) {
-        await this.session.send(FRAME_TYPE.AUTH, { v: 1, keys: [...this.keys] });
-      }
-      // 钥环为空（join-only）：保持 connected-unauthed，不发起注定失败的 AUTH
+      const initial = await session.state().catch(() => undefined);
+      this.sessionPhase = initial?.phase ?? "active";
+      this.handleState({ peerId: session.peerId, sessionId: session.sessionId, phase: this.sessionPhase });
     } catch (err) {
       this.lastError = (err as Error).message;
       this.setState("offline");
       this.scheduleRetry();
     } finally {
-      this.connecting = false;
+      this.ensuringSession = false;
     }
   }
 
   private scheduleRetry(): void {
-    if (this.stopped) return;
-    if (this.retryTimer !== null) return;
+    if (this.stopped || this.retryTimer !== null) return;
     const delay = fullJitterDelayMs(this.attempt, this.backoff);
     this.attempt++;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
-      void this.attemptConnect();
+      void this.ensureSession();
     }, delay);
   }
 
-  private async teardownSession(reason: string): Promise<void> {
+  private handleState(s: SessionStateLike): void {
     const session = this.session;
-    const raw = this.rawSession;
-    this.session = null;
-    this.rawSession = null;
-    if (session !== null && !session.dead) session.dispose(reason);
-    if (raw !== null) await raw.teardown().catch(() => undefined);
-  }
-
-  /** 主动重建（毒化/复核失败路径）：拆会话后立即重连（不经退避首发，但保留 attempt 防毒化热循环）。 */
-  private async rebuild(reason: string): Promise<void> {
-    if (this.stopped) return;
-    if (this.state !== "key-all-invalid") this.setState("offline"); // 拆除期间如实呈现离线
-    this.intentionalTeardown = true;
-    await this.teardownSession(reason);
-    void this.attemptConnect();
-  }
-
-  // ------------------------------------------------------------------
-  // WireSession hooks
-  // ------------------------------------------------------------------
-
-  private handleFrame(frame: InboundFrame): void {
-    switch (frame.type) {
-      case FRAME_TYPE.AUTH_OK:
-        this.handleAuthOk(frame.header, frame.catalogError);
+    if (session === null || s.sessionId !== session.sessionId) return; // 旧会话尾事件
+    this.sessionPhase = s.phase;
+    switch (s.phase) {
+      case "negotiating":
+        this.setState("not-connected");
         return;
-      case FRAME_TYPE.AUTH_ERR:
-        this.handleAuthErr();
-        return;
-      case FRAME_TYPE.RESP_META: {
-        this.inflight.get(frame.header.id)?.onMeta(frame.header);
-        return;
-      }
-      case FRAME_TYPE.RESP_CHUNK: {
-        this.inflight.get(frame.header.id)?.onChunk(frame.body);
-        return;
-      }
-      case FRAME_TYPE.RESP_END: {
-        const h = this.inflight.get(frame.header.id);
-        if (h !== undefined) {
-          this.inflight.delete(frame.header.id);
-          this.dataUpSeq.delete(frame.header.id);
-          h.onEnd();
-          h.onTerminate({ source: "peer", frameType: frame.type });
-        }
-        return;
-      }
-      case FRAME_TYPE.ERROR: {
-        // ERROR.id 可选（无 id 时无从路由到具体请求，交由上层连接级处置）
-        const errId = frame.header.id;
-        if (errId !== undefined) {
-          const h = this.inflight.get(errId);
-          if (h !== undefined) {
-            this.inflight.delete(errId);
-            this.dataUpSeq.delete(errId);
-            h.onError(frame.header);
-            h.onTerminate({ source: "peer", frameType: frame.type });
-          }
-        }
-        return;
-      }
-      case FRAME_TYPE.DATA_DOWN: {
-        this.inflight.get(frame.header.id)?.onWsData(frame.body);
-        return;
-      }
-      case FRAME_TYPE.CLOSE: {
-        const h = this.inflight.get(frame.header.id);
-        if (h !== undefined) {
-          this.inflight.delete(frame.header.id);
-          this.dataUpSeq.delete(frame.header.id);
-          h.onWsClose(frame.header.code);
-          h.onTerminate({ source: "peer", frameType: frame.type });
-        }
-        return;
-      }
-      case FRAME_TYPE.PING:
-        return; // 活度信号（mux 空闲计时已重置）；无业务动作
-      default:
-        return; // ABORT（对端不发）/AUTH 族已处理；方向违规帧 mux 已静默丢弃
-    }
-  }
-
-  /**
-   * 目录同步失败（AUTH_OK 二阶段 detail 投影解析失败，mux onCatalogError 路径）：
-   * 保留既有服务视图与映射不动、记录本地错误态（status.lastError 呈现 + 通知
-   * 通道回调）；AUTH 交换本身已成功（会话保持 authed），不影响其它提供者。
-   */
-  private handleCatalogError(providerId: string, message: string): void {
-    this.lastError = message;
-    this.onCatalogError(providerId, message);
-  }
-
-  private handleAuthOk(header: AuthOkHeader, catalogError?: string): void {
-    const session = this.session;
-    if (session === null) return;
-    session.markAuthed();
-    this.attempt = 0; // AUTH 通过：退避窗口复位
-    if (catalogError === undefined) {
-      // 任一次成功的目录同步覆盖视图并清除错误态。
-      this.lastError = undefined;
-      // 目录全量替换（初次与 refresh 同构）+ 密钥元数据回填 + 持久化
-      const services: ServiceEntry[] = [];
-      const seen = new Set<string>();
-      for (const g of header.groups) {
-        for (const s of g.services) {
-          if (!seen.has(s.serviceId)) {
-            seen.add(s.serviceId);
-            // detail 二阶段已在 mux 严格复核；此处复解析仅恢复类型（防御缺席）。
-            let detail: ServiceDetail | undefined;
-            if (s.detail !== undefined) {
-              const parsedDetail = SERVICE_DETAIL_SCHEMA.safeParse(s.detail);
-              if (parsedDetail.success) detail = parsedDetail.data;
-            }
-            services.push({
-              serviceId: s.serviceId,
-              name: s.name,
-              match: s.match,
-              defaultPort: s.defaultPort,
-              ...(detail !== undefined ? { detail } : {}),
-            });
-          }
-        }
-      }
-      // 磁盘侧 actualPorts 可能已被引擎监听回写更新（端口自动错开）——目录同步
-      // 若用构造期内存快照整体落盘会覆写清空；应用前先取磁盘现值
-      const persisted = loadKeyring(this.root, this.ring.endpointId);
-      const base = persisted === undefined ? this.ring : { ...this.ring, actualPorts: persisted.actualPorts };
-      let ring = applyCatalog(base, { alias: header.alias, relayUrls: header.relayUrls, services });
-      ring = reconcileKeyMetadata(ring, header.groups.map((g) => ({ keyId: g.keyId, group: g.group })));
-      this.ring = ring;
-      this.alias = ring.alias;
-      saveKeyring(this.root, ring);
-      this.onCatalog(this, ring);
-    }
-    // 路径类型落地（AUTH 之前先置直接可用态，随后按 linkStatus 修正 direct/relay）；
-    // 目录同步失败时同样落地——AUTH 已通过、旧视图与映射继续服务。
-    this.setState("direct");
-    void this.rawSession
-      ?.linkStatus()
-      .then((s) => {
-        if (s === "relay") this.setState("relay");
-        else if (s === "direct") this.setState("direct");
-      })
-      .catch(() => undefined);
-  }
-
-  private handleAuthErr(): void {
-    // 全部密钥被拒：不重试 AUTH（单次即断语义），等待 key add（环变化触发恢复）
-    this.lastError = "all keys rejected by provider";
-    this.setState("key-all-invalid");
-    this.intentionalTeardown = true;
-    void this.teardownSession("auth-err");
-  }
-
-  private handlePoison(id: string): void {
-    // protocol_seq：该 id 已由 mux 终结（onTerminate 路由），此处重建整个连接
-    void id;
-    void this.rebuild("protocol-seq");
-  }
-
-  private handleIdleTimeout(id: string): void {
-    const session = this.session;
-    const handlers = this.inflight.get(id);
-    this.inflight.delete(id);
-    this.dataUpSeq.delete(id);
-    if (session !== null && !session.dead) {
-      void session.send(FRAME_TYPE.ABORT, { id }).catch(() => undefined);
-      session.terminal(id);
-    }
-    handlers?.onTerminate({ source: "local" });
-  }
-
-  private handleDisconnect(reason: string | undefined): void {
-    const handlers = [...this.inflight.entries()];
-    this.inflight.clear();
-    this.dataUpSeq.clear();
-    this.session = null;
-    this.rawSession = null;
-    const cause: TerminateCause = reason === undefined ? { source: "disconnected" } : { source: "disconnected", reason };
-    for (const [, h] of handlers) h.onTerminate(cause);
-    if (this.stopped || this.intentionalTeardown) {
-      this.intentionalTeardown = false; // rebuild/stop/auth-err 主动拆除：状态由调用方接管
-      return;
-    }
-    this.lastError = reason ?? "connection lost";
-    this.setState("offline");
-    this.scheduleRetry();
-  }
-
-  private handleTerminate(id: string, cause: TerminateCause): void {
-    // 注意次序：mux 对对端终结帧先触发 onTerminate、后 deliver 帧本体——peer 情况必须
-    // 留给 handleFrame（RESP_END/ERROR/CLOSE）路由并清理，此处只处置本地/断连类终结。
-    if (cause.source === "peer") return;
-    const handlers = this.inflight.get(id);
-    if (handlers === undefined) return;
-    this.inflight.delete(id);
-    this.dataUpSeq.delete(id);
-    handlers.onTerminate(cause);
-  }
-
-  // ------------------------------------------------------------------
-  // 30s 低频复核（事件丢失兜底）+ key_all_invalid 环变化监视
-  // ------------------------------------------------------------------
-
-  private async poll(): Promise<void> {
-    if (this.stopped) return;
-    if (this.state === "key-all-invalid") {
-      // AUTH 全拒后的恢复路径：钥环文件变化（另一进程 key add）→ 重连重 AUTH
-      const fresh = this.reloadRing(this.endpointId);
-      if (fresh === undefined) return;
-      const snapshot = JSON.stringify(fresh.keys.map((k) => k.key));
-      if (snapshot !== this.lastKeySnapshot) {
-        this.ring = fresh;
-        this.alias = fresh.alias;
-        this.lastKeySnapshot = snapshot;
+      case "recovering":
+        // 瞬断不直达：在途/新请求挂起（内核 auto-resume）；状态如实呈现 offline。
+        // 标记本会话经历断线——恢复后重呈 AUTH 复核授权（提供端撤钥/目录变更
+        // 经此收敛到 key_all_invalid / refresh；正常瞬断为一次廉价重校验）。
+        this.sessionResumed = true;
         this.setState("offline");
-        void this.attemptConnect();
+        return;
+      case "active":
+        this.attempt = 0;
+        if (this.authedSessionId === session.sessionId || this.ring.keys.length === 0) {
+          if (this.ring.keys.length === 0) {
+            this.setState("connected-unauthed"); // 空钥环（join-only）：不发起 AUTH
+          } else if (this.sessionResumed) {
+            // 断线恢复：重呈 AUTH（提供端缓存命中即 200；全撤 → 403 key_all_invalid）
+            this.sessionResumed = false;
+            void this.runAuth(session);
+          } else {
+            void this.projectPath();
+            this.restartWatch(session);
+          }
+          return;
+        }
+        this.setState("connected-unauthed");
+        void this.runAuth(session);
+        return;
+      case "dead":
+      case "closed": {
+        // 终态：在途请求由 bodyNext 抛错终结（forward pump 已映射）；重建会话
+        //（provider 重启 REQUEST_STATE_LOST / 恢复窗口耗尽）并重新 AUTH。
+        const wasAuthed = this.authedSessionId !== null;
+        this.offState?.();
+        this.offState = null;
+        this.session = null;
+        this.sessionPhase = s.phase;
+        this.authedSessionId = null;
+        this.sessionResumed = false;
+        this.watchGen++;
+        if (wasAuthed) this.lastError = `session ${s.phase}`;
+        // recovering 已置 offline——终态离线语义升级（瞬断→终态，新请求 503），
+        // 显式补发通知（setState 对同值 no-op）。
+        if (this.state === "offline") this.onStateChange(this);
+        this.setState("offline");
+        if (!this.stopped) void this.ensureSession();
+        return;
       }
+      default:
+        return;
+    }
+  }
+
+  /** active 后路径投影（continuitySnapshot.path → direct/relay；缺省 direct）。 */
+  private async projectPath(): Promise<void> {
+    const fabric = this.fabric;
+    if (fabric === null) return;
+    try {
+      const snap = await fabric.continuitySnapshot(this.endpointId);
+      if (snap.path === "relay") this.setState("relay");
+      else this.setState("direct");
+    } catch {
+      this.setState("direct");
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // AUTH（HTTP 端点）与目录 watch
+  // ------------------------------------------------------------------
+
+  private async runAuth(session: SessionHandleLike): Promise<void> {
+    if (this.authInFlight !== null) return void (await this.authInFlight.catch(() => undefined));
+    const run = (async () => {
+      try {
+        const payload = Buffer.from(JSON.stringify({ v: 1, keys: [...this.keys] }));
+        const resp = await session.fetchHttp({
+          method: "POST",
+          path: AIFLY_AUTH_PATH,
+          headers: [{ name: "content-type", value: "application/json" }],
+          body: [payload],
+        });
+        const body = await readAllBody(resp);
+        if (resp.status === 403) {
+          // 全拒：不重建会话（会话是内核资产）；等待 key add（环变化触发恢复）。
+          this.lastError = "all keys rejected by provider";
+          this.setState("key-all-invalid");
+          return;
+        }
+        if (resp.status !== 200) {
+          this.lastError = `auth endpoint responded ${resp.status}`;
+          this.setState("connected-unauthed");
+          return;
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(body.toString("utf8"));
+        } catch {
+          this.lastError = "auth response body is not JSON";
+          this.setState("connected-unauthed");
+          return;
+        }
+        const header = AUTH_OK_HEADER_SCHEMA.safeParse(parsed);
+        if (!header.success) {
+          this.lastError = "auth response schema rejected";
+          this.setState("connected-unauthed");
+          return;
+        }
+        // 二阶段目录解析失败：AUTH 已通过（会话 authed）、保留旧视图（既有语义）。
+        this.authedSessionId = session.sessionId;
+        this.lastError = undefined;
+        this.applyCatalog(header.data);
+        await this.projectPath();
+        const seq = Number(headerValue(resp.headers, "x-aifly-catalog-seq") ?? "0");
+        this.restartWatch(session, Number.isFinite(seq) ? seq : 0);
+      } catch (err) {
+        // AUTH 交换失败（会话瞬断/终态）：等下一次 active 转换重试。
+        this.lastError = `auth exchange failed: ${(err as Error).message}`;
+      }
+    })();
+    this.authInFlight = run;
+    try {
+      await run;
+    } finally {
+      this.authInFlight = null;
+    }
+  }
+
+  /** 目录刷新长轮询（会话替换/停止时旧循环退出）。 */
+  private restartWatch(session: SessionHandleLike, since = 0): void {
+    if (this.stopped || this.ring.keys.length === 0) return;
+    this.watchGen++;
+    const gen = this.watchGen;
+    let seq = since;
+    void (async () => {
+      while (
+        !this.stopped &&
+        gen === this.watchGen &&
+        this.session === session &&
+        this.sessionPhase === "active"
+      ) {
+        try {
+          const resp = await session.fetchHttp({
+            method: "GET",
+            path: `${AIFLY_WATCH_PATH}?since=${seq}`,
+          });
+          if (resp.status === 204) {
+            const cur = Number(headerValue(resp.headers, "x-aifly-catalog-seq") ?? "0");
+            if (Number.isFinite(cur)) seq = cur;
+            continue;
+          }
+          if (resp.status === 401) {
+            // 授权失效信号（提供端撤钥后 watch 等待者被 401 唤醒）：立即重呈
+            // AUTH 复核——全拒 → key_all_invalid；误报 → 200 刷新视图续跑。
+            void this.runAuth(session);
+            return;
+          }
+          if (resp.status !== 200) return; // 其他异常：退出循环（active 转换重启）
+          const body = await readAllBody(resp);
+          const cur = Number(headerValue(resp.headers, "x-aifly-catalog-seq") ?? "0");
+          if (Number.isFinite(cur)) seq = cur;
+          const header = AUTH_OK_HEADER_SCHEMA.safeParse(JSON.parse(body.toString("utf8")));
+          if (header.success) this.applyCatalog(header.data);
+        } catch {
+          return; // 会话终态/瞬断：由 onState 驱动重启
+        }
+      }
+    })();
+  }
+
+  /** AUTH_OK 目录全量替换（初次与 refresh 同构）+ 密钥元数据回填 + 持久化。 */
+  private applyCatalog(header: AuthOkHeader): void {
+    const services: ServiceEntry[] = [];
+    const seen = new Set<string>();
+    let catalogError: string | undefined;
+    for (const g of header.groups) {
+      for (const s of g.services) {
+        if (seen.has(s.serviceId)) continue;
+        seen.add(s.serviceId);
+        // detail 二阶段严格解析（SERVICE_DETAIL_SCHEMA；失败走 onCatalogError，
+        // 保留旧视图——旧 mux 二阶段语义平移）。
+        let detail: ServiceDetail | undefined;
+        if (s.detail !== undefined) {
+          const parsedDetail = SERVICE_DETAIL_SCHEMA.safeParse(s.detail);
+          if (parsedDetail.success) detail = parsedDetail.data;
+          else catalogError = `catalog detail projection rejected for service ${s.serviceId}`;
+        }
+        services.push({
+          serviceId: s.serviceId,
+          name: s.name,
+          match: s.match,
+          defaultPort: s.defaultPort,
+          ...(detail !== undefined ? { detail } : {}),
+        });
+      }
+    }
+    if (catalogError !== undefined) {
+      this.lastError = catalogError;
+      this.onCatalogError(this.endpointId, catalogError);
       return;
     }
-    if (this.rawSession === null || this.session === null) return;
-    if (this.state !== "direct" && this.state !== "relay" && this.state !== "connected-unauthed") return;
-    try {
-      const s = await this.rawSession.linkStatus();
-      if (s === "unknown" && !this.stopped && this.session !== null) {
-        // 事件丢失兜底：连接事实已不存在 → 重建
-        await this.rebuild("link-status-unknown");
+    this.lastError = undefined;
+    // 磁盘侧 actualPorts 可能已被引擎监听回写更新（端口自动错开）——目录同步
+    // 若用构造期内存快照整体落盘会覆写清空；应用前先取磁盘现值
+    const persisted = loadKeyring(this.root, this.ring.endpointId);
+    const base = persisted === undefined ? this.ring : { ...this.ring, actualPorts: persisted.actualPorts };
+    let ring = applyCatalog(base, { alias: header.alias, relayUrls: header.relayUrls, services });
+    ring = reconcileKeyMetadata(ring, header.groups.map((g) => ({ keyId: g.keyId, group: g.group })));
+    this.ring = ring;
+    this.alias = ring.alias;
+    saveKeyring(this.root, ring);
+    this.onCatalog(this, ring);
+  }
+
+  /** 磁盘钥环复核（key_all_invalid 等待 key add 的恢复路径）。 */
+  private pollRing(): void {
+    if (this.stopped) return;
+    if (this.state !== "key-all-invalid" && this.state !== "offline") return;
+    const fresh = this.reloadRing(this.endpointId);
+    if (fresh === undefined) return;
+    const snapshot = JSON.stringify(fresh.keys.map((k) => k.key));
+    if (snapshot !== this.lastKeySnapshot) {
+      this.ring = fresh;
+      this.alias = fresh.alias;
+      this.lastKeySnapshot = snapshot;
+      if (this.state === "key-all-invalid") {
+        this.setState("offline"); // 复核期如实呈现；重 AUTH 成功即恢复
+        const session = this.session;
+        if (session !== null && this.sessionPhase === "active") {
+          void this.runAuth(session); // 会话仍在（403 不断会话）：重呈新钥
+        } else {
+          void this.ensureSession();
+        }
       }
-    } catch {
-      // linkStatus 查询失败不作为断连依据（可能瞬时）
     }
   }
 
@@ -741,16 +814,28 @@ export class ProviderConnection implements ProviderRoute {
     const snapshot = JSON.stringify(ring.keys.map((k) => k.key));
     const changed = snapshot !== this.lastKeySnapshot;
     this.lastKeySnapshot = snapshot;
-    if (changed && this.state === "key-all-invalid") {
-      this.setState("offline");
-      void this.attemptConnect();
-    } else if (changed && (this.state === "direct" || this.state === "relay") && this.session !== null) {
-      // 在线追加密钥：重复 AUTH 以最后一次为准（重授权语义）
-      void this.session
-        .send(FRAME_TYPE.AUTH, { v: 1, keys: [...this.keys] })
-        .catch(() => undefined);
+    if (!changed) return;
+    const session = this.session;
+    if (session !== null && this.sessionPhase === "active") {
+      // 在线追加密钥/撤后重呈：重复 AUTH 以最后一次为准（重授权语义）。
+      void this.runAuth(session);
+      return;
+    }
+    if (session === null && !this.stopped) {
+      void this.ensureSession();
     }
   }
+}
+
+/** 读至 EOF 聚合（pull-first bodyNext）。 */
+async function readAllBody(resp: FetchHttpResponseLike): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for (;;) {
+    const c = await resp.bodyNext();
+    if (c === null) break;
+    chunks.push(c);
+  }
+  return Buffer.concat(chunks);
 }
 
 // ---------------------------------------------------------------------------
@@ -761,9 +846,9 @@ export interface ProviderManagerOptions {
   rings: readonly Keyring[];
   /** consumers 根目录（目录刷新落盘）。 */
   root: string;
-  sessionFactory: (ring: Keyring) => ProviderTransportSessionFactory;
+  sessionFactory: (ring: Keyring) => ProviderSessionFactory;
   backoff?: BackoffOpts;
-  pollIntervalMs?: number;
+  ringPollMs?: number;
   onCatalog?: (providerId: string, alias: string, services: readonly ServiceEntry[], ports: Readonly<Record<string, number>>) => void;
   /** 目录同步失败通知（AUTH_OK 二阶段 detail 投影解析失败；UI 通知通道入口）。 */
   onCatalogError?: (providerId: string, message: string) => void;
@@ -780,7 +865,7 @@ export class ProviderManager {
         root: opts.root,
         factory: opts.sessionFactory(ring),
         ...(opts.backoff !== undefined ? { backoff: opts.backoff } : {}),
-        ...(opts.pollIntervalMs !== undefined ? { pollIntervalMs: opts.pollIntervalMs } : {}),
+        ...(opts.ringPollMs !== undefined ? { ringPollMs: opts.ringPollMs } : {}),
         onCatalog: (conn, updated) => {
           // 停用服务不进入网关物化视图（service-lifecycle：目录同步不复活停用服务；
           // 环级停用整环不物化）

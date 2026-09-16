@@ -1,42 +1,46 @@
 // WebSocket 升级通道：识别 WS 升级请求（由 upstream.ts 分流）-> `ws` 客户端对重写后
-// 的上游 URL 执行握手 -> 101 经 RESP_META（sec-websocket-accept 白名单透传）->
-// DATA_UP / DATA_DOWN 双向中继 -> CLOSE 终结。
+// 的上游 URL 执行握手 -> 101 经 meta 投影（sec-websocket-accept 白名单透传）->
+// 隧道下行字节 / 上行路由双向中继 -> 关闭终结。
+// opendweb-kernel-migration：承载面自 DATA_UP/DATA_DOWN/CLOSE 帧改为 ResponseSink
+// （wsData/wsClose/meta/error）+ 引擎侧隧道上行句柄（WsRelayHandle.pushUp 消费
+// keepOpen 隧道字节）；报文级中继语义不变（每条 ws message -> 一段隧道字节；
+// >256KiB 才拆分，超限报文的消息边界有损，v1 已知限制）。本阶段 NAPI 承载面为
+// 静态 chunks：下行报文由载体聚齐后在握手/会话终结时一次性 resolve（见
+// provider/engine.ts 载体与任务报告的 SDK 限制记录）。
 // hooks-lifecycle 约束：WS 共享 rewrite 出站 plan——① auth 与 ② headers 阶段对
 // WS 生效（头链在 buildUpstreamRequest 内完成）；③ onRequest 接管**不适用于 WS**
 // （Owner Non-goal 裁决：出站仍原生 WebSocket，不进 request 阶段）；④ onResponse
-// 同样不进 WS 路径（RESP_META(101) 由握手产物直接下发）。
+// 同样不进 WS 路径（meta(101) 由握手产物直接下发）。
 // 正交意图（本文件不实现）：
 // - HTTP 普通转发（upstream.ts）；
 // - 授权/限额（引擎）。
 // 实现裁决（ws 库行为约束，见任务报告）：
-// - ws 客户端总是生成自己的 Sec-WebSocket-Key 并按该 key 校验 accept，因此帧内
+// - ws 客户端总是生成自己的 Sec-WebSocket-Key 并按该 key 校验 accept，因此
 //   key 不透传；上游真实 sec-websocket-accept 从 'upgrade' 事件捕获并经白名单下发；
-// - sec-websocket-extensions 不透传（ws 库按未协商压缩处理，保证 DATA 字节为
+// - sec-websocket-extensions 不透传（ws 库按未协商压缩处理，保证隧道字节为
 //   未压缩 payload；压缩由使用方本地 WS 服务与其客户端自行协商）；
-// - 报文级中继：每条 ws message -> 一条 DATA_DOWN（>256KiB 才拆分，超限报文的
-//   消息边界有损，v1 已知限制）；每条 DATA_UP -> 一次 ws.send(binary)。
 
 import type { IncomingMessage } from "node:http";
 import WebSocket from "ws";
-import type { ErrorCodeValue } from "../wire/frames.ts";
-import { ERROR_CODE, FRAME_TYPE } from "../wire/frames.ts";
-import type { WireSession } from "../wire/mux.ts";
-import {
-  abortCodeOf,
-  pickResponseWhitelist,
-  splitBodyChunks,
-  type ForwardCtx,
-  type UpstreamTimeouts,
+import type { ErrorCodeValue, ErrorHeader, RespMetaHeader } from "../wire/frames.ts";
+import { ERROR_CODE } from "../wire/frames.ts";
+import type {
+  ResponseSink,
+  ForwardCtx,
+  UpstreamTimeouts,
 } from "./upstream.ts";
+import { abortCodeOf, pickResponseWhitelist, splitBodyChunks } from "./upstream.ts";
 import type { UpstreamPlan } from "./rewrite.ts";
 
-/** 引擎侧 DATA_UP / CLOSE 路由句柄。 */
+/** 引擎侧隧道上行路由句柄（keepOpen 隧道字节 → 上游）。 */
 export interface WsRelayHandle {
-  /** DATA_UP 正文 -> 上游（二进制透传，不解析帧）。 */
+  /** 隧道上行字节 -> 上游（二进制透传，不解析帧）。 */
   pushUp(data: Uint8Array): void;
-  /** 使用方发来 CLOSE：本地终结，不再回帧（id 已终结）。 */
+  /** 使用方关闭隧道：本地终结，不再回帧（请求已终结）。
+   *  语义承接旧 CLOSE 帧（本阶段 NAPI 无 per-request cancel 通道——客户端侧
+   *  隧道 EOF 后由载体收尾；此处保留给引擎本地收尾路径）。 */
   closeByPeer(): void;
-  /** 引擎侧中止（ABORT 回 ERROR(code)；断连等 reply=false 静默）。 */
+  /** 引擎侧中止（错误投影；本地收尾静默）。 */
   abort(code: ErrorCodeValue, reply: boolean): void;
 }
 
@@ -56,15 +60,14 @@ export async function forwardWsUpgrade(
   plan: UpstreamPlan,
   t: UpstreamTimeouts,
 ): Promise<void> {
-  const { session, id } = ctx;
-  let settled = false; // 终结帧已发（或本地终结）
+  const { sink, id } = ctx;
+  let settled = false; // 终结投影已发（或本地终结）
   let opened = false;
-  let downSeq = 0;
   let bytes = 0;
   let acceptHeader: string | null = null;
   /** 完成回调（await 完成Promise 的 resolve；close 与非 101 中继任一触发）。 */
   let completion: (() => void) | undefined;
-  // 出站发送链：保证 DATA_DOWN 拆片与控制帧的本地顺序（wire 层另有 per-id 保序）。
+  // 出站投影链：保证下行拆片与控制投影的本地顺序（载体侧另有字节序保证）。
   let sendChain: Promise<void> = Promise.resolve();
 
   const recordUsage = (status: number | string): void => {
@@ -73,29 +76,19 @@ export async function forwardWsUpgrade(
   const enqueue = (task: () => Promise<void>): void => {
     sendChain = sendChain.then(task).catch(() => undefined);
   };
-  const sendErrorFrame = (code: ErrorCodeValue, message: string): void => {
+  const sendErrorProjection = (code: ErrorCodeValue, message: string): void => {
     if (settled) return;
     settled = true; // 调用即置位：'close' 事件可能先于入队任务执行（事件顺序竞态）
     enqueue(async () => {
       try {
-        await session.send(FRAME_TYPE.ERROR, { id, code, message });
+        await sink.error({ id, code, message } satisfies ErrorHeader);
       } catch {
-        // 连接已坏：关闭路径处置
+        // 承载面已坏：关闭路径处置
       }
     });
   };
 
-  // 首字节等待期语义同样适用（握手期）：挂起空闲计时 + 30s PING。
-  session.suspendProviderIdle(id);
-  const pingTimer =
-    t.pingMs > 0
-      ? setInterval(() => {
-          void session.send(FRAME_TYPE.PING, { id }).catch(() => undefined);
-        }, t.pingMs)
-      : null;
-
   const cleanup = (): void => {
-    if (pingTimer !== null) clearInterval(pingTimer);
     // 正常完成同样解除引擎 abort 监听（复核 R1-F7）：once 监听器在连接正常
     // 关闭路径不触发，不解除则随 ctx.signal 泄漏 relay 闭包。
     ctx.signal.removeEventListener("abort", onExternalAbort);
@@ -142,7 +135,7 @@ export async function forwardWsUpgrade(
       teardown();
     },
     abort(code, reply) {
-      if (reply) sendErrorFrame(code, `websocket relay aborted (${code})`);
+      if (reply) sendErrorProjection(code, `websocket relay aborted (${code})`);
       else settled = true;
       cleanup();
       teardown();
@@ -150,7 +143,7 @@ export async function forwardWsUpgrade(
   };
   ctx.onWsRelay?.(relay);
 
-  // 引擎信号（ABORT / idle / 断连）。
+  // 引擎信号（中止 / 断连）。
   const onExternalAbort = (): void => {
     const { code, reply } = abortCodeOf(ctx.signal);
     relay.abort(code, reply);
@@ -163,36 +156,33 @@ export async function forwardWsUpgrade(
     acceptHeader = headerGet(res.headers, "sec-websocket-accept");
   });
 
-  // 非 101：按普通 HTTP 响应原样回送（upstream_status 语义：RESP_META + 正文 + END）。
+  // 非 101：按普通 HTTP 响应原样回送（upstream_status 语义：meta + 正文 + end）。
   ws.on("unexpected-response", (_req, res) => {
     if (settled) return;
-    settled = true; // 占位终结权：随后的 close/error 不得再发终结帧
+    settled = true; // 占位终结权：随后的 close/error 不得再发终结投影
     const status = res.statusCode ?? 500;
     const contentType = headerGet(res.headers, "content-type") ?? "";
     enqueue(async () => {
-      const meta: Record<string, unknown> = { id, status, contentType };
+      const meta: RespMetaHeader = { id, status, contentType };
       const picked = pickResponseWhitelist((name) => headerGet(res.headers, name));
       if (picked !== undefined) meta.headers = picked;
       try {
-        await session.send(FRAME_TYPE.RESP_META, meta);
+        await sink.meta(meta);
       } catch {
         return;
       }
-      let seq = 0;
       res.on("data", (chunk: Buffer) => {
         bytes += chunk.length;
         enqueue(async () => {
           for (const piece of splitBodyChunks(new Uint8Array(chunk))) {
-            await session.waitOutboundQueue(id);
-            await session.send(FRAME_TYPE.RESP_CHUNK, { id, seq }, piece);
-            seq += 1;
+            await sink.chunk(piece);
           }
         });
       });
       res.on("end", () => {
         enqueue(async () => {
           try {
-            await session.send(FRAME_TYPE.RESP_END, { id });
+            await sink.end();
           } finally {
             completion?.();
           }
@@ -202,9 +192,9 @@ export async function forwardWsUpgrade(
       res.on("error", () => {
         enqueue(async () => {
           try {
-            await session.send(FRAME_TYPE.ERROR, { id, code: ERROR_CODE.upstream_unreachable, message: "upstream error response stream failed" });
+            await sink.error({ id, code: ERROR_CODE.upstream_unreachable, message: "upstream error response stream failed" });
           } catch {
-            // 连接已坏
+            // 承载面已坏
           } finally {
             completion?.();
           }
@@ -217,14 +207,14 @@ export async function forwardWsUpgrade(
   ws.on("open", () => {
     opened = true;
     enqueue(async () => {
-      const meta: Record<string, unknown> = { id, status: 101, contentType: "" };
+      const meta: RespMetaHeader = { id, status: 101, contentType: "" };
       if (acceptHeader !== null) meta.headers = { "sec-websocket-accept": acceptHeader };
       try {
-        await session.send(FRAME_TYPE.RESP_META, meta);
+        await sink.meta(meta);
       } catch {
         return;
       }
-      recordUsage(101); // 升级成功先记一次；关闭时补记 CLOSE 状态
+      recordUsage(101); // 升级成功先记一次；关闭时补记终结状态
     });
   });
 
@@ -237,21 +227,11 @@ export async function forwardWsUpgrade(
         : Buffer.from(data as ArrayBuffer);
     bytes += payload.length;
     const pieces = splitBodyChunks(new Uint8Array(payload));
-    const startSeq = downSeq;
-    downSeq += pieces.length;
     enqueue(async () => {
-      let seq = startSeq;
       for (const piece of pieces) {
-        await session.waitOutboundQueue(id); // DATA 同走 64 帧门控
-        await session.send(FRAME_TYPE.DATA_DOWN, { v: 1, id, seq }, piece);
-        seq += 1;
+        await sink.wsData?.(piece); // 隧道下行（载体聚齐；内核字节序保证）
       }
     });
-  });
-
-  // 上游 WS 自有 ping/pong 维持使用方侧活度（PONG 无法过桥，用 PING 帧重置对端计时）。
-  ws.on("ping", () => {
-    void session.send(FRAME_TYPE.PING, { id }).catch(() => undefined);
   });
 
   ws.on("close", (code) => {
@@ -259,12 +239,10 @@ export async function forwardWsUpgrade(
     if (settled) return;
     settled = true;
     enqueue(async () => {
-      const header: Record<string, unknown> = { id };
-      if (code >= 1000 && code <= 65535) header.code = code;
       try {
-        await session.send(FRAME_TYPE.CLOSE, header);
+        await sink.wsClose?.(code >= 1000 && code <= 65535 ? code : undefined);
       } catch {
-        // 连接已坏
+        // 承载面已坏
       }
       recordUsage(opened ? "ws-closed" : ERROR_CODE.upstream_unreachable);
     });
@@ -274,9 +252,9 @@ export async function forwardWsUpgrade(
     cleanup();
     if (settled) return;
     if (!opened) {
-      // 握手期传输失败（连接拒绝/超时/TLS 等）。注意顺序：sendErrorFrame 自身在
-      // 发送任务内置 settled（先置位会让该任务被守卫跳过）。
-      sendErrorFrame(ERROR_CODE.upstream_unreachable, `websocket handshake failed: ${err.message}`);
+      // 握手期传输失败（连接拒绝/超时/TLS 等）。注意顺序：sendErrorProjection 自身
+      // 在发送任务内置 settled（先置位会让该任务被守卫跳过）。
+      sendErrorProjection(ERROR_CODE.upstream_unreachable, `websocket handshake failed: ${err.message}`);
       recordUsage(ERROR_CODE.upstream_unreachable);
       return;
     }
@@ -284,9 +262,9 @@ export async function forwardWsUpgrade(
     settled = true;
     enqueue(async () => {
       try {
-        await session.send(FRAME_TYPE.CLOSE, { id, code: 1011 });
+        await sink.wsClose?.(1011);
       } catch {
-        // 连接已坏
+        // 承载面已坏
       }
       recordUsage("ws-error");
     });

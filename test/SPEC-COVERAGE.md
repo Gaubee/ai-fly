@@ -1,6 +1,14 @@
 # SPEC-COVERAGE — net-fly-core §5.3 逐 Scenario 覆盖自查
 
 对照 `openspec/changes/net-fly-core/specs/net-fly/{wire-protocol,provider,consumer,share-link}/spec.md`。
+
+> **opendweb-kernel-migration 注意（2026-09-16）**：本矩阵成文于 aifly envelope
+> wire 承载面（mux/codec 帧级测试自该迁移起已删除——REQ/RESP 帧族由 opendweb
+> 会话连续性内核承接；wire-protocol 增量见
+> `openspec/changes/opendweb-kernel-migration/specs/net-fly/wire-protocol/spec.md`）。
+> 帧级行（单帧/分片/缺断/交错）的承载面等价物为内核契约（SDK 侧
+> test/continuity-http）与 ai-fly e2e（test/e2e/kernel-migration.test.mjs）；
+> 本文件待 spec-sync（收尾任务）重写。
 标注口径：
 
 - **覆盖** = 有自动化断言（integration = `test/integration/engine.test.mjs`，e2e = `test/e2e/cli.test.mjs`，unit = `test/unit/**`（§2-4 车道交付））

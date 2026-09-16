@@ -1,17 +1,18 @@
-// HTTP 上游转发单测（内存 loopback 成对 WireSession + 本地 mock 上游）：元信息/正文
+// HTTP 上游转发单测（ResponseSink 收集假体 + 本地 mock 上游）：元信息/正文
 // 透传（含白名单头与 4xx 原样）、$env 注入、路径注入零上游请求（// 与 ..）、
 // 上游不可达、连接期超时（探测注入）、流停滞超时、ABORT 回 ERROR(aborted)、
-// 首字节等待期 PING 节奏、用量记录；hooks-lifecycle 4.2/4.3 出站归一层（③ 接管/
-// probeConnect 跳过/SSE 逐块/abort cancel 传播/③头投影、④ 变换、hook_failed 分族）。
+// 用量记录；hooks-lifecycle 4.2/4.3 出站归一层（③ 接管/probeConnect 跳过/SSE
+// 逐块/abort cancel 传播/③头投影、④ 变换、hook_failed 分族）。
+// opendweb-kernel-migration：承载面自 WireSession 帧改为 ResponseSink——假体把
+// sink 回调记录回帧形事件（type 用 frames.ts 类型号），断言面保持不变；旧
+// PING 节奏断言随 PING 活度信号退役（内核会话层自带活度）而移除。
 
 import { createServer, type IncomingHttpHeaders, type RequestListener, type Server } from "node:http";
 import { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FRAME_TYPE } from "../../../src/wire/frames.ts";
-import type { ReqHeader } from "../../../src/wire/frames.ts";
-import { WireSession, type InboundFrame } from "../../../src/wire/mux.ts";
-import { createLoopbackPair } from "../wire/loopback.ts";
-import { forwardRequest, UpstreamAbortError, type ForwardCtx, type UpstreamTimeouts } from "../../../src/provider/upstream.ts";
+import type { ErrorHeader, ReqHeader, RespMetaHeader } from "../../../src/wire/frames.ts";
+import { forwardRequest, UpstreamAbortError, type ForwardCtx, type ResponseSink, type UpstreamTimeouts } from "../../../src/provider/upstream.ts";
 import type { ServiceConfig } from "../../../src/provider/store.ts";
 
 const ENC = new TextEncoder();
@@ -66,20 +67,47 @@ async function startUpstream(handler: RequestListener): Promise<MockUpstream> {
   return mock;
 }
 
+/** sink 回调的帧形记录（type 用 frames.ts 类型号；断言面与旧 wire 事件同构）。 */
+interface SinkFrame {
+  type: number;
+  header?: unknown;
+  body?: Uint8Array;
+}
+
 interface Harness {
-  consumer: WireSession;
-  provider: WireSession;
-  consumerEvents: InboundFrame[];
+  consumerEvents: SinkFrame[];
+  sink: ResponseSink;
+  /** 当前请求 id（end/error 等无 id 回调的帧形补记）。 */
+  setCurrentId(id: string): void;
 }
 
 function makeHarness(): Harness {
-  const { a, b } = createLoopbackPair();
-  const consumerEvents: InboundFrame[] = [];
-  const consumer = new WireSession({ role: "consumer", transport: a, hooks: { onFrame: (f) => consumerEvents.push(f) } });
-  const provider = new WireSession({ role: "provider", transport: b, hooks: {} });
-  consumer.markAuthed();
-  provider.markAuthed();
-  return { consumer, provider, consumerEvents };
+  const consumerEvents: SinkFrame[] = [];
+  let currentId = "";
+  const sink: ResponseSink = {
+    meta: (h: RespMetaHeader) => {
+      consumerEvents.push({ type: FRAME_TYPE.RESP_META, header: { ...h, id: currentId } });
+    },
+    chunk: (b: Uint8Array) => {
+      consumerEvents.push({ type: FRAME_TYPE.RESP_CHUNK, header: { id: currentId }, body: b });
+    },
+    end: () => {
+      consumerEvents.push({ type: FRAME_TYPE.RESP_END, header: { id: currentId } });
+    },
+    error: (h: ErrorHeader) => {
+      consumerEvents.push({ type: FRAME_TYPE.ERROR, header: { ...h, id: h.id ?? currentId } });
+    },
+    wsData: (b: Uint8Array) => {
+      consumerEvents.push({ type: FRAME_TYPE.DATA_DOWN, header: { v: 1, id: currentId, seq: 0 }, body: b });
+    },
+    wsClose: (code: number | undefined) => {
+      consumerEvents.push({
+        type: FRAME_TYPE.CLOSE,
+        header: { id: currentId, ...(code !== undefined ? { code } : {}) },
+      });
+    },
+  };
+  return { consumerEvents, sink, setCurrentId: (id: string) => (currentId = id) };
 }
 
 async function waitFor<T>(probe: () => T | undefined, ms = 3_000): Promise<T> {
@@ -107,12 +135,11 @@ function forward(
   over: Partial<ForwardCtx> = {},
 ): FrameHarness {
   const id = req.id;
+  h.setCurrentId(id);
   const ctrl = new AbortController();
   const usage: Array<{ status: number | string; bytes: number }> = [];
-  // 经使用方会话真实发送 REQ（在其 mux 登记 request-id；否则下行帧按未知 id 丢弃）。
-  void h.consumer.send(FRAME_TYPE.REQ, req, body).catch(() => undefined);
   const done = forwardRequest({
-    session: h.provider,
+    sink: h.sink,
     id,
     service,
     req,
@@ -125,12 +152,12 @@ function forward(
   return { ...h, id, ctrl, usage, done };
 }
 
-function of(events: InboundFrame[], type: number, id: string): InboundFrame[] {
+function of(events: SinkFrame[], type: number, id: string): SinkFrame[] {
   return events.filter((f) => f.type === type && (f.header as { id?: string }).id === id);
 }
 
-function bodyOf(f: InboundFrame): Buffer {
-  return Buffer.from((f as { body?: Uint8Array }).body ?? new Uint8Array(0));
+function bodyOf(f: SinkFrame): Buffer {
+  return Buffer.from(f.body ?? new Uint8Array(0));
 }
 
 function makeService(port: number, over: Partial<ServiceConfig> = {}): ServiceConfig {
@@ -250,7 +277,7 @@ describe("响应透传", () => {
     });
     const h = makeHarness();
     const origPush = h.consumerEvents.push.bind(h.consumerEvents);
-    h.consumerEvents.push = (...frames: InboundFrame[]) => {
+    h.consumerEvents.push = (...frames: SinkFrame[]) => {
       for (const f of frames) {
         if (f.type === FRAME_TYPE.RESP_CHUNK && (f.header as { id?: string }).id === "r5") {
           events.push(`chunk:${bodyOf(f).toString()}`);
@@ -487,8 +514,8 @@ describe("错误与超时族", () => {
   });
 });
 
-describe("首字节等待期心跳与用量", () => {
-  it("上游迟滞 100ms：等待期按 25ms 节奏收到 >=3 次 PING，随后正常完成", async () => {
+describe("用量记录", () => {
+  it("上游迟滞 100ms 后正常完成（PING 活度信号随旧承载面退役；用量照记）", async () => {
     const upstream = await startUpstream((_req, res) => {
       setTimeout(() => {
         res.writeHead(200, { "content-type": "text/plain" });
@@ -497,10 +524,9 @@ describe("首字节等待期心跳与用量", () => {
     });
     const h = makeHarness();
     const fh = forward(h, makeService(upstream.port), makeReq("r13"), new Uint8Array(0), {
-      timeouts: { connectMs: 1_000, firstByteMs: 5_000, stallMs: 5_000, pingMs: 25 },
+      timeouts: { connectMs: 1_000, firstByteMs: 5_000, stallMs: 5_000 },
     });
     await fh.done;
-    expect(of(h.consumerEvents, FRAME_TYPE.PING, "r13").length).toBeGreaterThanOrEqual(3);
     expect(of(h.consumerEvents, FRAME_TYPE.RESP_END, "r13")).toHaveLength(1);
     expect(fh.usage).toEqual([{ status: 200, bytes: 4 }]);
   });
@@ -874,7 +900,7 @@ describe("④ onResponse 插入（归一后、RESP_META 前）", () => {
     };
     const h = makeHarness();
     const origPush = h.consumerEvents.push.bind(h.consumerEvents);
-    h.consumerEvents.push = (...frames: InboundFrame[]) => {
+    h.consumerEvents.push = (...frames: SinkFrame[]) => {
       for (const f of frames) {
         if (f.type === FRAME_TYPE.RESP_CHUNK && (f.header as { id?: string }).id === "p5") {
           events.push(`chunk:${bodyOf(f).toString()}`);

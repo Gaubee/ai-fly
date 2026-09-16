@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { createHash } from "node:crypto";
 import type { ErrorCodeValue, RespMetaHeader, ServiceEntry } from "../../../src/wire/frames.ts";
-import type { TerminateCause } from "../../../src/wire/mux.ts";
+import type { TerminateCause } from "../../../src/consumer/providers.ts";
 import {
   Gateway,
   filterRequestHeaders,
@@ -240,7 +240,7 @@ describe("HTTP 转发与流式还原", () => {
       h.handlers.onMeta({ id: "x", status: 429, contentType: "application/problem+json" });
       h.handlers.onChunk(ENC.encode('{"limited":true}'));
       h.handlers.onEnd();
-      h.handlers.onTerminate({ source: "peer", frameType: 8 });
+      h.handlers.onTerminate({ source: "peer" });
     };
     const gw = await bootGateway(route, svc("svc-a", "a", await freePort()));
     const res = await fetch(`http://127.0.0.1:${gw.port}/v1/keys`);
@@ -262,7 +262,7 @@ describe("HTTP 转发与流式还原", () => {
         }
         await delay(5);
         h.handlers.onEnd();
-        h.handlers.onTerminate({ source: "peer", frameType: 8 });
+        h.handlers.onTerminate({ source: "peer" });
       })();
     };
     const gw = await bootGateway(route, svc("svc-a", "a", await freePort()));
@@ -279,7 +279,7 @@ describe("HTTP 转发与流式还原", () => {
     route.onForward = (_i, h) => {
       h.handlers.onMeta({ id: "x", status: 200, contentType: "application/json" });
       h.handlers.onEnd();
-      h.handlers.onTerminate({ source: "peer", frameType: 8 });
+      h.handlers.onTerminate({ source: "peer" });
     };
     const gw = await bootGateway(route, svc("svc-a", "a", await freePort()));
     const res = await fetch(`http://127.0.0.1:${gw.port}/v1/x?y=1&z=2`, {
@@ -315,7 +315,7 @@ describe("HTTP 转发与流式还原", () => {
     route.onForward = (_i, h) => {
       h.handlers.onMeta({ id: "x", status: 429, contentType: "text/plain", headers: { "x-request-id": "req-9", "retry-after": "3" } });
       h.handlers.onEnd();
-      h.handlers.onTerminate({ source: "peer", frameType: 8 });
+      h.handlers.onTerminate({ source: "peer" });
     };
     const gw = await bootGateway(route, svc("svc-a", "a", await freePort()));
     const res = await fetch(`http://127.0.0.1:${gw.port}/x`);
@@ -414,7 +414,7 @@ describe("接收侧兜底（buffer_overflow）", () => {
           await delay(2); // 客户端持续消费
         }
         h.handlers.onEnd();
-        h.handlers.onTerminate({ source: "peer", frameType: 8 });
+        h.handlers.onTerminate({ source: "peer" });
       })();
     };
     const gw = await bootGateway(route, svc("svc-a", "a", await freePort()), { receiveBufferLimitBytes: limit });
@@ -514,7 +514,7 @@ describe("WS 中继", () => {
       handle.handlers.onMeta({ id: "w", status: 404, contentType: "application/json" });
       handle.handlers.onChunk(ENC.encode('{"error":"no ws here"}'));
       handle.handlers.onEnd();
-      handle.handlers.onTerminate({ source: "peer", frameType: 8 });
+      handle.handlers.onTerminate({ source: "peer" });
     };
     // 裸 socket 发升级请求，读回原始 HTTP 响应
     const raw = await new Promise<string>((resolve, reject) => {

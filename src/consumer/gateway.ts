@@ -1,15 +1,16 @@
 // 本地网关（consumer spec「端口映射与冲突」「转发、流式还原与接收侧兜底」）：
 // 每个已授权服务一个独立 127.0.0.1 http server（hono app + @hono/node-server 适配，
 // 服务间监听与冲突处理彼此隔离）+ node:http 'upgrade' 事件直挂 WS 中继（ws 库）。
-// HTTP：请求→REQ 帧（剥离凭据头；contentType 独立字段；body ≤256KiB 内联否则
-// splitBody 续帧）；RESP_META→写头、RESP_CHUNK→逐块 flush（SSE 透传）、RESP_END→
-// 结束、ERROR→HTTP 映射 + OpenAI 风格 error JSON；客户端断开→ABORT。
-// 接收侧兜底：每请求待消费缓冲默认 4MiB（WS 双向各自计），超限 ABORT + 本地连接
-// 错误关闭 + buffer_overflow 记账（显式字节计数 + drain 追踪，进程内存有界）。
+// HTTP：请求→forward（剥离凭据头；contentType 独立字段）；onMeta→写头、
+// onChunk→逐块 flush（SSE 透传）、onEnd→结束、onError→HTTP 映射 + OpenAI 风格
+// error JSON（映射表在 shared/http-errors——provider 侧新承载面共用同表构造）；
+// 客户端断开→abort（本地停止投递）。
+// 接收侧兜底：每请求待消费缓冲默认 4MiB（WS 双向各自计），超限本地连接错误
+// 关闭（内核 journal 反压为主，本地限值为兜底）。
 // WS：本地握手由 ws 库 handleUpgrade 完成（accept=base64(sha1(key+GUID)) 自算，
 // 客户端校验由此保证）；上游侧 ws 库自管握手 key，其 accept 与本地无恒等关系，
 // 不做比对（避免恒 destroy）。
-// 正交意图：只做本地端点与流还原；wire 帧语义、Fabric、重连在 wire//providers.ts。
+// 正交意图：只做本地端点与流还原；内核会话语义、Fabric、目录在 providers.ts。
 
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
@@ -17,7 +18,11 @@ import { Hono } from "hono";
 import { createAdaptorServer, type HttpBindings } from "@hono/node-server";
 import { WebSocketServer, type WebSocket as WsSocket, type RawData } from "ws";
 import { HTTP_METHODS, type ErrorCodeValue, type RespMetaHeader, type ServiceEntry } from "../wire/frames.ts";
-import type { TerminateCause } from "../wire/mux.ts";
+import { ERROR_HTTP_MAPPING, errorResponse, errorResponseFor, buildErrorJson, reasonFor } from "../shared/http-errors.ts";
+// 错误映射表上提共享（provider 侧同表构造错误响应）——原导出面保留（测试/兼容）。
+export { ERROR_HTTP_MAPPING, errorResponseFor, buildErrorJson, reasonFor } from "../shared/http-errors.ts";
+export type { HttpErrorMapping, ErrorJsonBody } from "../shared/http-errors.ts";
+import type { TerminateCause } from "./providers.ts";
 import {
   OfflineError,
   type ForwardHandle,
@@ -33,71 +38,6 @@ export const DEFAULT_REQUEST_BODY_LIMIT_BYTES = 8 * 1024 * 1024;
 const PUMP_BATCH_BYTES = 256 * 1024;
 /** null-body 状态码：Response 构造不允许携带正文。 */
 const NULL_BODY_STATUSES = new Set([204, 205, 304]);
-
-// ---------------------------------------------------------------------------
-// 错误码 → HTTP 映射（表驱动；null = 连接错误关闭，不回 HTTP 实体）
-// ---------------------------------------------------------------------------
-
-export interface HttpErrorMapping {
-  status: number | null;
-  /** OpenAI 风格 error.type。 */
-  type: string;
-}
-
-export const ERROR_HTTP_MAPPING: Readonly<Record<ErrorCodeValue, HttpErrorMapping>> = {
-  rate_limited: { status: 429, type: "rate_limit_error" },
-  quota_exceeded: { status: 429, type: "rate_limit_error" },
-  forbidden_method: { status: 405, type: "invalid_request_error" },
-  forbidden_header: { status: 400, type: "invalid_request_error" },
-  body_too_large: { status: 413, type: "invalid_request_error" },
-  unknown_service: { status: 404, type: "invalid_request_error" },
-  // 服务声明了路由表但路径未命中任何标准前缀：本地拒绝（零上游请求）——
-  // 只转发声明的 API 标准面，防 /user、/balance 等个人信息端点被凭据打穿。
-  path_not_offered: { status: 404, type: "invalid_request_error" },
-  unauthorized: { status: 401, type: "authentication_error" },
-  key_all_invalid: { status: 503, type: "api_error" },
-  upstream_unreachable: { status: 502, type: "api_error" },
-  // 上游错误状态正常路径走 RESP_META/CHUNK/END 流原样透传；裸 ERROR(upstream_status)
-  // 帧不携带 status 载荷，只能以 502 兜底（裁决记录于报告）。
-  upstream_status: { status: 502, type: "api_error" },
-  // 提供方密钥库无此引用（$secret 未知名）：提供方配置问题，消费方视角 502。
-  secret_missing: { status: 502, type: "api_error" },
-  // ②③④ 生命周期脚本失效（绑定缺席/抛错/形状非法/流中途失败）：HTTP 生命周期
-  // 分流（hooks-lifecycle 4.4）——pending 阶段（RESP_META 未下发）经下方
-  // errorResponseFor 映射 502 + 脱敏 message JSON；已进入流式后由 onError 的
-  // failStream 分支关闭本地连接终结（不回退状态码，观感与上游流中断一致）。
-  hook_failed: { status: 502, type: "api_error" },
-  protocol_version: { status: 500, type: "api_error" },
-  protocol_seq: { status: 500, type: "api_error" },
-  protocol_error: { status: 500, type: "api_error" },
-  internal: { status: 500, type: "api_error" },
-  // 客户端已断开/本地中止/超时/超限：无实体可回，语义是连接错误关闭。
-  aborted: { status: null, type: "api_error" },
-  idle_timeout: { status: null, type: "api_error" },
-  buffer_overflow: { status: null, type: "api_error" },
-};
-
-export interface ErrorJsonBody {
-  error: { message: string; type: string; code: string };
-}
-
-export function buildErrorJson(code: string, message: string, type: string): ErrorJsonBody {
-  return { error: { message, type, code } };
-}
-
-function errorResponse(status: number, code: string, message: string, type: string): Response {
-  return new Response(JSON.stringify(buildErrorJson(code, message, type)) + "\n", {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-/** ERROR 帧 → 本地 HTTP 响应/连接处置。返回 null 表示按连接错误关闭处置。 */
-export function errorResponseFor(code: ErrorCodeValue, message: string): Response | null {
-  const m = ERROR_HTTP_MAPPING[code];
-  if (m.status === null) return null;
-  return errorResponse(m.status, code, message, m.type);
-}
 
 // ---------------------------------------------------------------------------
 // 请求头过滤（凭据类剥离；WS 握手头端到端透传）
@@ -558,21 +498,6 @@ function writeRawJsonError(socket: Duplex | undefined, status: number, code: str
     `HTTP/1.1 ${status} ${reasonFor(status)}\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
   );
   socket.end();
-}
-
-function reasonFor(status: number): string {
-  const known: Record<number, string> = {
-    400: "Bad Request",
-    404: "Not Found",
-    405: "Method Not Allowed",
-    413: "Payload Too Large",
-    429: "Too Many Requests",
-    500: "Internal Server Error",
-    502: "Bad Gateway",
-    503: "Service Unavailable",
-    504: "Gateway Timeout",
-  };
-  return known[status] ?? "Error";
 }
 
 // ---------------------------------------------------------------------------

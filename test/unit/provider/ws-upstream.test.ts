@@ -1,7 +1,9 @@
-// WS 升级通道单测（本地 ws echo 上游 + loopback WireSession 对）：101 升级
-// （RESP_META + sec-websocket-accept 白名单）、DATA_UP/DATA_DOWN 双向透传（含
-// >256KiB 拆分）、上游 Close -> CLOSE 终结、握手失败（非 101）按普通 HTTP 透传、
-// extensions 不透传、closeByPeer/abort 处置。
+// WS 升级通道单测（本地 ws echo 上游 + ResponseSink 收集假体）：101 升级
+// （meta + sec-websocket-accept 白名单）、隧道下行透传（含 >256KiB 拆分）、
+// 上游 Close -> wsClose 终结、握手失败（非 101）按普通 HTTP 透传、extensions
+// 不透传、closeByPeer/abort 处置。
+// opendweb-kernel-migration：DATA_UP 上行经 WsRelayHandle.pushUp（隧道上行）；
+// 断言面保持旧帧形（假体把 sink 回调记录回帧形事件，type 用 frames.ts 类型号）。
 
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -9,10 +11,8 @@ import { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import { FRAME_TYPE } from "../../../src/wire/frames.ts";
-import type { ReqHeader } from "../../../src/wire/frames.ts";
-import { WireSession, type InboundFrame } from "../../../src/wire/mux.ts";
-import { createLoopbackPair } from "../wire/loopback.ts";
-import { forwardRequest } from "../../../src/provider/upstream.ts";
+import type { ErrorHeader, ReqHeader, RespMetaHeader } from "../../../src/wire/frames.ts";
+import { forwardRequest, type ResponseSink } from "../../../src/provider/upstream.ts";
 import type { WsRelayHandle } from "../../../src/provider/ws-upstream.ts";
 import type { ServiceConfig } from "../../../src/provider/store.ts";
 
@@ -81,21 +81,56 @@ function startWsUpstream(mode: "echo" | "reject" = "echo"): Promise<WsUpstream> 
   });
 }
 
+/** sink 回调的帧形记录（type 用 frames.ts 类型号；断言面与旧 wire 事件同构）。 */
+interface SinkFrame {
+  type: number;
+  header?: unknown;
+  body?: Uint8Array;
+}
+
 interface Harness {
-  consumer: WireSession;
-  provider: WireSession;
-  consumerEvents: InboundFrame[];
+  consumerEvents: SinkFrame[];
+  sink: ResponseSink;
   relay: WsRelayHandle | undefined;
+  setCurrentId(id: string): void;
 }
 
 function makeHarness(): Harness {
-  const { a, b } = createLoopbackPair();
-  const consumerEvents: InboundFrame[] = [];
-  const consumer = new WireSession({ role: "consumer", transport: a, hooks: { onFrame: (f) => consumerEvents.push(f) } });
-  const provider = new WireSession({ role: "provider", transport: b, hooks: {} });
-  consumer.markAuthed();
-  provider.markAuthed();
-  return { consumer, provider, consumerEvents, relay: undefined };
+  const consumerEvents: SinkFrame[] = [];
+  let currentId = "";
+  let downSeq = 0;
+  const sink: ResponseSink = {
+    meta: (h: RespMetaHeader) => {
+      consumerEvents.push({ type: FRAME_TYPE.RESP_META, header: { ...h, id: currentId } });
+    },
+    chunk: (b: Uint8Array) => {
+      consumerEvents.push({ type: FRAME_TYPE.RESP_CHUNK, header: { id: currentId }, body: b });
+    },
+    end: () => {
+      consumerEvents.push({ type: FRAME_TYPE.RESP_END, header: { id: currentId } });
+    },
+    error: (h: ErrorHeader) => {
+      consumerEvents.push({ type: FRAME_TYPE.ERROR, header: { ...h, id: h.id ?? currentId } });
+    },
+    wsData: (b: Uint8Array) => {
+      consumerEvents.push({ type: FRAME_TYPE.DATA_DOWN, header: { v: 1, id: currentId, seq: downSeq++ }, body: b });
+    },
+    wsClose: (code: number | undefined) => {
+      consumerEvents.push({
+        type: FRAME_TYPE.CLOSE,
+        header: { id: currentId, ...(code !== undefined ? { code } : {}) },
+      });
+    },
+  };
+  return {
+    consumerEvents,
+    sink,
+    relay: undefined,
+    setCurrentId: (id: string) => {
+      currentId = id;
+      downSeq = 0;
+    },
+  };
 }
 
 async function waitFor<T>(probe: () => T | undefined, ms = 3_000): Promise<T> {
@@ -108,12 +143,12 @@ async function waitFor<T>(probe: () => T | undefined, ms = 3_000): Promise<T> {
   }
 }
 
-function of(events: InboundFrame[], type: number, id: string): InboundFrame[] {
+function of(events: SinkFrame[], type: number, id: string): SinkFrame[] {
   return events.filter((f) => f.type === type && (f.header as { id?: string }).id === id);
 }
 
-function bodyOf(f: InboundFrame): Buffer {
-  return Buffer.from((f as { body?: Uint8Array }).body ?? new Uint8Array(0));
+function bodyOf(f: SinkFrame): Buffer {
+  return Buffer.from(f.body ?? new Uint8Array(0));
 }
 
 function wsReq(id: string, over: Partial<ReqHeader> = {}): ReqHeader {
@@ -148,17 +183,16 @@ function makeService(port: number): ServiceConfig {
 }
 
 function startWsForward(h: Harness, port: number, req: ReqHeader): Promise<void> {
-  // 经使用方会话真实发送 REQ（登记 request-id；否则下行帧按未知 id 丢弃）。
-  void h.consumer.send(FRAME_TYPE.REQ, req, new Uint8Array(0)).catch(() => undefined);
+  h.setCurrentId(req.id);
   return forwardRequest({
-    session: h.provider,
+    sink: h.sink,
     id: req.id,
     service: makeService(port),
     req,
     body: new Uint8Array(0),
     signal: new AbortController().signal,
     keyId: "k1",
-    timeouts: { connectMs: 2_000, firstByteMs: 5_000, stallMs: 5_000, pingMs: 5_000 },
+    timeouts: { connectMs: 2_000, firstByteMs: 5_000, stallMs: 5_000 },
     onWsRelay: (relay) => {
       h.relay = relay;
     },
