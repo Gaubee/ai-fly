@@ -455,7 +455,16 @@ export class ProviderConnection implements ProviderRoute {
           ...(input.body.length > 0 ? { body: [input.body] } : {}),
           ...(input.upgrade ? { keepOpen: true } : {}),
         });
-        if (aborted) return;
+        if (aborted) {
+          // 竞态收口：等待头期间本地已中止——刚完成的响应必须即刻取消
+          //（否则 provider 侧请求继续运行直至其自身超时）
+          try {
+            await resp.abort?.();
+          } catch {
+            // 取消面失败不阻断本地中止
+          }
+          return;
+        }
         tunnel = resp;
         const contentType = headerValue(resp.headers, "content-type") ?? "";
         const picked = pickWhitelist(resp.headers);
