@@ -41,7 +41,7 @@ let keyFriends: { keyId: string; key: string };
 let keyMates: { keyId: string; key: string };
 let engine: ProviderEngine;
 let fabricPair: ReturnType<typeof FakeFabric.pair>;
-let handler: ((req: CarrierRequest) => Promise<CarrierResponse>) | undefined;
+let handler: ((req: CarrierRequest) => Promise<CarrierResponse | null>) | undefined;
 let serverClosed: boolean;
 let mockServer: Server;
 let mockPort: number;
@@ -160,6 +160,20 @@ async function waitFor<T>(probe: () => T | undefined, ms = 3_000): Promise<T> {
   }
 }
 
+/** 流式结算记录器（respondStreaming 假体）：fwdResp 由此重组 CarrierResponse。 */
+type StreamedRec = {
+  status: number;
+  headers: Array<{ name: string; value: string }>;
+  chunks: Buffer[];
+};
+
+let streamedResult: StreamedRec | null = null;
+
+/** 经函数读（阻断 CFA 把闭包内赋值收窄为 null）。 */
+function takeStreamed(): StreamedRec | null {
+  return streamedResult;
+}
+
 /** 构造 CarrierRequest（body 一次性经 bodyNext 供给）。 */
 function carrierReq(over: {
   method: string;
@@ -176,7 +190,36 @@ function carrierReq(over: {
     path: over.path,
     headers: over.headers ?? [],
     bodyNext: async () => (i < chunks.length ? chunks[i++]! : null),
+    respondStreaming: (status, headers) => {
+      const rec = { status, headers: headers ?? [], chunks: [] as Buffer[] };
+      streamedResult = rec;
+      return {
+        write: async (chunk: Uint8Array) => {
+          rec.chunks.push(Buffer.from(chunk));
+        },
+        finish: () => undefined,
+        finished: false,
+      };
+    },
   };
+}
+
+/** 驱动 forward 请求并取响应：流式结算（meta 即发头）重组为 CarrierResponse
+ * 形态；未流式（错误/兜底路径）原样返回。 */
+async function fwdResp(req: CarrierRequest): Promise<CarrierResponse> {
+  streamedResult = null;
+  const resp = await handler!(req);
+  if (resp !== null) return resp;
+  const rec = takeStreamed();
+  if (rec === null) throw new Error("forward neither streamed nor returned a carrier");
+  return { status: rec.status, headers: rec.headers, bodyChunks: rec.chunks };
+}
+
+/** 非流式路径（AUTH/watch/错误兜底）响应：静态载体非空断言。 */
+async function staticResp(req: CarrierRequest): Promise<CarrierResponse> {
+  const resp = await handler!(req);
+  if (resp === null) throw new Error("expected a static carrier (non-streaming path)");
+  return resp;
 }
 
 function fwdReq(
@@ -203,7 +246,7 @@ function errorCode(resp: CarrierResponse): string | undefined {
 async function authCall(keys: string[]): Promise<CarrierResponse> {
   fabricPair.provider.emit({ type: "peer-connected", endpointId: CONSUMER_EP });
   const h = await waitFor(() => handler);
-  return h(
+  const resp = await h(
     carrierReq({
       method: "POST",
       path: "/_aifly/auth",
@@ -211,6 +254,8 @@ async function authCall(keys: string[]): Promise<CarrierResponse> {
       body: ENC.encode(JSON.stringify({ v: 1, keys })),
     }),
   );
+  if (resp === null) throw new Error("auth path must not stream");
+  return resp;
 }
 
 async function connectAndAuth(keys: string[]): Promise<AuthOkHeader> {
@@ -244,7 +289,7 @@ describe("AUTH 与目录", () => {
     expect((bodyJson(resp) as { code: string }).code).toBe("key_all_invalid");
     // 会话不拆（AUTH 失败不重建内核会话——等待 key add 后重新呈交）。
     expect(engine.sessionCount()).toBe(1);
-    const fwd = await handler!(fwdReq(serviceId));
+    const fwd = await fwdResp(fwdReq(serviceId));
     expect(fwd.status).toBe(401);
     expect(errorCode(fwd)).toBe("unauthorized");
   });
@@ -259,7 +304,7 @@ describe("AUTH 与目录", () => {
 describe("forward 端点全链路", () => {
   it("授权服务：上游收到重写后请求与 $env 凭据；响应回送", async () => {
     await connectAndAuth([keyFriends.key]);
-    const resp = await handler!(
+    const resp = await fwdResp(
       fwdReq(serviceId, {
         method: "POST",
         path: "/v1/echo",
@@ -287,7 +332,7 @@ describe("forward 端点全链路", () => {
     store.addGroup("sbxgrp", ["sbx"]);
     const key = store.issueKey("sbxgrp");
     await connectAndAuth([key.key]);
-    const resp = await handler!(fwdReq(svc.serviceId, { path: "/sbx" }));
+    const resp = await fwdResp(fwdReq(svc.serviceId, { path: "/sbx" }));
     expect(resp.status).toBe(200);
     const payload = bodyJson(resp) as { sandbox: string | null };
     expect(payload.sandbox).toBe("yes"); // ② onRequestHeaders 注入头到达上游
@@ -295,16 +340,16 @@ describe("forward 端点全链路", () => {
 
   it("未授权/未知 serviceId 统一 unknown_service（防枚举）", async () => {
     await connectAndAuth([keyFriends.key]);
-    const resp = await handler!(fwdReq("nope", { path: "/x" }));
+    const resp = await fwdResp(fwdReq("nope", { path: "/x" }));
     expect(resp.status).toBe(404);
     expect(errorCode(resp)).toBe("unknown_service");
   });
 
   it("并发限额 1：第二在途请求立即 rate_limited；首请求完成后恢复受理", async () => {
     await connectAndAuth([keyFriends.key]);
-    const first = handler!(fwdReq(serviceId, { path: "/stall" }));
+    const first = fwdResp(fwdReq(serviceId, { path: "/stall" }));
     await waitFor(() => (engine.limits.inflightCount("friends") >= 1 ? true : undefined));
-    const second = await handler!(fwdReq(serviceId));
+    const second = await fwdResp(fwdReq(serviceId));
     expect(second.status).toBe(429);
     expect(errorCode(second)).toBe("rate_limited");
     // 首请求完成 -> 释放并发 -> 新请求可受理（settle 驱动；abort 语义在
@@ -313,7 +358,7 @@ describe("forward 端点全链路", () => {
     const firstResp = await first;
     expect(firstResp.status).toBe(200);
     await waitFor(() => (engine.limits.inflightCount("friends") === 0 ? true : undefined));
-    const third = await handler!(fwdReq(serviceId));
+    const third = await fwdResp(fwdReq(serviceId));
     expect(third.status).toBe(200);
   });
 
@@ -334,7 +379,7 @@ describe("forward 端点全链路", () => {
       return null;
     };
     void origNext;
-    const resp = await handler!(req);
+    const resp = await fwdResp(req);
     expect(resp.status).toBe(200);
     expect(upstreamBodies[upstreamBodies.length - 1]).toBe("abcdefghij");
   });
@@ -353,14 +398,14 @@ describe("forward 端点全链路", () => {
     secrets.set("test-key", "Bearer sk-lib-42");
 
     await connectAndAuth([keySecret.key]);
-    const ok = await handler!(fwdReq(secService.serviceId));
+    const ok = await fwdResp(fwdReq(secService.serviceId));
     expect(ok.status).toBe(200);
     const payload = bodyJson(ok) as { auth: string | null };
     expect(payload.auth).toBe("Bearer sk-lib-42");
 
     // 删除密钥 -> 同一服务的后续请求被拒（不回退空值、名字不出网）。
     secrets.remove("test-key");
-    const rejected = await handler!(fwdReq(secService.serviceId));
+    const rejected = await fwdResp(fwdReq(secService.serviceId));
     expect(errorCode(rejected)).toBe("secret_missing");
     const text = Buffer.concat(rejected.bodyChunks ?? []).toString("utf8");
     expect(text).not.toContain("test-key");
@@ -375,7 +420,7 @@ describe("撤键与目录刷新（CLI 写盘 -> reloadStore -> catalog-watch）"
     const cliStore = ProviderStore.open(dir);
     cliStore.revokeKey(keyFriends.keyId);
     await engine.reloadStore();
-    const watch = await handler!(
+    const watch = await staticResp(
       carrierReq({ method: "GET", path: "/_aifly/catalog-watch?since=0" }),
     );
     expect(watch.status).toBe(200);
@@ -384,7 +429,7 @@ describe("撤键与目录刷新（CLI 写盘 -> reloadStore -> catalog-watch）"
     expect(refresh.groups.map((g) => g.group)).toEqual(["mates"]); // friends 剔除
     expect(engine.sessionCount()).toBe(1); // 会话不断（余钥有效）
     // 被撤服务仍可经余钥组访问
-    const fwd = await handler!(fwdReq(serviceId));
+    const fwd = await fwdResp(fwdReq(serviceId));
     expect(fwd.status).toBe(200);
   });
 
@@ -398,10 +443,10 @@ describe("撤键与目录刷新（CLI 写盘 -> reloadStore -> catalog-watch）"
     await waitFor(() => (fabricPair.provider.revoked.length >= 0 && engine.sessionCount() === 1 ? true : undefined));
     expect(engine.sessionCount()).toBe(1); // 承载面保留
     // 后续 forward 401（未授权）+ 重 AUTH 403
-    const fwd = await handler!(fwdReq(serviceId));
+    const fwd = await fwdResp(fwdReq(serviceId));
     expect(fwd.status).toBe(401);
     expect(errorCode(fwd)).toBe("unauthorized");
-    const reauth = await handler!(
+    const reauth = await staticResp(
       carrierReq({
         method: "POST",
         path: "/_aifly/auth",
@@ -424,7 +469,7 @@ describe("撤键与目录刷新（CLI 写盘 -> reloadStore -> catalog-watch）"
     });
     cliStore.setGroupServices("mates", ["api", "extra"]);
     await engine.reloadStore();
-    const watch = await handler!(
+    const watch = await staticResp(
       carrierReq({ method: "GET", path: "/_aifly/catalog-watch?since=0" }),
     );
     expect(watch.status).toBe(200);

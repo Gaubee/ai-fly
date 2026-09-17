@@ -21,8 +21,54 @@ export const AIFLY_AUTH_PATH = "/_aifly/auth";
 /** 目录刷新长轮询端点（已 AUTH 会话）。 */
 export const AIFLY_WATCH_PATH = "/_aifly/catalog-watch";
 
-/** WS 隧道关闭码响应头（101 响应终结时携带；1000..65535）。 */
+/** WS 隧道关闭码响应头（静态载体时代的透传通道；流式载体改用带内尾块——
+ * 保留常量以剥离残留头，兼容读侧见 providers.ts 尾块优先 + 头兜底）。 */
 export const AIFLY_WS_CLOSE_HEADER = "x-aifly-ws-close";
+
+// ---------------------------------------------------------------------------
+// WS 关闭码带内尾块（流式载体）：magic "AFWS" + flag + 可选 2 字节 BE 码。
+// 仅当该分块为流最终分块时由消费端解释（一 chunk 前瞻判定）；内核 fetchHttp
+// 保持 write 分块边界，故前瞻是可靠的。非最终分块撞上同形态 → 按数据冲刷。
+// ---------------------------------------------------------------------------
+export function encodeWsCloseTrailer(code: number | undefined): Uint8Array {
+  const out = new Uint8Array(code === undefined ? 5 : 7);
+  out[0] = 0x41;
+  out[1] = 0x46;
+  out[2] = 0x57;
+  out[3] = 0x53;
+  if (code === undefined) {
+    out[4] = 0;
+    return out;
+  }
+  out[4] = 1;
+  out[5] = (code >>> 8) & 0xff;
+  out[6] = code & 0xff;
+  return out;
+}
+
+/** 形态初筛（长度 5..7 且前四字节为 magic）——是否为尾块由流的下一读决定。 */
+export function looksLikeWsCloseTrailer(chunk: Uint8Array): boolean {
+  return (
+    chunk.length >= 5 &&
+    chunk.length <= 7 &&
+    chunk[0] === 0x41 &&
+    chunk[1] === 0x46 &&
+    chunk[2] === 0x57 &&
+    chunk[3] === 0x53
+  );
+}
+
+/** 解码尾块：null = 非 trailer 形态（按数据冲刷）；undefined = 无码关闭；
+ * number = 关闭码（域外码保守降为 undefined）。 */
+export function decodeWsCloseTrailer(chunk: Uint8Array): number | undefined | null {
+  if (!looksLikeWsCloseTrailer(chunk)) return null;
+  if (chunk.length === 5 && chunk[4] === 0) return undefined;
+  if (chunk.length === 7 && chunk[4] === 1) {
+    const code = (chunk[5]! << 8) | chunk[6]!;
+    return code >= 1000 && code <= 65535 ? code : undefined;
+  }
+  return null;
+}
 
 /** catalog-watch 长轮询上限（内核 fetchHttp 响应头等待窗 30s，留裕量）。 */
 export const CATALOG_WATCH_TIMEOUT_MS = 20_000;

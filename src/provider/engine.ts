@@ -32,9 +32,9 @@ import {
   AIFLY_WATCH_PATH,
   AIFLY_CONTROL_HEADERS,
   AIFLY_SERVICE_HEADER,
-  AIFLY_WS_CLOSE_HEADER,
   CATALOG_WATCH_TIMEOUT_MS,
   REQUEST_BODY_LIMIT_BYTES,
+  encodeWsCloseTrailer,
 } from "../wire/http-protocol.ts";
 import { ERROR_HTTP_MAPPING, buildErrorJson } from "../shared/http-errors.ts";
 import { ProviderStore } from "./store.ts";
@@ -85,6 +85,18 @@ export interface CarrierRequest {
   path: string;
   headers: Array<{ name: string; value: string }>;
   bodyNext(): Promise<Buffer | null>;
+  /** 流式结算（B1/B2）：立即下发响应头，返回写句柄（已结算/晚到 → null）。 */
+  respondStreaming(
+    status: number,
+    headers?: Array<{ name: string; value: string }>,
+  ): StreamWriterHandle | null;
+}
+
+/** 流式响应写句柄（SDK respondStreaming 投影；对端 abort/RESET 时 write 报错）。 */
+export interface StreamWriterHandle {
+  write(chunk: Uint8Array): Promise<void>;
+  finish(): void;
+  readonly finished: boolean;
 }
 
 export interface CarrierResponse {
@@ -100,7 +112,7 @@ export interface CarrierServer {
 export type ServeHttpFn = (
   fabric: Fabric,
   peerId: string,
-  handler: (req: CarrierRequest) => Promise<CarrierResponse>,
+  handler: (req: CarrierRequest) => Promise<CarrierResponse | null>,
 ) => Promise<CarrierServer>;
 
 interface ActiveForward {
@@ -435,7 +447,7 @@ class ProviderPeerServer implements AuthSessionBinding {
   // handler 入口（AUTH / watch / forward 分流）
   // -----------------------------------------------------------------------
 
-  private async handle(req: CarrierRequest): Promise<CarrierResponse> {
+  private async handle(req: CarrierRequest): Promise<CarrierResponse | null> {
     // 已 disposed：回错误载体正常结算（SDK 结算面经 B6 加固后对 close 后
     // unknown-id 的晚到/拒绝结算幂等静默——永挂规避已无必要，且回避了 handler
     // 闭包与 server.close() 的无界等待）。
@@ -443,7 +455,7 @@ class ProviderPeerServer implements AuthSessionBinding {
       return errorCarrierResponse(ERROR_CODE.internal, "provider engine disposed");
     }
     const barePath = req.path.split("?", 1)[0]!;
-    let result: CarrierResponse;
+    let result: CarrierResponse | null;
     if (barePath === AIFLY_AUTH_PATH && req.method === "POST") {
       result = await this.handleAuth(req);
     } else if (barePath === AIFLY_WATCH_PATH && req.method === "GET") {
@@ -550,7 +562,7 @@ class ProviderPeerServer implements AuthSessionBinding {
   // 上游转发（既有管线经 ResponseSink 载体）
   // -----------------------------------------------------------------------
 
-  private async handleForward(req: CarrierRequest): Promise<CarrierResponse> {
+  private async handleForward(req: CarrierRequest): Promise<CarrierResponse | null> {
     if (!this.authed()) {
       return errorCarrierResponse(ERROR_CODE.unauthorized, "session is not authenticated");
     }
@@ -620,7 +632,7 @@ class ProviderPeerServer implements AuthSessionBinding {
       bodyLen: body.length,
     };
 
-    const outcome = new CarrierOutcome(isWs);
+    const outcome = new CarrierOutcome((status, headers) => req.respondStreaming(status, headers));
     const ctrl = new AbortController();
     const act: ActiveForward = { ctrl, keyId: grant.keyId, group: grant.group, ws: undefined };
     this.active.set(req.requestId, act);
@@ -724,21 +736,28 @@ class BodyTooLargeError extends Error {
 // ---------------------------------------------------------------------------
 
 /**
- * 单请求载体结果：meta/chunks/error 聚齐；done 在终结（end/error/wsClose）时
- * resolve。WS 101：chunks = 隧道下行帧序列；wsCloseCode 经响应头透传。
+ * 单请求载体结果（流式形态，B1/B2）：meta 到达即经 respondStreaming 下发
+ * 响应头（SSE 首包/WS 101 早发），chunk/wsData 逐块 write（内核背压传导）；
+ * WS 关闭码走带内尾块。done 在终结（end/error/wsClose）时 resolve。
+ * 头未发出即终结（错误/兜底）→ carrier() 供静态结算路径。
  */
 class CarrierOutcome {
   private settled = false;
+  private headSent = false;
+  private writer: StreamWriterHandle | null = null;
   private meta: RespMetaHeader | undefined;
-  private readonly chunks: Uint8Array[] = [];
-  private wsCloseCode: number | undefined;
   private err: ErrorHeader | undefined;
   readonly done: Promise<void>;
   private resolveDone: (() => void) | undefined;
-  private readonly isWs: boolean;
+  private readonly stream: (
+    status: number,
+    headers: Array<{ name: string; value: string }>,
+  ) => StreamWriterHandle | null;
 
-  constructor(isWs: boolean) {
-    this.isWs = isWs;
+  constructor(
+    stream: (status: number, headers: Array<{ name: string; value: string }>) => StreamWriterHandle | null,
+  ) {
+    this.stream = stream;
     this.done = new Promise<void>((resolve) => {
       this.resolveDone = resolve;
     });
@@ -749,31 +768,53 @@ class CarrierOutcome {
       meta: (h) => {
         if (this.settled) return;
         this.meta = h;
+        const headers: Array<{ name: string; value: string }> = [
+          { name: "content-type", value: h.contentType === "" ? "application/octet-stream" : h.contentType },
+        ];
+        for (const [name, value] of Object.entries(h.headers ?? {})) {
+          headers.push({ name, value });
+        }
+        this.writer = this.stream(h.status, headers);
+        this.headSent = this.writer !== null;
       },
       chunk: (b) => {
-        if (this.settled) return;
-        this.chunks.push(b);
+        if (this.settled || this.writer === null) return;
+        return this.writer.write(b);
       },
       end: () => {
         if (this.settled) return;
         this.settled = true;
+        this.writer?.finish();
         this.resolveDone?.();
       },
       error: (h) => {
         if (this.settled) return;
         this.settled = true;
-        this.err = h;
+        // 已发头：流式面无错误投影通道——半关终结（观感 = 上游中断）。
+        this.writer?.finish();
+        if (!this.headSent) this.err = h;
         this.resolveDone?.();
       },
       wsData: (b) => {
-        if (this.settled) return;
-        this.chunks.push(b);
+        if (this.settled || this.writer === null) return;
+        return this.writer.write(b);
       },
       wsClose: (code) => {
         if (this.settled) return;
         this.settled = true;
-        this.wsCloseCode = code;
-        this.resolveDone?.();
+        const writer = this.writer;
+        if (writer === null) {
+          this.resolveDone?.();
+          return;
+        }
+        // 关闭码走带内尾块（消费端一 chunk 前瞻解释）；尾块送达后半关。
+        void writer
+          .write(encodeWsCloseTrailer(code))
+          .catch(() => undefined)
+          .finally(() => {
+            writer.finish();
+            this.resolveDone?.();
+          });
       },
     };
   }
@@ -782,25 +823,29 @@ class CarrierOutcome {
   fail(header: ErrorHeader): void {
     if (this.settled) return;
     this.settled = true;
-    this.err = header;
+    this.writer?.finish();
+    if (!this.headSent) this.err = header;
     this.resolveDone?.();
   }
 
-  /** 载体响应（错误优先；WS 101 含关闭码头透传）。 */
-  carrier(): CarrierResponse {
+  /** 头已发出（流式已结算）——handle 返回 null 让 SDK 胶水跳过静态兜底。 */
+  get streamed(): boolean {
+    return this.headSent;
+  }
+
+  /** 静态载体（仅头未发出路径：错误/兜底；流式路径的分块不在此聚合）。 */
+  carrier(): CarrierResponse | null {
+    if (this.streamed) return null;
     if (this.err !== undefined) {
       return errorCarrierResponse(this.err.code, this.err.message);
     }
     const status = this.meta?.status ?? 200;
-    const outHeaders: Array<{ name: string; value: string }> = [
-      { name: "content-type", value: this.meta?.contentType ?? "application/octet-stream" },
-    ];
-    for (const [name, value] of Object.entries(this.meta?.headers ?? {})) {
-      outHeaders.push({ name, value });
-    }
-    if (this.isWs && status === 101 && this.wsCloseCode !== undefined) {
-      outHeaders.push({ name: AIFLY_WS_CLOSE_HEADER, value: String(this.wsCloseCode) });
-    }
-    return { status, headers: outHeaders, bodyChunks: this.chunks };
+    return {
+      status,
+      headers: [
+        { name: "content-type", value: this.meta?.contentType === "" || this.meta?.contentType === undefined ? "application/octet-stream" : this.meta.contentType },
+      ],
+      bodyChunks: [],
+    };
   }
 }

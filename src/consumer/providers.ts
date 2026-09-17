@@ -24,6 +24,8 @@ import {
   AIFLY_WATCH_PATH,
   AIFLY_SERVICE_HEADER,
   AIFLY_WS_CLOSE_HEADER,
+  looksLikeWsCloseTrailer,
+  decodeWsCloseTrailer,
 } from "../wire/http-protocol.ts";
 import {
   AUTH_OK_HEADER_SCHEMA,
@@ -59,6 +61,8 @@ export interface FetchHttpInitLike {
   headers?: Array<{ name: string; value: string }>;
   body?: Array<Uint8Array> | null;
   keepOpen?: boolean;
+  /** 响应头等待上限毫秒（默认 30s——watch 长轮询按需放宽）。 */
+  headTimeoutMs?: number;
 }
 
 /** fetchHttp 响应（SDK HttpClientResponseJs 结构子集；pull-first bodyNext）。 */
@@ -458,16 +462,37 @@ export class ProviderConnection implements ProviderRoute {
         const meta: RespMetaHeader = { id, status: resp.status, contentType, ...(picked !== undefined ? { headers: picked } : {}) };
         if (input.upgrade && resp.status === 101) {
           handlers.onMeta(meta);
+          // 关闭码带内尾块（流式载体）：形态命中先扣留——下一读为 EOF 则按尾块
+          // 解释，否则按数据冲刷（内核保 write 分块边界，前瞻可靠）。
+          let held: Buffer | null = null;
           for (;;) {
             const c = await resp.bodyNext();
             if (aborted) return;
             if (c === null) break;
+            if (held !== null) {
+              handlers.onWsData(new Uint8Array(held));
+              held = null;
+            }
+            if (looksLikeWsCloseTrailer(c)) {
+              held = c;
+              continue;
+            }
             handlers.onWsData(new Uint8Array(c));
           }
           if (aborted) return;
-          const closeRaw = headerValue(resp.headers, AIFLY_WS_CLOSE_HEADER);
-          const code = closeRaw !== undefined ? Number(closeRaw) : undefined;
-          handlers.onWsClose(code !== undefined && Number.isInteger(code) && code >= 1000 && code <= 65535 ? code : undefined);
+          let closeCode: number | undefined;
+          if (held !== null) {
+            const decoded = decodeWsCloseTrailer(held);
+            if (decoded !== null) closeCode = decoded;
+            else handlers.onWsData(new Uint8Array(held)); // 非 trailer 形态：冲刷
+          }
+          if (closeCode === undefined) {
+            // 兼容兜底：静态载体时代的响应头透传
+            const closeRaw = headerValue(resp.headers, AIFLY_WS_CLOSE_HEADER);
+            const code = closeRaw !== undefined ? Number(closeRaw) : undefined;
+            if (code !== undefined && Number.isInteger(code) && code >= 1000 && code <= 65535) closeCode = code;
+          }
+          handlers.onWsClose(closeCode);
           handlers.onTerminate({ source: "peer" });
           return;
         }
@@ -715,6 +740,8 @@ export class ProviderConnection implements ProviderRoute {
           const resp = await session.fetchHttp({
             method: "GET",
             path: `${AIFLY_WATCH_PATH}?since=${seq}`,
+            // 长轮询响应头贴着提供端 20s 等待窗——留裕量防 30s 默认值边缘竞态
+            headTimeoutMs: 35_000,
           });
           if (resp.status === 204) {
             const cur = Number(headerValue(resp.headers, "x-aifly-catalog-seq") ?? "0");

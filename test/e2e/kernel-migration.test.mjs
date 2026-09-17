@@ -522,6 +522,116 @@ maybeTest("kernel e2e: WS keepOpen tunnel — active receive, recovering hang, c
 });
 
 // ---------------------------------------------------------------------------
+// T5：本地断开 → 上游关闭（per-request cancel 全链：gateway abort →
+// resp.abort() → RESET → provider 止付 → 上游连接关闭）
+// ---------------------------------------------------------------------------
+
+maybeTest("kernel e2e: local client disconnect closes upstream connection (abort chain)", async () => {
+  const upstream = await startHangUpstream(); // 挂起上游 + 连接开闭观测
+  const p = await pair();
+  const engineDir = tmp("aifly-e2e-engdir-");
+  const { engine, serviceId, key } = makeProviderEngine(p.provider, engineDir, `http://127.0.0.1:${upstream.port}`);
+  await engine.start();
+  let stack;
+  try {
+    stack = await bootStack(p.provider, p.consumer, key, serviceId);
+    await waitFor(() => stack.conn.state === "direct" || stack.conn.state === "relay", 45_000, "direct after AUTH");
+
+    const ctrl = new AbortController();
+    const fetchPromise = fetch(`http://127.0.0.1:${stack.port}/hang`, {
+      method: "POST",
+      body: "please-hang",
+      signal: ctrl.signal,
+    }).catch(() => "aborted");
+    await withTimeout(upstream.arrived, 20_000, "request reached upstream");
+
+    ctrl.abort(); // 本地断开
+    assert.equal(await fetchPromise, "aborted", "local fetch aborted");
+    // 上游连接在有界时间内被 provider 关闭（abort 链全程：非等到头超时）
+    await withTimeout(upstream.closed, 10_000, "upstream connection closed after local abort");
+  } finally {
+    await stack?.stop();
+    await engine.shutdown();
+    await p.provider.shutdown();
+    await p.consumer.shutdown();
+    await closeServer(upstream.server);
+    rmSync(engineDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// T6：WS 交互式回声（B2 后成立：101 早发 + 双向实时——锁步往返在
+// store-and-forward 形态下不可能）
+// ---------------------------------------------------------------------------
+
+maybeTest("kernel e2e: WS interactive echo — lockstep round-trips over live tunnel", async () => {
+  const ROUNDS = 3;
+  const upstream = await startWsEchoUpstream();
+  const p = await pair();
+  const engineDir = tmp("aifly-e2e-engdir-");
+  const { engine, serviceId, key } = makeProviderEngine(p.provider, engineDir, `http://127.0.0.1:${upstream.port}`);
+  await engine.start();
+  let stack;
+  try {
+    stack = await bootStack(p.provider, p.consumer, key, serviceId);
+    await waitFor(() => stack.conn.state === "direct" || stack.conn.state === "relay", 45_000, "direct after AUTH");
+
+    const echoed = [];
+    let waitForEcho;
+    let echoSignal;
+    const resetEchoWait = () => {
+      echoSignal = new Promise((r) => {
+        waitForEcho = r;
+      });
+    };
+    resetEchoWait();
+    let metaResolve;
+    const metaArrived = new Promise((r) => {
+      metaResolve = r;
+    });
+    const handle = stack.conn.forward(
+      {
+        serviceId,
+        method: "GET",
+        path: "/ws",
+        headers: { connection: "Upgrade", upgrade: "websocket", "sec-websocket-version": "13", "sec-websocket-key": "aWZseS1rZXk=" },
+        upgrade: true,
+        body: new Uint8Array(0),
+      },
+      {
+        onMeta: () => metaResolve(),
+        onChunk: () => undefined,
+        onEnd: () => undefined,
+        onError: () => undefined,
+        onWsData: (bytes) => {
+          echoed.push(Buffer.from(bytes).toString("utf8"));
+          waitForEcho?.();
+        },
+        onWsClose: () => undefined,
+        onTerminate: () => undefined,
+      },
+    );
+    // 101 早发（B2）：隧道就绪后才开始锁步——上行在 101 前到达会被静默丢弃（既定语义）
+    await withTimeout(metaArrived, 20_000, "101 meta (early)");
+    // 锁步：每轮先等上一轮回声到达才发下一帧（实时双向的充分证明）
+    for (let i = 0; i < ROUNDS; i++) {
+      await handle.sendData(Buffer.from(`ping-${i}`));
+      await withTimeout(echoSignal, 10_000, `echo round ${i}`);
+      resetEchoWait();
+    }
+    assert.deepEqual(echoed, Array.from({ length: ROUNDS }, (_, i) => `ping-${i}`), "锁步回声序列");
+    assert.equal(upstream.upgrades, 1, "上游 WS 会话恰好一次");
+  } finally {
+    await stack?.stop();
+    await engine.shutdown();
+    await p.provider.shutdown();
+    await p.consumer.shutdown();
+    await closeServer(upstream.server);
+    rmSync(engineDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // upstream 假体
 // ---------------------------------------------------------------------------
 
@@ -593,6 +703,47 @@ async function startGatedUpstream() {
   });
   await listen(server);
   return { server, port: portOf(server) };
+}
+
+/** 挂起上游（T5）：请求到达观测 + 连接关闭观测（abort 链断言面）。 */
+async function startHangUpstream() {
+  let arrivedResolve;
+  const arrived = new Promise((r) => {
+    arrivedResolve = r;
+  });
+  let closedResolve;
+  const closed = new Promise((r) => {
+    closedResolve = r;
+  });
+  const server = httpServer((req, res) => {
+    arrivedResolve();
+    // 不响应：等待 provider 侧 abort 关闭连接（socket close 即断言信号）
+    req.on("close", () => closedResolve());
+    void res;
+  });
+  await listen(server);
+  return { server, port: portOf(server), arrived, closed };
+}
+
+/** WS 回声上游（T6）：message → 原样回发（锁步交互的实时对端）。 */
+async function startWsEchoUpstream() {
+  const { WebSocketServer } = await import("ws");
+  let upgrades = 0;
+  const server = httpServer((_req, res) => {
+    res.writeHead(404);
+    res.end();
+  });
+  const wss = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (req, socket, head) => {
+    upgrades += 1;
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.on("message", (data, isBinary) => {
+        ws.send(data, { binary: isBinary });
+      });
+    });
+  });
+  await listen(server);
+  return { server, wss, port: portOf(server), get upgrades() { return upgrades; } };
 }
 
 async function startWsPushUpstream({ frames, tickMs }) {

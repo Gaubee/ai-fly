@@ -223,7 +223,7 @@ export async function startProviderDaemon(opts: DaemonOptions): Promise<RunningD
     store,
     dataDir: opts.dataDir,
     serveHttp: (f, peerId, handler) =>
-      http.serveHttp(f, peerId, handler as Parameters<typeof http.serveHttp>[2]),
+      http.serveHttp(f, peerId, handler as unknown as Parameters<typeof http.serveHttp>[2]),
     limits,
     opts: {
       alias: opts.alias,
