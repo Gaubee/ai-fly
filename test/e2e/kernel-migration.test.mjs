@@ -11,8 +11,8 @@
 //   （新 session id）后恢复 200
 // - T4 WS keepOpen 隧道三态：active 下行收帧（+终结后上行写）、recovering 挂起
 //   不报错、dead/close 关闭码透传
-// （本阶段 NAPI 承载面为静态 chunks：101 meta 与响应体在载体终结时一次性下发——
-// 交互式 echo 形态不可测，T4 用推送型上游；详见任务报告阻塞项 B1/B2。）
+// （承载面已流式化（B1/B2 收口，opendweb f7db830）：meta 即发头 + chunk 逐块
+// 下发——T5 覆盖 abort 链、T6 覆盖 WS 锁步交互；关闭码走带内尾块。）
 // 所有 Fabric/engine/gateway/upstream 显式回收（finally 钩子）。
 
 import test from "node:test";
@@ -272,8 +272,8 @@ maybeTest("kernel e2e: SSE mid-stream continuityReset — ordered resume, zero d
     stack = await bootStack(p.provider, p.consumer, key, serviceId);
     await waitFor(() => stack.conn.state === "direct" || stack.conn.state === "relay", 45_000, "direct after AUTH");
 
-    // 在途 SSE 请求（读循环不重启；载体在 handler 完成后一次性下发——断言语义
-    // 不变：字节级精确 + 零重复 + exec==1）
+    // 在途 SSE 请求（读循环不重启；承载面已流式化——断言语义不变：字节级
+    // 精确 + 零重复 + exec==1；恢复语义与流式下发正交）
     const resPromise = withTimeout(
       fetch(`http://127.0.0.1:${stack.port}/sse`, { headers: { accept: "text/event-stream" } }),
       30_000,
