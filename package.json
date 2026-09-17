@@ -1,6 +1,6 @@
 {
   "name": "ai-fly",
-  "version": "0.4.0",
+  "version": "0.5.0-alpha.1",
   "description": "ai-fly — peer-to-peer HTTP/WebSocket bridge with AI-ready presets, over OpenDWeb fabric",
   "license": "MIT OR Apache-2.0",
   "type": "module",
@@ -32,7 +32,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
-    "@jixo/opendweb-client-sdk": "^0.4.3",
+    "@jixo/opendweb-client-sdk": "^0.5.0",
     "@opentray/ext-webview": "0.23.0",
     "@orpc/contract": "1.14.6",
     "@orpc/server": "1.14.6",
