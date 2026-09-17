@@ -108,7 +108,7 @@ async function pair() {
 // 产品装配
 // ---------------------------------------------------------------------------
 
-function makeProviderEngine(fabric, engineDir, upstreamUrl) {
+function makeProviderEngine(fabric, engineDir, upstreamUrl, timeouts = { connectMs: 2_000, firstByteMs: 10_000, stallMs: 10_000 }) {
   const store = ProviderStore.open(engineDir);
   const svc =
     store.getServiceByName("e2e") ??
@@ -120,7 +120,7 @@ function makeProviderEngine(fabric, engineDir, upstreamUrl) {
     store,
     dataDir: engineDir,
     serveHttp: (f, peerId, handler) => serveHttpGlue(f, peerId, handler),
-    opts: { timeouts: { connectMs: 2_000, firstByteMs: 10_000, stallMs: 10_000 } },
+    opts: { timeouts },
   });
   return { engine, store, serviceId: svc.serviceId, key };
 }
@@ -524,13 +524,19 @@ maybeTest("kernel e2e: WS keepOpen tunnel — active receive, recovering hang, c
 // ---------------------------------------------------------------------------
 // T5：本地断开 → 上游关闭（per-request cancel 全链：gateway abort →
 // resp.abort() → RESET → provider 止付 → 上游连接关闭）
+// 慢滴形态：响应头已到、上游持续低速产出——断言只可能经 abort 链闭合
+//（stall 超时放宽到 60s 排除竞争路径）。
 // ---------------------------------------------------------------------------
 
 maybeTest("kernel e2e: local client disconnect closes upstream connection (abort chain)", async () => {
-  const upstream = await startHangUpstream(); // 挂起上游 + 连接开闭观测
+  const upstream = await startSlowStreamUpstream();
   const p = await pair();
   const engineDir = tmp("aifly-e2e-engdir-");
-  const { engine, serviceId, key } = makeProviderEngine(p.provider, engineDir, `http://127.0.0.1:${upstream.port}`);
+  const { engine, serviceId, key } = makeProviderEngine(p.provider, engineDir, `http://127.0.0.1:${upstream.port}`, {
+    connectMs: 2_000,
+    firstByteMs: 10_000,
+    stallMs: 60_000, // 排除 stall 超时兜底——上游关闭只可能来自 abort 链
+  });
   await engine.start();
   let stack;
   try {
@@ -538,16 +544,17 @@ maybeTest("kernel e2e: local client disconnect closes upstream connection (abort
     await waitFor(() => stack.conn.state === "direct" || stack.conn.state === "relay", 45_000, "direct after AUTH");
 
     const ctrl = new AbortController();
-    const fetchPromise = fetch(`http://127.0.0.1:${stack.port}/hang`, {
-      method: "POST",
-      body: "please-hang",
-      signal: ctrl.signal,
-    }).catch(() => "aborted");
-    await withTimeout(upstream.arrived, 20_000, "request reached upstream");
+    const firstRead = (async () => {
+      const res = await fetch(`http://127.0.0.1:${stack.port}/drip`, { signal: ctrl.signal });
+      if (res.body === null) throw new Error("no body");
+      const reader = res.body.getReader();
+      await reader.read(); // 首块到达——响应头已发出（post-head abort 形态）
+    })();
+    await withTimeout(firstRead, 20_000, "first chunk consumed by local client");
 
-    ctrl.abort(); // 本地断开
-    assert.equal(await fetchPromise, "aborted", "local fetch aborted");
-    // 上游连接在有界时间内被 provider 关闭（abort 链全程：非等到头超时）
+    ctrl.abort(); // 本地断开（响应头后、流进行中）
+    // 上游连接在有界时间内被 provider 关闭（RESET 止付 → handler 写失败 →
+    // settle → ctrl.abort → 上游 socket close；stall 60s 不构成替代路径）
     await withTimeout(upstream.closed, 10_000, "upstream connection closed after local abort");
   } finally {
     await stack?.stop();
@@ -705,24 +712,28 @@ async function startGatedUpstream() {
   return { server, port: portOf(server) };
 }
 
-/** 挂起上游（T5）：请求到达观测 + 连接关闭观测（abort 链断言面）。 */
-async function startHangUpstream() {
-  let arrivedResolve;
-  const arrived = new Promise((r) => {
-    arrivedResolve = r;
-  });
+/** 慢滴上游（T5）：响应头即发 + 每 400ms 一块、永不主动结束；连接关闭观测
+ *（abort 链断言面——stall 60s 下游唯一关闭路径）。 */
+async function startSlowStreamUpstream() {
   let closedResolve;
   const closed = new Promise((r) => {
     closedResolve = r;
   });
   const server = httpServer((req, res) => {
-    arrivedResolve();
-    // 不响应：等待 provider 侧 abort 关闭连接（socket close 即断言信号）
-    req.on("close", () => closedResolve());
-    void res;
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write("data: open\n\n");
+    const timer = setInterval(() => {
+      res.write(`data: tick-${Date.now()}\n\n`);
+    }, 400);
+    const onClose = () => {
+      clearInterval(timer);
+      closedResolve();
+    };
+    req.on("close", onClose);
+    res.on("close", onClose);
   });
   await listen(server);
-  return { server, port: portOf(server), arrived, closed };
+  return { server, port: portOf(server), closed };
 }
 
 /** WS 回声上游（T6）：message → 原样回发（锁步交互的实时对端）。 */
