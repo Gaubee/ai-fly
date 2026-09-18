@@ -64,5 +64,8 @@
       复核轨迹 7.1 → 7.8（预中止竞态 + watch 失效收敛 P2）→ 8.1（probe 边界 +
       watch 测试路径 + 归档前置）→ 全部修复并实跑验证（vitest 646/646、
       integration 11/11、e2e 门禁 10/10、tsc、openspec strict 7/7）；
-      SPEC-COVERAGE.md 对照归档合并后正式 specs 全量重写（88 Scenario：覆盖 71、
-      部分 10、未覆盖 7——未覆盖项均为机制退役/无断言留档），归档执行）
+      SPEC-COVERAGE.md 对照归档合并后正式 specs 全量重写，归档执行。终评微复核
+      （8.3/10）指出两处正式 spec 与实现的合同漂移后，完成 spec-sync：wire-protocol
+      重写为内核承载口径（帧族条款 superseded，14 Scenario），provider 密钥原文
+      条款按 Owner 2026-09-13 裁决同步（本地可取回 + 远程面禁原文）；coverage
+      同步重写（85 Scenario：覆盖 76、部分 8、未覆盖 2））

@@ -5,10 +5,10 @@
 
 ## 承载面换基说明（先读）
 
-- **envelope 帧族已退役**：magic/REQ/RESP/PING/分片序号等帧级机制随
-  opendweb-kernel-migration 退役。请求多路复用、分片保序、断线原序重放、发送侧
-  反压、终态后迟到帧幂等，现由 opendweb 会话连续性内核（journal / RESET / 90s
-  恢复窗口）承接。ai-fly 侧等价验证面为：
+- **envelope 帧族已退役，正式 spec 已同步**：wire-protocol spec 于 2026-09-18
+  spec-sync 重写为内核承载口径（HTTP 投影为现行协议；magic/REQ/RESP/PING/分片
+  序号/ABORT 帧条款标记 superseded，由内核 journal/RESET/90s 恢复窗口/cancel
+  signal 承接）。ai-fly 侧等价验证面为：
   - 真内核 e2e：`test/e2e/kernel-migration.test.mjs`（T1–T8）
   - SDK 生命周期测试（opendweb 仓库）：`packages/client-sdk/test/http-lifecycle.test.mjs`
   - unit 投影层：`test/unit/**`（fake-fabric / gateway 模拟）
@@ -27,19 +27,16 @@
 - **部分** = 语义主面有断言，某一子句未断言（注明）
 - **未覆盖（原因）** = 无断言，注明原因与替代面
 
-## wire-protocol（17 Scenario）
+## wire-protocol（14 Scenario）
 
 | Scenario | 状态 | 覆盖位置 / 说明 |
 |---|---|---|
-| 混流共存 | 部分 | 会话复用面：ai-fly 控制面（`/_aifly/auth`、catalog-watch）与数据面（forward）在同一内核会话并存——e2e T1（真内核 AUTH+目录+转发同会话）+ unit engine（AUTH/目录与 forward 全链路共用会话）。「与其它应用 envelope 流量共存」本体是内核多流契约，ai-fly 侧不可构造 |
-| 未知帧类型前向兼容 | 未覆盖（机制退役）| 帧类型枚举随 envelope 退役；前向兼容由内核会话版本协商承接（opendweb 侧）。ai-fly 控制面对未知路径/方法按 HTTP 语义处理（401/405——gateway unit forbidden_method） |
-| 方向反转被拒 | 未覆盖（机制退役）| 帧方向约束随 envelope 退役；等价面 = 控制面仅接受约定方法/路径（gateway unit OPTIONS 405 + engine 未授权 401），无「回敬 ERROR 帧」面 |
-| 使用方侧反向帧静默处理 | 未覆盖（机制退役）| 同上；静默丢弃语义由内核流终态幂等承接 |
-| 已终结 id 的迟到帧 | 未覆盖（机制退役）| 内核终态后迟到数据零副作用由 opendweb continuity 测试锁定，ai-fly 侧无对应面 |
-| 空闲请求被清理 | 部分 | 上游超时族存活：unit upstream「流中途停滞（120s 可配）→ idle_timeout 且中止上游」「连接期超时 → upstream_unreachable 零 fetch」。300s 请求级双端空闲窗与 PING 活度随 envelope 退役，由内核恢复窗口承接 |
-| 深度推理长等待不误杀 | 部分 | 挂起不误杀面：e2e T2（恢复窗口内挂起、续传完成）+ unit upstream「上游迟滞后正常完成」；「至首字节超时以 idle_timeout 终结」子句经流中途停滞同码路径覆盖，首字节等待期超时未单独钉 |
+| 控制面与数据面并存 | 覆盖 | e2e T1（真内核 AUTH+目录+转发同会话）+ engine unit（AUTH/目录与 forward 全链路共用会话） |
+| 未知路径与方法的本地处理 | 覆盖 | gateway unit（枚举外方法 405 forbidden_method）+ engine unit（未授权 401）+ gateway unit（path > 4 KiB 400 零转发） |
+| 终态后迟到数据零副作用 | 部分 | 内核终态幂等为 opendweb 合同（SDK http-lifecycle + continuity 测试）；ai-fly 侧经 e2e T2（断线原序续传、已交付零重复）间接承载 |
+| 流中途停滞被清理 | 覆盖 | unit upstream「流中途停滞（120s 可配 → 60ms）→ idle_timeout 且中止上游」 |
+| 长等待与瞬断不误杀 | 覆盖 | providers unit「recovering：挂起不快速失败」+ e2e T2（窗口内原序续传）+ unit upstream「上游迟滞后正常完成」 |
 | 客户端中途断开 | 覆盖 | e2e T5（本地断开 → per-request cancel 全链 → 上游关闭）+ unit upstream（ABORT → 中止上游）+ gateway unit（流中客户端断开） |
-| 终结后不再收帧 | 未覆盖（机制退役）| 同「已终结 id 的迟到帧」；内核终态幂等（opendweb 侧） |
 | 脚本失效以 hook_failed 终结 | 覆盖 | unit upstream（③ 构造期失效/流中途失败 → hook_failed 固定脱敏、零 fetch）+ rust-fetch unit + providers unit（消费端双分支） |
 | 目录随服务变更推送 | 覆盖 | unit engine「服务变更推送：向组新增服务进入 refresh 视图（全量替换语义）」 |
 | 服务删除后的收敛 | 覆盖 | gateway unit「服务删除：关端口 + 终结在途（fetch 拒绝/ABORT）」 |
@@ -58,7 +55,7 @@
 | 特权上游端口强制显式 | 覆盖 | store unit「https 443 未声明 defaultPort → 拒绝 / 显式后接受 / http 80 同 / 高位端口缺省继承」 |
 | 旧版本配置判失效 | 覆盖 | store-legacy unit（legacy 模式全矩阵：NOTICE、逐条移除、重建 v2 空库） |
 | 一组多钥独立撤销 | 覆盖 | engine unit「双钥在线撤一钥：refresh 视图剔除、会话不断」+ store unit（撤钥幂等、重开保留）+ engine unit「混合钥 AUTH：rejected 携带 key_invalid」 |
-| 密钥原文不可再现 | 部分（spec 已漂移）| 现行语义为 Owner 裁决 2026-09-13「key 原文随库可复制」（store unit 钉死），取代旧「仅哈希存储、签发后不可再现」条款；面板/列表面不回显原文仍成立（integration app「分组/密钥管理（issue 原文一次性）」）。spec 文本待后续 spec-sync 修订 |
+| 密钥原文不跨远程面 | 覆盖 | integration app「密钥库往返：值绝不跨 RPC」「分组/密钥管理（issue 原文一次性）」+ store unit（本地可复制语义钉死 + verifyKey 常数时间）+ link unit（敏感信息不入链）。spec 已同步 Owner 裁决 2026-09-13（本地 0600 可取回；远程面禁原文）——2026-09-18 spec-sync |
 | 目录随服务变更推送 | 覆盖 | 同 wire-protocol 同名行（engine unit） |
 | 越权服务统一拒绝 | 覆盖 | engine unit「未授权/未知 serviceId 统一 unknown_service（防枚举）」 |
 | detail 披露脱敏 | 覆盖 | detail unit（auth.secret/script/literal、headers.set 引用、四槽掩码）+ engine unit AUTH_OK（●、无变量名/值） |
@@ -146,15 +143,17 @@
 
 ## 汇总
 
-- wire-protocol 17：覆盖 8、部分 3、未覆盖 6（其中 5 项为帧族机制随内核迁移退役——等价保证由 opendweb 内核契约承接；1 项跨版本目录为机制在位无断言）
-- provider 37：覆盖 36、部分 1（密钥原文条款 spec 已漂移——现行可复制语义为 Owner 裁决）
+- wire-protocol 14：覆盖 12、部分 1（终态迟到数据——内核合同，ai-fly 侧间接）、未覆盖 1（跨版本目录机制在位无断言）
+- provider 37：覆盖 37（密钥原文条款已按 Owner 裁决同步 spec）
 - consumer 27：覆盖 23、部分 3（慢客户端内核反压面、relay 热切换不可构造、丢批机制退役）、未覆盖 1（forget 真删——CLI 在位无断言）
 - share-link 7：覆盖 4、部分 3
-- 合计 88 Scenario：覆盖 71、部分 10、未覆盖 7
+- 合计 85 Scenario：覆盖 76、部分 8、未覆盖 2
 
 后续补测项（非发布阻塞）：
 
 1. 跨版本目录安全拒绝（providers.ts 二阶段失败回调）补确定性单测
 2. `services rm <provider>`（forget 真删）补 e2e/unit 断言
 3. 踢人不撤钥的「c2 同钥继续可用」显式断言（现隐式）
-4. spec 文本与实现的已漂移条款，下期 spec-sync 修订：密钥原文可复制裁决、wire-protocol 帧族条款重写为内核承载口径
+4. P2 backlog（终评复核留档）：provider 连接关闭路径的 watch 收敛（disposeLocal
+   不唤醒在途 watch、handleWatch 不监听 req.signal——关闭后等待者滞留至超时）
+   补显式唤醒 + 有界关闭测试；归档 design/tasks 中 ^0.5.0 等历史措辞清理

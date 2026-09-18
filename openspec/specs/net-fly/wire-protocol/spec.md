@@ -2,109 +2,101 @@
 
 ## Purpose
 
-定义 ai-fly 引擎在 fabric 不透明 envelope 之上的帧子协议（内部分层标签 net-fly）：命名空间隔离、AUTH 握手、HTTP 请求多路复用、WebSocket 升级通道、流式分片保序、中止/超时与错误语义、资源上限。协议是 HTTP/WS 级通用转发（方法/路径/头/正文/双向流的承载与还原），不解析业务语义。会话层不解析本协议；本协议不依赖会话层之外的任何内核改动。
+定义 ai-fly 引擎在 opendweb 会话连续性内核之上的应用层子协议（内部分层标签
+net-fly）。**承载面自 opendweb-kernel-migration 起为 HTTP 投影**：控制面端点
+（`/_aifly/auth` 多密钥呈交、`/_aifly/catalog-watch` 目录长轮询）与数据面转发
+（`SessionHandle.fetchHttp` + bodyNext 流式还原、WS keepOpen 字节隧道）。协议是
+HTTP/WS 级通用转发（方法/路径/头/正文/双向流的承载与还原），不解析业务语义。
+会话层不解析本协议；本协议不依赖会话层之外的任何内核改动。
+
+**退役声明（superseded）**：旧 aifly1 envelope 帧族——magic 前缀、REQ/RESP 帧
+类型与帧方向、分片序号（protocol_seq）、PING 活度、ABORT 帧——随内核迁移退役。
+其承载的保证由内核承接：请求多路复用与分片保序（journal 原序重放）、断线原序
+续传（recovering 挂起 + 90s 恢复窗口）、发送侧反压（journal 上限）、中止传播
+（cancel signal / RESET）与终态后迟到数据幂等。仍在运行的静态遗产为共享 schema
+与常量（错误码集合、服务 detail 四槽投影、路径/头资源上限——`src/wire/frames.ts`），
+服务于 HTTP 投影与 share-link 编码，不再是线上帧格式。
 
 ## Requirements
 
-### Requirement: 命名空间与版本隔离
+### Requirement: 会话承载与端点语义
 
-所有 ai-fly 帧 SHALL 以固定 magic（`aifly1`，6 字节 ASCII）开头，其后为 1 字节
-帧类型与 JSON 头（UTF-8）。接收方对不以该 magic 开头的 envelope MUST 静默忽略
-（同一 fabric 可并存其它应用的 envelope 流量）。对 magic 匹配但协议版本不识别的帧，
-MUST 回送 ERROR 帧（code `protocol_version`）并丢弃原帧；对版本匹配但类型未知的帧
-MUST 记录并忽略，不得终止连接或影响其它请求。
+同一内核会话 SHALL 同时承载 ai-fly 控制面（auth/catalog-watch）与数据面
+（forward）流量，与该会话上的其它应用流量互不干扰（内核多流契约）。控制面对
+未知路径与不支持的请求方法 SHALL 按 HTTP 语义本地处理（未授权 401、方法不支持
+405 forbidden_method），不得影响同一会话上的其它请求。会话/流终态（dead/
+closed/RESET）后到达的迟到数据 MUST 零副作用（内核终态幂等；ai-fly 侧不再自建
+帧方向/序号检查）。
 
-#### Scenario: 混流共存
+#### Scenario: 控制面与数据面并存
 
-- **WHEN** 同一 fabric 上另一应用向 ai-fly 端点发送不含 magic 的 envelope
-- **THEN** 端点静默忽略该 envelope，既有请求转发不受影响
+- **WHEN** 同一内核会话上 AUTH、catalog-watch 与 forward 请求并发进行
+- **THEN** 各端点互不干扰，请求各自正常完成
 
-#### Scenario: 未知帧类型前向兼容
+#### Scenario: 未知路径与方法的本地处理
 
-- **WHEN** 接收到 magic 与版本均匹配、但帧类型未定义的帧
-- **THEN** 该帧被忽略，同一连接上的后续帧与在途请求正常处理
+- **WHEN** 控制面收到未知路径或枚举外方法的请求
+- **THEN** 本地回 401/405（不触达上游），同一会话的其它请求不受影响
 
-### Requirement: 帧方向与未知标识符
+#### Scenario: 终态后迟到数据零副作用
 
-帧方向 SHALL 固定：使用方→提供方仅 AUTH/REQ/REQ_BODY/DATA_UP/ABORT/CLOSE；
-提供方→使用方仅 AUTH_OK/AUTH_ERR/RESP_META/RESP_CHUNK/RESP_END/DATA_DOWN/ERROR/
-PING（ERROR 帧仅提供方发出；使用方侧的一切终结均为本地动作：关闭本地连接、清理
-在途状态、（适用时）发送 ABORT/CLOSE）。方向违规的处理按侧不同：提供方侧以 ERROR
-（code `protocol_error`）回敬并丢弃（若可定位 `id`）；使用方侧静默丢弃并计数。
-**检查顺序**：未 AUTH 检查先于方向检查（未授权连接上除 AUTH 外一切帧——含方向
-违规——一律静默丢弃计数）。携带**未知 request-id 或已终结 request-id** 的任何帧
-MUST 静默丢弃（不回帧、不放大流量）；request-id 一经分配 MUST NOT 复用。
+- **WHEN** 某请求已因终结（会话终态或流终结）关闭后仍有迟到数据到达
+- **THEN** 迟到数据被内核终态幂等丢弃，不产生任何副作用（原「帧方向/已终结
+  id 迟到帧」族条款的内核承接形态）
 
-#### Scenario: 方向反转被拒
+### Requirement: 上游与请求超时
 
-- **WHEN** 提供方收到使用方发来的 RESP_META 帧
-- **THEN** 回送 `protocol_error` ERROR 帧并丢弃；连接与其它请求不受影响
+提供者 SHALL 对上游施加：连接期超时（默认 10s，超时回送 `upstream_unreachable`
+且零 fetch）、首字节超时（默认 600s，超时中止上游并回送 `idle_timeout`）与流
+中途停滞超时（默认 120s，可配置，超时中止上游并回送 `idle_timeout`）。请求级
+双端空闲窗与 PING 活度信号随 envelope 退役：传输中断期间的活度与保序由内核
+恢复窗口承接——消费端在 recovering（90s 窗口内）SHALL 挂起在途与新请求、不提
+前报错；窗口耗尽入 dead 后按消费侧离线语义终结。
 
-#### Scenario: 使用方侧反向帧静默处理
+#### Scenario: 流中途停滞被清理
 
-- **WHEN** 使用方收到提供方发来的 REQ 帧
-- **THEN** 帧被静默丢弃计数（使用方不回 ERROR 帧），连接继续服务其它请求
+- **WHEN** 流式响应在传输中途超过停滞超时窗（默认 120s）无任何字节推进
+- **THEN** 提供者中止上游并以 `idle_timeout` 终结该请求、释放资源
 
-#### Scenario: 已终结 id 的迟到帧
+#### Scenario: 长等待与瞬断不误杀
 
-- **WHEN** 某 `id` 已因 ERROR 终结后，又收到该 id 的 RESP_CHUNK
-- **THEN** 帧被静默丢弃，不产生任何副作用
-
-### Requirement: 空闲超时
-
-请求级空闲超时 SHALL 双端各自执行：任一端在超时窗（默认 300s，可配置）内未收到
-该 `id` 的任何帧（含 PING；WS 请求含任一方向的 DATA 帧）即终结并清理（提供方以
-ERROR code `idle_timeout` 回送；使用方为本地动作——关闭本地连接、发 ABORT、清理
-在途）。**首字节等待期豁免**：提供方侧对该请求的空闲计时在首字节等待期内挂起——
-此阶段使用方不发帧，活度由提供方自身的 PING 发送节奏与上游首字节超时（默认
-600s，可配置）管辖，不会在 300s 自杀；使用方侧计时照常（以收到的 PING 为活度
-信号）。提供者侧另对上游施加流中途停滞超时（默认 120s，可配置），超时即中止上游
-并回送 `idle_timeout`；上游连接期超时（10s）回送 `upstream_unreachable`。终结帧
-（RESP_END / CLOSE / ERROR）之后该 `id` 不得再出现任何帧。
-
-#### Scenario: 空闲请求被清理
-
-- **WHEN** 某流式请求 300s 无任何帧推进（也无 PING）
-- **THEN** 双端各自以 `idle_timeout` 终结该请求并释放资源
-
-#### Scenario: 深度推理长等待不误杀
-
-- **WHEN** 上游 400 秒未返回首字节（> 300s 空闲窗、< 600s 首字节超时）
-- **THEN** 使用方因持续收到 PING 不误杀；提供方侧空闲计时挂起不自杀；至 600s 提供方中止上游并回送 `idle_timeout`
+- **WHEN** 上游长时间未返回首字节，或传输瞬断处于恢复窗口内
+- **THEN** 消费端挂起等待不提前报错；恢复后原序续传；至首字节超时提供方以
+  `idle_timeout` 终结
 
 ### Requirement: 中止与错误语义
 
-使用方本地客户端断开或接收缓冲达限时，网关 SHALL 发 ABORT 帧（`id`）；提供者
-收到后 MUST 中止上游请求并停止分片，回送 ERROR（code `aborted`）作终结。提供者
-侧失败（上游不可达、上游错误、限额触发、协议错误、生命周期脚本失效）以 ERROR
-帧终结，JSON 头含 `id`（可得时）、`code`、`message`（脱敏：不含密钥与上游凭据、
-不含脚本路径与返回值）。ERROR 帧错误码集合 SHALL 稳定：`aborted`、
-`buffer_overflow`、`idle_timeout`、`unauthorized`、`key_all_invalid`、
-`unknown_service`、`upstream_unreachable`、`upstream_status`、`body_too_large`、
-`rate_limited`、`quota_exceeded`、`forbidden_method`、`forbidden_header`、
-`secret_missing`、`path_not_offered`、`hook_failed`（②③④ 生命周期脚本失效：
-绑定缺席、抛错、返回形状非法、流中途失败）、`protocol_version`、`protocol_seq`、
-`protocol_error`、`internal`（`key_invalid`/`key_revoked` 仅作为 AUTH_OK.rejected
-载荷码存在）。
+消费端本地客户端断开或接收缓冲达限时，网关 SHALL 取消内核请求（body 迭代器
+return / abortKey `abortFetch` / 会话流取消）并清理在途状态；提供者收到取消
+信号（signal，含预中止）MUST 中止上游请求、停止分片且零上游触达（预中止时含
+零 TCP 探测）。提供者侧失败（上游不可达、上游错误、限额触发、协议错误、生命
+周期脚本失效）以错误终结：响应头未下发时为本地 HTTP 错误响应，流式中为关闭
+本地连接；错误消息 MUST 脱敏（不含密钥与上游凭据、不含脚本路径与返回值）。
+错误码集合 SHALL 稳定：`aborted`、`buffer_overflow`、`idle_timeout`、
+`unauthorized`、`key_all_invalid`、`unknown_service`、`upstream_unreachable`、
+`upstream_status`、`body_too_large`、`rate_limited`、`quota_exceeded`、
+`forbidden_method`、`forbidden_header`、`secret_missing`、`path_not_offered`、
+`hook_failed`（②③④ 生命周期脚本失效：绑定缺席、抛错、返回形状非法、流中途
+失败）、`protocol_version`、`protocol_seq`、`protocol_error`、`internal`
+（`key_invalid`/`key_revoked` 仅作为 AUTH_OK.rejected 载荷码存在；
+`protocol_version`/`protocol_seq` 为 envelope 时代历史码，保留枚举以稳定错误
+映射，不再由运行时产生）。
 
 #### Scenario: 客户端中途断开
 
 - **WHEN** 本地客户端在流式响应进行到一半时断开连接
-- **THEN** 使用方网关发出 ABORT，提供者中止上游请求，双方以 ERROR(aborted) 终结该请求并释放资源
-
-#### Scenario: 终结后不再收帧
-
-- **WHEN** 某 `id` 已收到 ERROR 帧
-- **THEN** 之后到达的任何同 `id` 帧被丢弃，不产生副作用
+- **THEN** 网关取消内核请求，提供者中止上游请求，双方清理在途状态并释放资源
 
 #### Scenario: 脚本失效以 hook_failed 终结
 
 - **WHEN** 服务绑定的 request 脚本在流中途抛错
-- **THEN** 提供者以 ERROR(hook_failed) 终结该请求（消息脱敏），使用方按既有 ERROR 处理路径终结本地响应
+- **THEN** 提供者以 hook_failed 终结该请求（消息脱敏），使用方按既有错误处理
+  路径终结本地响应
 
 ### Requirement: 目录同步（AUTH_OK 复用）
 
-提供者 SHALL 以 AUTH_OK 帧承载目录：初次授权与后续推送同构，推送时带
+提供者 SHALL 以 AUTH_OK 响应承载目录：初次授权与后续推送同构（控制面
+`/_aifly/auth` 响应与 `/_aifly/catalog-watch` 长轮询推送），推送时带
 `refresh: true`，语义为**全量替换**使用方当前视图（含 `relayUrls` 与服务
 `detail`）。服务 detail 投影 SHALL 携带生命周期四槽（auth/headers/request/
 response）v2 形状（脚本/密钥注入位掩码 `●`）；投影形状变更不提供跨版本兼容
@@ -112,8 +104,9 @@ response）v2 形状（脚本/密钥注入位掩码 `●`）；投影形状变�
 使用方对 detail 投影解析失败 SHALL 视为**该提供者的目录同步失败**：保留既有
 服务视图与映射不动、记录本地错误提示（经通知通道呈现），不影响其它提供者
 （不区分专门的版本不匹配状态）；保留旧视图期间后续 AUTH_OK 照常接受，任一次
-成功的目录同步 SHALL 覆盖视图并清除该错误态。服务被删除时，刷新视图不含该服务；使用方 SHALL 关闭其本地映射
-端口并终结该服务在途请求。未 AUTH 的连接收到 AUTH_OK SHALL 静默丢弃。
+成功的目录同步 SHALL 覆盖视图并清除该错误态。服务被删除时，刷新视图不含该
+服务；使用方 SHALL 关闭其本地映射端口并终结该服务在途请求。未 AUTH 的会话
+收到 AUTH_OK 语义载荷 SHALL 静默丢弃。
 
 #### Scenario: 目录随服务变更推送
 
@@ -135,27 +128,27 @@ response）v2 形状（脚本/密钥注入位掩码 `●`）；投影形状变�
 - **WHEN** 旧版本使用方收到新版 detail 投影且解析失败
 - **THEN** 该提供者目录同步失败：既有服务视图与本地映射保持不变，本地记录错误提示，其它提供者不受影响
 
-### Requirement: 帧资源上限
+### Requirement: 请求资源上限
 
-除正文分片上限外，子协议 SHALL 施加结构上限：`path` ≤ 4 KiB、`headers` ≤ 32 项、
-单键 ≤ 1 KiB、单值 ≤ 8 KiB、JSON 头总长 ≤ 16 KiB。超限帧以 ERROR（code
-`protocol_error`）回应（携带对应 `id` 时）并丢弃。REQ 的 `path` 经服务基础路径
+除正文上限外，子协议 SHALL 施加结构上限：本地网关 `path` ≤ 4 KiB（超限回
+400 `protocol_error` 且零转发）、请求体 ≤ 8 MiB（413 `body_too_large` 零转发）、
+`headers` ≤ 32 项、单键 ≤ 1 KiB、单值 ≤ 8 KiB。REQ 的 `path` 经服务基础路径
 拼接并规范化后，提供者 SHALL 双重断言：产物 origin（scheme/host/port）MUST 与
-服务 upstream 配置一致，且规范化路径 MUST 仍以服务基础路径为前缀；任一不成立按
-`protocol_error` 拒绝且零上游请求（防 `//host` 逃逸与 `..` 回溯越界——path 含
-`.`/`..` 段已在 schema 层拒绝，此处断言为纵深防御）。
+服务 upstream 配置一致，且规范化路径 MUST 仍以服务基础路径为前缀；任一不成立
+按 `protocol_error` 拒绝且零上游请求（防 `//host` 逃逸与 `..` 回溯越界——path
+含 `.`/`..` 段已在 schema 层拒绝，此处断言为纵深防御）。
 
 #### Scenario: 超长路径被拒
 
-- **WHEN** REQ 帧 path 字段长 8 KiB
-- **THEN** 提供者回送 `protocol_error` ERROR 帧并丢弃该请求
+- **WHEN** 请求 path 字段长 8 KiB
+- **THEN** 本地网关回 400 `protocol_error`，零转发
 
 #### Scenario: 路径注入逃逸被拦
 
-- **WHEN** REQ 帧携带 path `//evil.example.com/v1/keys`
+- **WHEN** 请求携带 path `//evil.example.com/v1/keys`
 - **THEN** 拼接后 origin 断言失败，回送 `protocol_error`，不发生任何上游请求
 
 #### Scenario: 回溯越界被拦
 
-- **WHEN** REQ 帧携带 path `/../../admin`（schema 层拒绝失效时的纵深防御）
+- **WHEN** 请求携带 path `/../../admin`（schema 层拒绝失效时的纵深防御）
 - **THEN** 规范化后基础路径前缀断言失败，回送 `protocol_error`，不发生任何上游请求
