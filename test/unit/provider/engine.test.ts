@@ -460,6 +460,29 @@ describe("forward 端点全链路", () => {
     expect(errorCode(resp)).toBe("unknown_service");
   });
 
+  it("控制命名空间保留：错误方法 405 / 未知 /_aifly 路径 401，零上游触达", async () => {
+    // 已认证 + 有效 service header 下，控制端点的错误方法与保留命名空间内
+    // 未知路径都不得落入 forward 变成对上游的请求（spec：会话承载与端点语义）
+    await connectAndAuth([keyFriends.key]);
+    const before = upstreamBodies.length;
+    const wrongMethod = await fwdResp(
+      fwdReq(serviceId, { method: "GET", path: "/_aifly/auth" }),
+    );
+    expect(wrongMethod.status).toBe(405);
+    expect(errorCode(wrongMethod)).toBe("forbidden_method");
+    const wrongWatch = await fwdResp(
+      fwdReq(serviceId, { method: "POST", path: "/_aifly/catalog-watch" }),
+    );
+    expect(wrongWatch.status).toBe(405);
+    expect(errorCode(wrongWatch)).toBe("forbidden_method");
+    const unknownCtl = await fwdResp(
+      fwdReq(serviceId, { method: "POST", path: "/_aifly/nope" }),
+    );
+    expect(unknownCtl.status).toBe(401);
+    expect(errorCode(unknownCtl)).toBe("unauthorized");
+    expect(upstreamBodies.length).toBe(before);
+  });
+
   it("并发限额 1：第二在途请求立即 rate_limited；首请求完成后恢复受理", async () => {
     await connectAndAuth([keyFriends.key]);
     const first = fwdResp(fwdReq(serviceId, { path: "/stall" }));

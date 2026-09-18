@@ -556,6 +556,13 @@ class ProviderPeerServer implements AuthSessionBinding {
       result = await this.handleAuth(req);
     } else if (barePath === AIFLY_WATCH_PATH && req.method === "GET") {
       result = await this.handleWatch(req);
+    } else if (barePath === AIFLY_AUTH_PATH || barePath === AIFLY_WATCH_PATH) {
+      // 控制端点错误方法：本地 405，零上游触达（/_aifly/ 命名空间保留——错误
+      // 方法不得落入 forward 变成对上游的请求）
+      result = errorCarrierResponse(ERROR_CODE.forbidden_method, `method not allowed on control endpoint: ${req.method} ${barePath}`);
+    } else if (barePath.startsWith("/_aifly/")) {
+      // 保留命名空间内未知路径：本地 401（与未授权无差别，不暴露端点存在性）
+      result = errorCarrierResponse(ERROR_CODE.unauthorized, "unauthorized");
     } else {
       result = await this.handleForward(req);
     }

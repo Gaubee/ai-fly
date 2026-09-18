@@ -32,7 +32,7 @@
 | Scenario | 状态 | 覆盖位置 / 说明 |
 |---|---|---|
 | 控制面与数据面并存 | 覆盖 | e2e T1（真内核 AUTH+目录+转发同会话）+ engine unit（AUTH/目录与 forward 全链路共用会话） |
-| 未知路径与方法的本地处理 | 覆盖 | gateway unit（枚举外方法 405 forbidden_method）+ engine unit（未授权 401）+ gateway unit（path > 4 KiB 400 零转发） |
+| 未知路径与方法的本地处理 | 覆盖 | engine unit「控制命名空间保留：错误方法 405 / 未知 /_aifly 路径 401，零上游触达」（provider 侧 /_aifly/ 命名空间保留）+ gateway unit（枚举外方法 405 forbidden_method、path > 4 KiB 400 零转发） |
 | 终态后迟到数据零副作用 | 部分 | 内核终态幂等为 opendweb 合同（SDK http-lifecycle + continuity 测试）；ai-fly 侧经 e2e T2（断线原序续传、已交付零重复）间接承载 |
 | 流中途停滞被清理 | 覆盖 | unit upstream「流中途停滞（120s 可配 → 60ms）→ idle_timeout 且中止上游」 |
 | 长等待与瞬断不误杀 | 覆盖 | providers unit「recovering：挂起不快速失败」+ e2e T2（窗口内原序续传）+ unit upstream「上游迟滞后正常完成」 |
