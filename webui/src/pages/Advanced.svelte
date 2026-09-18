@@ -510,9 +510,19 @@
           </div>
         {:else if app.services.length === 0 && app.groups.length === 0}
           <Card scroll={false}>
-            <p class="p-4 text-xs text-muted-foreground">
-              {t("adv.services.empty")}
-            </p>
+            <!-- 居中空态（vision 走查 2026-09-18 P1-2 + 二轮 P1-2/P2-1）：图标 +
+                 主句 + 次句 + CTA；面板撑到 60vh 让空态在整页纵向居中 -->
+            <div class="flex min-h-[60vh] flex-col items-center justify-center gap-3 p-6 text-center">
+              <span
+                class="flex size-11 items-center justify-center rounded-md border border-muted-foreground/40 bg-card font-mono text-xl text-muted-foreground"
+                aria-hidden="true">+</span>
+              <p class="text-sm text-muted-foreground">{t("adv.services.empty")}</p>
+              <p class="text-xs text-muted-foreground/70">{t("adv.services.emptyHint")}</p>
+              <span class="mt-2 flex items-center gap-1.5">
+                <PressButton variant="fill" onclick={openAdd}>{t("adv.services.add")}</PressButton>
+                <a class="text-xs text-primary underline-offset-2 hover:underline" href="#/share">{t("adv.services.emptyGoShare")}</a>
+              </span>
+            </div>
           </Card>
         {:else}
           <!-- 统一服务视图（Owner 裁决 2026-09-13 #4）：分组 → 组内服务 → 组 keys -->

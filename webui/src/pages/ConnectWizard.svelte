@@ -301,7 +301,7 @@
         <CardFooter label="connect wizard actions">
           <PressButton variant="ghost" onclick={connectBack}>{t("common.back")}</PressButton>
           <PressButton variant="fill" href="#/dashboard" external={false} onclick={() => finishConnect()}>
-            finish - go to dashboard
+            {t("connect.finish")}
           </PressButton>
         </CardFooter>
       {/snippet}

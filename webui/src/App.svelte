@@ -105,7 +105,15 @@
         ></span>
         {t(disconnected ? (rpcState.status === "connecting" ? "shell.status.connecting" : "shell.status.reconnecting") : "shell.status.online")}
       </span>
-      <ThemeToggle variant="compact" />
+      <ThemeToggle
+        variant="compact"
+        labels={{
+          light: t("shell.theme.light"),
+          dark: t("shell.theme.dark"),
+          system: t("shell.theme.system"),
+          groupAriaLabel: t("shell.theme.group"),
+        }}
+      />
     </div>
   </header>
 

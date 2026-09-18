@@ -128,7 +128,7 @@
   <!-- ① 服务来源 -->
   {#if share.step === 1}
     <!-- 步骤标题下的搜索框（label/id/baseUrl 过滤精选+长尾；空串 = 全部） -->
-    <Input type="search" placeholder="search providers..." bind:value={search} />
+    <Input type="search" placeholder={t("share.search.placeholder")} bind:value={search} />
     {#if presets.loading}
       <div class="grid gap-3 sm:grid-cols-2">
         {#each Array.from({ length: 4 }) as _, i (i)}

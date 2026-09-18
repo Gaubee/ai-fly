@@ -195,26 +195,24 @@
       <Card title={t("dash.entry.share.title")} scroll={false}>
         <div class="flex min-h-28 flex-col gap-2 p-3">
           <p class="text-sm leading-relaxed text-muted-foreground">
-            Pick a source, name it, send one link. Your friend's agents reach your local models or
-            subscriptions in three steps.
+            {t("dash.entry.share.body")}
           </p>
         </div>
         {#snippet foot()}
           <CardFooter label="share entry actions">
-            <PressButton variant="fill" href="#/share" external={false}>start sharing -></PressButton>
+            <PressButton variant="fill" href="#/share" external={false}>{t("dash.entry.share.go")}</PressButton>
           </CardFooter>
         {/snippet}
       </Card>
       <Card title={t("dash.entry.connect.title")} scroll={false}>
         <div class="flex min-h-28 flex-col gap-2 p-3">
           <p class="text-sm leading-relaxed text-muted-foreground">
-            Paste an aifly1. link, confirm local ports, pick your agent. Ready to request in three
-            steps.
+            {t("dash.entry.connect.body")}
           </p>
         </div>
         {#snippet foot()}
           <CardFooter label="connect entry actions">
-            <PressButton variant="fill" href="#/connect" external={false}>start connecting -></PressButton>
+            <PressButton variant="fill" href="#/connect" external={false}>{t("dash.entry.connect.go")}</PressButton>
           </CardFooter>
         {/snippet}
       </Card>
@@ -272,9 +270,12 @@
                 - <code class="font-mono">{provider.endpointId.slice(0, 10)}</code>
               {/if}
             {:else}
-              no services shared yet
+              {t("dash.noServices")}
             {/if}
           </p>
+          {#if !provider.running && provider.services === 0}
+            <p class="text-[11px] leading-relaxed text-muted-foreground">{t("dash.provider.emptyHint")}</p>
+          {/if}
         </div>
         {#snippet foot()}
           <CardFooter label="provider actions">
@@ -283,7 +284,7 @@
               loading={daemonBusy}
               onclick={() => void toggleDaemon()}
             >
-              {provider.running ? "stop daemon" : "start daemon"}
+              {provider.running ? t("dash.daemon.stop") : t("dash.daemon.start")}
             </PressButton>
             <PressButton variant="ghost" href="#/share" external={false}>{t("dash.shareService")}</PressButton>
           </CardFooter>
@@ -310,7 +311,7 @@
           {#if consumer.providers.length === 0}
             <p class="text-xs text-muted-foreground">{t("dash.noProviders")}</p>
             <a class="text-xs text-primary underline-offset-2 hover:underline" href="#/connect">
-              import a share link ->
+              {t("dash.importLink")} -&gt;
             </a>
           {:else}
             <ItemGroup class="m-3">
@@ -437,7 +438,7 @@
                     >{row.enabled ? t("dash.ports.stop") : t("dash.ports.start")}</PressButton>
                     <PressButton
                       variant="ghost"
-                      class="text-[11px]"
+                      class="jx-pair-destructive text-[11px]"
                       onclick={() => (serviceRemoveConfirm = row.key)}
                     >{t("common.remove")}</PressButton>
                   {/if}

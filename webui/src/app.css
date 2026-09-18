@@ -24,6 +24,15 @@ body {
   font-family: var(--font-mono);
 }
 
+/* ai-fly 应用层表面校准（vision 走查 2026-09-18 P1-1）：jixoai 语言的 .dark
+ * --card 0.3211（≈#333）坐在纯黑背景上灰阶跳变过大，石板感重；本应用把卡片/
+ * 浮层表面收低到 ≈#1a1a1a 靠 1px 边框分层（jixoai.css 令牌表不动——是否上游
+ * 进设计语言待 Owner 裁决，见走查决策项）。 */
+.dark {
+  --card: oklch(0.21 0 0);
+  --popover: oklch(0.21 0 0);
+}
+
 /* 统一 diff 等宽块（向导第③步 / 高级设置 detail 共用） */
 .diff-block {
   font-family: var(--font-mono);
