@@ -88,6 +88,11 @@ export class FakeFabric implements Fabric {
     return "direct";
   }
 
+  async ensureRelayCapabilities(): Promise<Array<never>> {
+    // SDK 0.6.0 面垫片（引擎单测不经真实 relay 凭据协商）
+    return [];
+  }
+
   async relayStatus(): Promise<RelayStatusJs> {
     return {
       mode: "custom",

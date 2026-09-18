@@ -35,6 +35,7 @@ const maybeTest = HAS_CONTINUITY ? test : test.skip;
 
 const httpMod = await import("@jixo/opendweb-client-sdk/http");
 const serveHttpGlue = /** @type {any} */ (httpMod).serveHttp ?? /** @type {any} */ (httpMod).default?.serveHttp;
+const fetchHttpGlue = /** @type {any} */ (httpMod).fetchHttp ?? /** @type {any} */ (httpMod).default?.fetchHttp;
 
 // 门禁 fail-closed：迁移后的 SDK 承载面（openSession + serveHttp）缺席即硬败
 // （曾为整体 skip 的 fail-open——旧 SDK 也能全绿，无法证明消费的是迁移目标）。
@@ -628,6 +629,151 @@ maybeTest("kernel e2e: WS interactive echo — lockstep round-trips over live tu
     }
     assert.deepEqual(echoed, Array.from({ length: ROUNDS }, (_, i) => `ping-${i}`), "锁步回声序列");
     assert.equal(upstream.upgrades, 1, "上游 WS 会话恰好一次");
+  } finally {
+    await stack?.stop();
+    await engine.shutdown();
+    await p.provider.shutdown();
+    await p.consumer.shutdown();
+    await closeServer(upstream.server);
+    rmSync(engineDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// T7：会话级授权隔离（sdk-lifecycle-signals，spec 3.2）——同 peer 异 session
+// 不继承授权：新 session AUTH 前 forward/watch 401；自行 AUTH 后独立生效。
+// 全 raw 驱动（不经 ProviderConnection——其重建即自动 AUTH，会污染观测）。
+// ---------------------------------------------------------------------------
+
+maybeTest("kernel e2e: new session does not inherit peer auth (401 before AUTH)", async () => {
+  const upstream = await startEchoUpstream();
+  const p = await pair();
+  const engineDir = tmp("aifly-e2e-engdir-");
+  const { engine, serviceId, key } = makeProviderEngine(p.provider, engineDir, `http://127.0.0.1:${upstream.port}`);
+  await engine.start();
+  try {
+    const providerEp = p.provider.endpointId;
+    const rawForward = async (session, path) => {
+      const resp = await fetchHttpGlue(session, {
+        method: "GET",
+        path,
+        headers: [{ name: "x-aifly-service", value: serviceId }],
+      });
+      const chunks = [];
+      for (;;) {
+        const c = await resp.bodyNext();
+        if (c === null) break;
+        chunks.push(Buffer.from(c));
+      }
+      return { status: resp.status, body: Buffer.concat(chunks).toString("utf8") };
+    };
+    const rawAuth = async (session) => {
+      const body = Buffer.from(JSON.stringify({ v: 1, keys: [key.key] }));
+      const resp = await fetchHttpGlue(session, {
+        method: "POST",
+        path: "/_aifly/auth",
+        headers: [{ name: "content-type", value: "application/json" }],
+        body: [body],
+      });
+      await resp.bodyNext();
+      return resp.status;
+    };
+
+    // session 1：AUTH → forward 200（基线）
+    const s1 = await withTimeout(p.consumer.openSession(providerEp), 30_000, "open session 1");
+    assert.equal(await rawAuth(s1), 200, "session 1 AUTH");
+    const fwd1 = await rawForward(s1, "/iso.local");
+    assert.equal(fwd1.status, 200, "session 1 forward");
+    await s1.close();
+    // close 即终结传输（0.6.0）：对端 Recovering（死通道）→ 新 INIT 即时
+    // 替换 canonical——无需等放弃看门狗。
+
+    // session 2（同 peer 新 session——收敛窗口有界重试）
+    let s2;
+    const openDeadline = Date.now() + 30_000;
+    for (;;) {
+      try {
+        s2 = await p.consumer.openSession(providerEp);
+        break;
+      } catch {
+        if (Date.now() > openDeadline) throw new Error("open session 2: convergence timeout");
+        await sleep(500);
+      }
+    }
+    // 隔离断言：AUTH 前请求必 401（不得继承 session 1 的授权）
+    const fwdPre = await withTimeout(rawForward(s2, "/iso.local"), 30_000, "pre-auth forward");
+    assert.equal(fwdPre.status, 401, "new session must NOT inherit peer auth (401 before AUTH)");
+    assert.ok(fwdPre.body.includes("unauthorized"), `401 body: ${fwdPre.body}`);
+    // 自行 AUTH 后独立生效
+    assert.equal(await rawAuth(s2), 200, "session 2 AUTH");
+    const fwd2 = await withTimeout(rawForward(s2, "/iso.local"), 30_000, "post-auth forward");
+    assert.equal(fwd2.status, 200, "session 2 forward after own AUTH");
+    await s2.close();
+  } finally {
+    await engine.shutdown();
+    await p.provider.shutdown();
+    await p.consumer.shutdown();
+    await closeServer(upstream.server);
+    rmSync(engineDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// T8：取消信号秒停（SDK 0.6.0 signal 消费）——无头形态：上游永不响应，
+// 响应头从未发出 → write 错误路径不可能触发，上游关闭只能经
+// signal → ctrl → fetch abort（stall 60s 排除超时兜底）。
+// ---------------------------------------------------------------------------
+
+maybeTest("kernel e2e: cancel signal stops head-pending upstream promptly", async () => {
+  // gated 上游（带到达/关闭观测——既有 startGatedUpstream 无观测面）
+  let arrivedResolve;
+  let closedResolve;
+  const arrived = new Promise((r) => {
+    arrivedResolve = r;
+  });
+  const closed = new Promise((r) => {
+    closedResolve = r;
+  });
+  const server = httpServer((req, res) => {
+    arrivedResolve();
+    res.on("close", () => closedResolve());
+    req.on("close", () => closedResolve());
+    // 永不响应
+  });
+  await listen(server);
+  const upstream = { server, port: portOf(server), arrived, closed };
+
+  const p = await pair();
+  const engineDir = tmp("aifly-e2e-engdir-");
+  const { engine, serviceId, key } = makeProviderEngine(p.provider, engineDir, `http://127.0.0.1:${upstream.port}`, {
+    connectMs: 2_000,
+    firstByteMs: 60_000, // 排除首字节超时兜底
+    stallMs: 60_000, // 排除 stall 超时兜底
+  });
+  await engine.start();
+  let stack;
+  try {
+    stack = await bootStack(p.provider, p.consumer, key, serviceId);
+    await waitFor(() => stack.conn.state === "direct" || stack.conn.state === "relay", 45_000, "direct after AUTH");
+
+    const handle = stack.conn.forward(
+      { serviceId, method: "GET", path: "/gated.local", upgrade: false, body: new Uint8Array(0) },
+      {
+        onMeta: () => undefined,
+        onChunk: () => undefined,
+        onEnd: () => undefined,
+        onError: () => undefined,
+        onWsData: () => undefined,
+        onWsClose: () => undefined,
+        onTerminate: () => undefined,
+      },
+    );
+    await withTimeout(upstream.arrived, 15_000, "upstream request arrived");
+    const t0 = Date.now();
+    handle.abort(); // 本地取消 → RESET → provider signal → 上游 fetch abort
+    await withTimeout(upstream.closed, 5_000, "upstream closed after cancel (signal chain)");
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 5_000, `cancel should be prompt (${elapsed}ms)`);
   } finally {
     await stack?.stop();
     await engine.shutdown();

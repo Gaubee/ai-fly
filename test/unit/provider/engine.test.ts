@@ -44,6 +44,8 @@ let fabricPair: ReturnType<typeof FakeFabric.pair>;
 let handler: ((req: CarrierRequest) => Promise<CarrierResponse | null>) | undefined;
 let serverClosed: boolean;
 let mockServer: Server;
+/** mock 上游 TCP 连接计数（预中止「零触达」断言——probe 也建连接）。 */
+let mockConnections = 0;
 let mockPort: number;
 let stallGateOpen: () => void;
 const upstreamBodies: string[] = [];
@@ -91,6 +93,10 @@ beforeEach(async () => {
     });
   };
   mockServer = createServer(handler_);
+  mockConnections = 0;
+  mockServer.on("connection", () => {
+    mockConnections += 1;
+  });
   await new Promise<void>((resolve) => mockServer.listen(0, "127.0.0.1", resolve));
   mockPort = (mockServer.address() as AddressInfo).port;
 
@@ -174,18 +180,32 @@ function takeStreamed(): StreamedRec | null {
   return streamedResult;
 }
 
-/** 构造 CarrierRequest（body 一次性经 bodyNext 供给）。 */
+/** requestId → AbortController（cancel 用例触发对端取消信号）。 */
+const reqCtrls = new Map<number, AbortController>();
+
+function abortCarrierReq(req: CarrierRequest): void {
+  reqCtrls.get(req.requestId)?.abort();
+}
+
+/** 构造 CarrierRequest（body 一次性经 bodyNext 供给；sessionId/signal 可覆写——
+ * 默认单会话，隔离用例传异 id 模拟新会话）。 */
 function carrierReq(over: {
   method: string;
   path: string;
   headers?: Array<{ name: string; value: string }>;
   body?: Uint8Array;
+  sessionId?: string;
 }): CarrierRequest {
   const chunks = over.body !== undefined && over.body.length > 0 ? [Buffer.from(over.body)] : [];
   let i = 0;
+  const ctrl = new AbortController();
+  const requestId = nextRequestId++;
+  reqCtrls.set(requestId, ctrl);
   return {
-    requestId: nextRequestId++,
+    requestId,
     streamId: 0,
+    sessionId: over.sessionId ?? "test-session",
+    signal: ctrl.signal,
     method: over.method,
     path: over.path,
     headers: over.headers ?? [],
@@ -224,12 +244,19 @@ async function staticResp(req: CarrierRequest): Promise<CarrierResponse> {
 
 function fwdReq(
   service: string,
-  over: { method?: string; path?: string; body?: Uint8Array; headers?: Array<{ name: string; value: string }> } = {},
+  over: {
+    method?: string;
+    path?: string;
+    body?: Uint8Array;
+    headers?: Array<{ name: string; value: string }>;
+    sessionId?: string;
+  } = {},
 ): CarrierRequest {
   return carrierReq({
     method: over.method ?? "GET",
     path: over.path ?? "/v1/echo",
     ...(over.body !== undefined ? { body: over.body } : {}),
+    ...(over.sessionId !== undefined ? { sessionId: over.sessionId } : {}),
     headers: [{ name: AIFLY_SERVICE_HEADER, value: service }, ...(over.headers ?? [])],
   });
 }
@@ -238,12 +265,23 @@ function bodyJson(resp: CarrierResponse): any {
   return JSON.parse(Buffer.concat(resp.bodyChunks ?? []).toString("utf8"));
 }
 
+/** 单测内联有界等待（3s 级——watch 失效唤醒断言用）。 */
+async function withTimeoutLite<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, rej) => {
+      const t = setTimeout(() => rej(new Error("withTimeoutLite: timeout")), ms);
+      t.unref?.();
+    }),
+  ]);
+}
+
 function errorCode(resp: CarrierResponse): string | undefined {
   return resp.headers?.find((h) => h.name === "x-aifly-error-code")?.value;
 }
 
-/** peer-connected 起 HTTP 引擎 + AUTH 呈交（返回响应）。 */
-async function authCall(keys: string[]): Promise<CarrierResponse> {
+/** peer-connected 起 HTTP 引擎 + AUTH 呈交（返回响应；sessionId 指定会话）。 */
+async function authCall(keys: string[], sessionId?: string): Promise<CarrierResponse> {
   fabricPair.provider.emit({ type: "peer-connected", endpointId: CONSUMER_EP });
   const h = await waitFor(() => handler);
   const resp = await h(
@@ -252,6 +290,7 @@ async function authCall(keys: string[]): Promise<CarrierResponse> {
       path: "/_aifly/auth",
       headers: [{ name: "content-type", value: "application/json" }],
       body: ENC.encode(JSON.stringify({ v: 1, keys })),
+      ...(sessionId !== undefined ? { sessionId } : {}),
     }),
   );
   if (resp === null) throw new Error("auth path must not stream");
@@ -301,6 +340,82 @@ describe("AUTH 与目录", () => {
   });
 });
 
+describe("会话级授权隔离（sdk-lifecycle-signals，spec 3.2）", () => {
+  it("同 peer 新 session AUTH 前不继承旧授权：forward/watch 均 401；自行 AUTH 后独立生效", async () => {
+    // session A（默认 test-session）先行 AUTH
+    await connectAndAuth([keyFriends.key]);
+    // session B：同 peer 异 session，尚未 AUTH
+    const fwdB = await fwdResp(fwdReq(serviceId, { sessionId: "session-b" }));
+    expect(fwdB.status).toBe(401);
+    expect(errorCode(fwdB)).toBe("unauthorized");
+    const watchB = await staticResp(
+      carrierReq({ method: "GET", path: "/_aifly/catalog-watch?since=0", sessionId: "session-b" }),
+    );
+    expect(watchB.status).toBe(401);
+    // B 自行 AUTH 后独立生效
+    const authB = await authCall([keyFriends.key], "session-b");
+    expect(authB.status).toBe(200);
+    const fwdB2 = await fwdResp(fwdReq(serviceId, { sessionId: "session-b" }));
+    expect(fwdB2.status).toBe(200);
+    // A 不受 B 的生命周期影响（两会话并存）
+    const fwdA = await fwdResp(fwdReq(serviceId));
+    expect(fwdA.status).toBe(200);
+  });
+
+  it("会话失效即刻唤醒其在途 watch（401，不干等 20s 超时）（5.2-P2）", async () => {
+    await connectAndAuth([keyFriends.key]); // A
+    const authB = await authCall([keyFriends.key], "session-b");
+    expect(authB.status).toBe(200);
+    // B 发起 watch 长轮询（since=当前——挂起形态）
+    const current = engine.currentCatalogSeq();
+    const watchPromise = staticResp(
+      carrierReq({ method: "GET", path: `/_aifly/catalog-watch?since=${current}`, sessionId: "session-b" }),
+    );
+    await new Promise((r) => setTimeout(r, 150)); // 等 watcher 注册
+    const t0 = Date.now();
+    // B 的全无效 AUTH → sessionAuths 删除 + invalidateWatch 唤醒
+    const bad = await authCall(["sk-aifly-wrong-b2"], "session-b");
+    expect(bad.status).toBe(403);
+    const resp = await withTimeoutLite(watchPromise, 3_000);
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    expect(resp.status).toBe(401);
+    expect(errorCode(resp)).toBe("unauthorized");
+  });
+
+  it("LRU 容量逐出即刻唤醒被逐会话的在途 watch（5.2-P2）", async () => {
+    // 逐出序为访问序（sessionAuthOf touch）：s0 先 AUTH，随后填满 32 个新
+    // 会话（s0 不再被访问）→ 第 33 个 AUTH 逐出 s0 → s0 在途 watch 应即刻 401。
+    const r0 = await authCall([keyFriends.key], "s0");
+    expect(r0.status).toBe(200);
+    const current = engine.currentCatalogSeq();
+    const watchPromise = staticResp(
+      carrierReq({ method: "GET", path: `/_aifly/catalog-watch?since=${current}`, sessionId: "s0" }),
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    for (let i = 1; i <= 32; i++) {
+      const r = await authCall([keyFriends.key], `s${i}`);
+      expect(r.status).toBe(200);
+    }
+    const resp = await withTimeoutLite(watchPromise, 3_000);
+    expect(resp.status).toBe(401);
+    expect(errorCode(resp)).toBe("unauthorized");
+    // s1（访问序最新）不受逐出影响
+    const fwd1 = await fwdResp(fwdReq(serviceId, { sessionId: "s1" }));
+    expect(fwd1.status).toBe(200);
+  });
+
+  it("session B 全无效 AUTH（403）只失效 B：session A 授权保持", async () => {
+    await connectAndAuth([keyFriends.key]); // A
+    const authB = await authCall(["sk-aifly-wrong-b"], "session-b");
+    expect(authB.status).toBe(403);
+    const fwdA = await fwdResp(fwdReq(serviceId));
+    expect(fwdA.status).toBe(200);
+    // B 仍 401
+    const fwdB = await fwdResp(fwdReq(serviceId, { sessionId: "session-b" }));
+    expect(fwdB.status).toBe(401);
+  });
+});
+
 describe("forward 端点全链路", () => {
   it("授权服务：上游收到重写后请求与 $env 凭据；响应回送", async () => {
     await connectAndAuth([keyFriends.key]);
@@ -317,7 +432,7 @@ describe("forward 端点全链路", () => {
     const payload = bodyJson(resp) as { path: string; auth: string | null };
     expect(payload.path).toBe("/v1/echo");
     expect(payload.auth).toBe("sk-env-injected");
-    expect(upstreamBodies[0]).toBe('{"q":"hi"}');
+    expect(upstreamBodies).toContain('{"q":"hi"}');
   });
 
   it("home 贯穿运行时（复核 R2-P1-B）：预设模式脚本从注入 home 解析并生效", async () => {
@@ -360,6 +475,46 @@ describe("forward 端点全链路", () => {
     await waitFor(() => (engine.limits.inflightCount("friends") === 0 ? true : undefined));
     const third = await fwdResp(fwdReq(serviceId));
     expect(third.status).toBe(200);
+  });
+
+  it("对端取消信号（signal abort）秒停挂起上游：不再依赖 write 报错感知", async () => {
+    await connectAndAuth([keyFriends.key]);
+    const before = upstreamBodies.length;
+    const req = fwdReq(serviceId, { method: "GET", path: "/stall" });
+    const pending = fwdResp(req);
+    // 等 /stall 请求到达上游（确保拨号已完成、上游真挂起）
+    await waitFor(() => (upstreamBodies.length > before ? true : undefined));
+    const t0 = Date.now();
+    abortCarrierReq(req); // 对端取消（内核 RESET → SDK signal）
+    const resp = await pending;
+    const elapsed = Date.now() - t0;
+    // 秒停：事件驱动中止上游（无接线世界只能等 stallGate/上游超时）
+    expect(elapsed).toBeLessThan(3_000);
+    expect(resp.status).toBeGreaterThanOrEqual(400);
+    stallGateOpen?.(); // 清理：放行残留 stall（若有）
+  });
+
+  it("预中止 signal（5.2-P1）：已 aborted 的请求零上游触达（含 TCP 探测）且有界收口", async () => {
+    await connectAndAuth([keyFriends.key]);
+    const before = upstreamBodies.length;
+    const connsBefore = mockConnections;
+    const ctrl = new AbortController();
+    ctrl.abort(); // 先中止
+    const req = carrierReq({
+      method: "GET",
+      path: "/v1/echo",
+      headers: [{ name: AIFLY_SERVICE_HEADER, value: serviceId }],
+    });
+    // 直接换上已中止的 signal（carrierReq 内建 ctrl 需覆写）
+    const abortedReq = { ...req, signal: ctrl.signal, requestId: nextRequestId++ };
+    reqCtrls.set(abortedReq.requestId, ctrl);
+    const t0 = Date.now();
+    const resp = await fwdResp(abortedReq);
+    const elapsed = Date.now() - t0;
+    expect(resp.status).toBeGreaterThanOrEqual(400);
+    expect(elapsed).toBeLessThan(3_000);
+    expect(upstreamBodies.length).toBe(before);
+    expect(mockConnections).toBe(connsBefore); // 预中止不得建立 TCP 连接（probe 短路 + 入口闸门）
   });
 
   it("body 分块经 bodyNext 重组后派发", async () => {

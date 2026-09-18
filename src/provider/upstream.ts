@@ -482,6 +482,11 @@ async function forwardHttp(ctx: ForwardCtx, plan: UpstreamPlan, t: UpstreamTimeo
   /** js-backend-fetch 路径：连接期探测 + fetch（fetchImpl 测试注入缝保留于此）。 */
   const nativeResponse = async (): Promise<EngineNormalizedResponse> => {
     const probe = ctx.probeConnect ?? defaultProbeConnect;
+    // 已中止不拨探测（5.2b-P1）：probe 建立真实 TCP 连接——中止后执行仍属
+    // 触达上游；直接走失败分类（ctx.signal aborted → aborted 结算）。
+    if (ctrl.signal.aborted || ctx.signal.aborted) {
+      throw new ProbeFailedError();
+    }
     try {
       await probe(plan.url, t.connectMs); // 失败/超时 -> upstream_unreachable，零 fetch
     } catch {

@@ -161,29 +161,3 @@ export class KeySessionIndex {
     return total.size;
   }
 }
-
-/**
- * 撤钥后的会话处置（对每个持该钥的在线会话）：
- * - 余钥仍有效 -> 推送 refresh AUTH_OK（剔除被撤组，全量替换）；
- * - 无余钥 -> 断开会话。
- * 返回处置统计（测试与状态上报用）。
- */
-export async function applyKeyRevocation(
-  keyId: string,
-  dir: AuthDirectory,
-  index: KeySessionIndex,
-): Promise<{ refreshed: number; disconnected: number }> {
-  let refreshed = 0;
-  let disconnected = 0;
-  for (const binding of index.sessionsWithKey(keyId)) {
-    const { valid } = evaluateKeyring(binding.keys, dir);
-    if (valid.length === 0) {
-      binding.disconnect(`key ${keyId} revoked and no valid key remains`);
-      disconnected++;
-      continue;
-    }
-    await binding.pushRefresh(buildAuthOk(valid, dir, { refresh: true }));
-    refreshed++;
-  }
-  return { refreshed, disconnected };
-}

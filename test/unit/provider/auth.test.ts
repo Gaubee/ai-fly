@@ -8,7 +8,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ProviderStore } from "../../../src/provider/store.ts";
 import {
-  applyKeyRevocation,
   authDirectoryFromStore,
   buildAuthOk,
   evaluateKeyring,
@@ -140,38 +139,12 @@ describe("KeySessionIndex + 撤钥处置", () => {
     expect(index.sessionsWithKey(keyB.keyId)).toEqual([ab]);
   });
 
-  it("撤钥：有其它有效密钥的会话推 refresh（剔除被撤组）", async () => {
-    const index = new KeySessionIndex();
-    const ab = binding([keyA.key, keyB.key], [keyA.keyId, keyB.keyId]);
-    index.track(ab);
-    store.revokeKey(keyA.keyId);
-    const result = await applyKeyRevocation(keyA.keyId, dirOf(), index);
-    expect(result).toEqual({ refreshed: 1, disconnected: 0 });
-    expect(ab.pushed).toHaveLength(1);
-    const header = ab.pushed[0] as { refresh?: boolean; groups: Array<{ group: string }> };
-    expect(header.refresh).toBe(true);
-    expect(header.groups.map((g) => g.group)).toEqual(["beta"]); // alpha 剔除
-    expect(ab.disconnected).toEqual([]);
-  });
 
-  it("撤钥：无余钥会话被断开", async () => {
-    const index = new KeySessionIndex();
-    const only = binding([keyA.key], [keyA.keyId]);
-    index.track(only);
-    store.revokeKey(keyA.keyId);
-    const result = await applyKeyRevocation(keyA.keyId, dirOf(), index);
-    expect(result).toEqual({ refreshed: 0, disconnected: 1 });
-    expect(only.disconnected).toHaveLength(1);
-    expect(only.pushed).toHaveLength(0);
-  });
 
-  it("同组另一钥在线（钥 A、C）：撤 A 不影响持 C 会话", async () => {
-    const index = new KeySessionIndex();
-    const holder = binding([keyC.key], [keyC.keyId]);
-    index.track(holder);
-    store.revokeKey(keyA.keyId);
-    await applyKeyRevocation(keyA.keyId, dirOf(), index);
-    expect(holder.disconnected).toEqual([]);
-    expect(holder.pushed).toHaveLength(0); // C 视图不变（不推送）
-  });
+
+
+
+
+
+
 });

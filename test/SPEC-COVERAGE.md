@@ -1,129 +1,160 @@
-# SPEC-COVERAGE — net-fly-core §5.3 逐 Scenario 覆盖自查
+# SPEC-COVERAGE — net-fly 正式 spec 逐 Scenario 覆盖自查
 
-对照 `openspec/changes/net-fly-core/specs/net-fly/{wire-protocol,provider,consumer,share-link}/spec.md`。
+对照 `openspec/specs/net-fly/{wire-protocol,provider,consumer,share-link}/spec.md`
+（opendweb-kernel-migration 归档合并后的正式版本，2026-09-18 重写）。
 
-> **opendweb-kernel-migration 注意（2026-09-16）**：本矩阵成文于 aifly envelope
-> wire 承载面（mux/codec 帧级测试自该迁移起已删除——REQ/RESP 帧族由 opendweb
-> 会话连续性内核承接；wire-protocol 增量见
-> `openspec/changes/opendweb-kernel-migration/specs/net-fly/wire-protocol/spec.md`）。
-> 帧级行（单帧/分片/缺断/交错）的承载面等价物为内核契约（SDK 侧
-> test/continuity-http）与 ai-fly e2e（test/e2e/kernel-migration.test.mjs）；
-> 本文件待 spec-sync（收尾任务）重写。
+## 承载面换基说明（先读）
+
+- **envelope 帧族已退役**：magic/REQ/RESP/PING/分片序号等帧级机制随
+  opendweb-kernel-migration 退役。请求多路复用、分片保序、断线原序重放、发送侧
+  反压、终态后迟到帧幂等，现由 opendweb 会话连续性内核（journal / RESET / 90s
+  恢复窗口）承接。ai-fly 侧等价验证面为：
+  - 真内核 e2e：`test/e2e/kernel-migration.test.mjs`（T1–T8）
+  - SDK 生命周期测试（opendweb 仓库）：`packages/client-sdk/test/http-lifecycle.test.mjs`
+  - unit 投影层：`test/unit/**`（fake-fabric / gateway 模拟）
+- 旧 envelope 期集成套件 `test/integration/engine.test.mjs`（IT:T1–T15）已随迁移
+  删除；本矩阵仅引用现存测试面：
+  - **unit** = `test/unit/**`（vitest，按文件名+用例名）
+  - **e2e** = `test/e2e/kernel-migration.test.mjs`（T1–T8）/ `test/e2e/cli.test.mjs`（单流分步）
+  - **integration** = `test/integration/app.test.mjs`（webui/RPC 面）
+  - **soak** = `test/e2e/sse-soak.test.mjs`（`AIFLY_SOAK=1` 门控，默认 skip）
+- 已知引擎问题仅剩 **#4**：跨进程 revoke 不拆既有会话（cli e2e 标注；安全语义经
+  重连拒绝面覆盖）。旧 #2/#3/#5 已随迁移后代码面消失。
+
 标注口径：
 
-- **覆盖** = 有自动化断言（integration = `test/integration/engine.test.mjs`，e2e = `test/e2e/cli.test.mjs`，unit = `test/unit/**`（§2-4 车道交付））
+- **覆盖** = 有自动化断言
 - **部分** = 语义主面有断言，某一子句未断言（注明）
 - **未覆盖（原因）** = 无断言，注明原因与替代面
-- 引擎 bug 编号见交付报告：#1 SDK CJS 命名导出、#2 网关流式 pull 泵休眠、#3 WS 中继 accept 校验矛盾、#4 跨进程 revoke 不拆既有会话、#5 `key add` CLI 分发双重剥参
 
-测试名缩写：IT:T1 = `AUTH matrix…`、IT:T2 = `path injection…PING…`、IT:T3 = `gateway: start engine…`、
-IT:T4 = `gateway http…`、IT:T5a = `gateway ws echo roundtrip…`、IT:T5b = `gateway ws: upstream handshake failure…`、
-IT:T6 = `gateway limits…`、IT:T7 = `gateway abort…`、IT:T8 = `gateway slow client…`、IT:T9 = `gateway catalog…`、
-IT:T10 = `provider restart…`、IT:T11 = `share link…`、IT:T12 = `key_all_invalid…`、IT:T13 = `multi-provider…`、
-IT:T14 = `seq gap poisons…`、IT:T15 = `listeners bind loopback only`。E2E = `cli e2e…`（单测流，按步骤号）。
-
-## wire-protocol（32 Scenario）
+## wire-protocol（17 Scenario）
 
 | Scenario | 状态 | 覆盖位置 / 说明 |
 |---|---|---|
-| 混流共存 | 覆盖 | IT:T1（非 aifly envelope 后请求不受影响） |
-| 未知帧类型前向兼容 | 覆盖 | IT:T1（0x7f 类型帧被忽略，连接继续） |
-| 方向反转被拒 | 覆盖 | IT:T1（consumer 注入 RESP_META → protocol_error，连接存活；ERROR 因未知 id 在 consumer 侧静默丢弃属预期） |
-| 使用方侧反向帧静默处理 | 覆盖 | IT:T14（provider 发 REQ → consumer 静默丢弃，连接继续 direct） |
-| 已终结 id 的迟到帧 | 覆盖 | IT:T2（RESP_END 后同 id REQ_BODY 静默丢弃、后续请求正常） |
-| 多密钥一次授权 | 覆盖 | IT:T1（三钥三组一次 AUTH_OK，两组服务即刻可请求） |
-| 合法密钥完成握手 | 覆盖 | IT:T1（单钥 R1/R2、keyMainA 阶段）+ IT:T2 |
-| relay 入口在线刷新 | 部分 | 机制面覆盖：AUTH_OK/refresh 均携带 relayUrls 且 consumer 落盘（IT:T1/T3/T9 断言 relayUrls 传递与持久化）；「更换 relay」本体无法在固定 relay 配置的运行期 fabric 上构造（SDK relay 配置构造期固定）——需引擎支持 relay 热切换后补 |
-| 撤销后仍存余钥 | 覆盖 | IT:T1（revoke R1 → refresh 只含 R2、服务继续、会话不断） |
-| 撤销后无余钥断会话 | 覆盖 | IT:T1（revoke R2 → 连接断开） |
-| 未握手先发请求 | 覆盖 | IT:T1（33 帧未授权 REQ → 计数断连，零上游请求） |
-| 并发交错 | 部分 | IT:T6/T7 有并行在途请求（3 并发 / 流中并行业务），未逐 id 断言分片互不混入——该性质由 unit（mux 并发交错矩阵）锁定 |
-| 小请求单帧完成 | 部分 | 隐式（全部小正文 POST 走 REQ 内联路径成功）；单帧性未显式断言，unit（codec splitBody）覆盖拆分规则 |
-| 必需自定义头透传 | 覆盖 | IT:T1（anthropic-version 到上游）+ IT:T4（accept 头 + 凭据头剥离） |
-| 超限正文被拒 | 未覆盖（9MiB 帧流成本高且本地 8MiB 先拒）| consumer 网关本地 8MiB 先拒（IT 未触发）；提供方重组上限由 unit（mux body_too_large）覆盖 |
-| 分片序号缺断 | 覆盖 | IT:T14（consumer 侧 RESP_CHUNK 0→2 缺断 → protocol_seq 终结 + 连接重建 + 恢复 direct）；提供方侧 REQ_BODY 缺断由 unit 覆盖（同一 mux 机制） |
-| SSE 逐块还原 | 部分 | IT:T4：内容与块序断言通过；**逐块 flush 受引擎 bug #2 退化**（分片在 RESP_END 集中投递；wire 级分片节奏已另行验证为 43ms 间隔正常）——bug 修复后断言自动收紧（现以控制台标注区分） |
-| 非流式 JSON 响应 | 覆盖 | IT:T4（status/contentType/完整正文）；E2E 步骤 4 |
-| 首字节等待期心跳 | 覆盖 | IT:T2（/hang：注入 pingMs=120ms 收到 ≥3 PING，firstByte 1500ms → idle_timeout 终结） |
-| WS 双向对话 | 未覆盖（引擎 bug #3：ws-upstream 自管 key 与 gateway accept 恒等校验矛盾 → 101 升级必被 destroy）| IT:T5a 探测到 bug 自动 skip，完整断言已就位（修复后自动恢复）；上游 echo 服务与 WS 客户端已备 |
-| 上游握手失败 | 覆盖 | IT:T5b（raw upgrade → 上游 404 原样透传；不经 101 路径，不受 bug #3 影响） |
-| WS 关闭终结 | 未覆盖（同 bug #3，位于被 skip 的 IT:T5a 内）| 断言已就位待修复 |
-| 慢客户端不拖垮内存 | 覆盖 | IT:T8（6MiB 洪流 + 不读 → 4MiB 待消费上限 → ABORT + 本地连接错误 + 记账 + 其它请求不受影响）。WS 双向兜底按任务预案降级为 HTTP 面（Gateway 上限经 startEngine 不可注入） |
-| 空闲请求被清理 | 部分 | 300s 请求级空闲窗未真实等待（unit 覆盖计时器语义）；提供方侧空闲终结面经 IT:T2 的 idle_timeout 路径覆盖 |
-| 深度推理长等待不误杀 | 覆盖（注入超时等价）| IT:T2：PING 持续到达使 consumer 不误杀（pings ≥3 期间请求保持活跃），提供方挂起期空闲计时豁免、至首字节超时才以 idle_timeout 终结 |
-| 客户端中途断开 | 覆盖 | IT:T7（reader.cancel → 上游 socket 关闭） |
-| 终结后不再收帧 | 覆盖 | IT:T2（见「已终结 id 的迟到帧」；ERROR 终结变体 unit 覆盖） |
-| 目录随服务变更推送 | 覆盖 | IT:T9（新增服务 → refresh → 新端口可用 + 钥环落盘） |
-| 服务删除后的收敛 | 覆盖 | IT:T9（端口关闭 → 连接拒绝；其它服务不受影响）；E2E 同语义由 consumer 侧承担 |
-| 超长路径被拒 | 覆盖 | IT:T2（8KiB path → protocol_error，零上游请求） |
-| 路径注入逃逸被拦 | 覆盖 | IT:T2（`//evil.com/…` → protocol_error，零上游请求） |
-| 回溯越界被拦 | 覆盖 | IT:T2（`/../../admin` → schema 层拒绝；纵深断言 unit（rewrite 注入矩阵）覆盖） |
+| 混流共存 | 部分 | 会话复用面：ai-fly 控制面（`/_aifly/auth`、catalog-watch）与数据面（forward）在同一内核会话并存——e2e T1（真内核 AUTH+目录+转发同会话）+ unit engine（AUTH/目录与 forward 全链路共用会话）。「与其它应用 envelope 流量共存」本体是内核多流契约，ai-fly 侧不可构造 |
+| 未知帧类型前向兼容 | 未覆盖（机制退役）| 帧类型枚举随 envelope 退役；前向兼容由内核会话版本协商承接（opendweb 侧）。ai-fly 控制面对未知路径/方法按 HTTP 语义处理（401/405——gateway unit forbidden_method） |
+| 方向反转被拒 | 未覆盖（机制退役）| 帧方向约束随 envelope 退役；等价面 = 控制面仅接受约定方法/路径（gateway unit OPTIONS 405 + engine 未授权 401），无「回敬 ERROR 帧」面 |
+| 使用方侧反向帧静默处理 | 未覆盖（机制退役）| 同上；静默丢弃语义由内核流终态幂等承接 |
+| 已终结 id 的迟到帧 | 未覆盖（机制退役）| 内核终态后迟到数据零副作用由 opendweb continuity 测试锁定，ai-fly 侧无对应面 |
+| 空闲请求被清理 | 部分 | 上游超时族存活：unit upstream「流中途停滞（120s 可配）→ idle_timeout 且中止上游」「连接期超时 → upstream_unreachable 零 fetch」。300s 请求级双端空闲窗与 PING 活度随 envelope 退役，由内核恢复窗口承接 |
+| 深度推理长等待不误杀 | 部分 | 挂起不误杀面：e2e T2（恢复窗口内挂起、续传完成）+ unit upstream「上游迟滞后正常完成」；「至首字节超时以 idle_timeout 终结」子句经流中途停滞同码路径覆盖，首字节等待期超时未单独钉 |
+| 客户端中途断开 | 覆盖 | e2e T5（本地断开 → per-request cancel 全链 → 上游关闭）+ unit upstream（ABORT → 中止上游）+ gateway unit（流中客户端断开） |
+| 终结后不再收帧 | 未覆盖（机制退役）| 同「已终结 id 的迟到帧」；内核终态幂等（opendweb 侧） |
+| 脚本失效以 hook_failed 终结 | 覆盖 | unit upstream（③ 构造期失效/流中途失败 → hook_failed 固定脱敏、零 fetch）+ rust-fetch unit + providers unit（消费端双分支） |
+| 目录随服务变更推送 | 覆盖 | unit engine「服务变更推送：向组新增服务进入 refresh 视图（全量替换语义）」 |
+| 服务删除后的收敛 | 覆盖 | gateway unit「服务删除：关端口 + 终结在途（fetch 拒绝/ABORT）」 |
+| 四槽投影脱敏下发 | 覆盖 | detail unit（四槽掩码全矩阵）+ engine unit AUTH_OK 脱敏 + join unit（decode v2 四槽条目往返） |
+| 跨版本目录被安全拒绝 | 未覆盖（无断言）| 机制在位（providers.ts 二阶段目录失败回调——保留旧视图、本地错误态、不影响其它提供者），无自动化断言；旧覆盖随 envelope IT 退役未重建——后续补测项 |
+| 超长路径被拒 | 覆盖 | gateway unit（path > 4 KiB → 400 protocol_error 零转发；gateway.ts:378 本地拒绝） |
+| 路径注入逃逸被拦 | 覆盖 | unit upstream「//evil.com → protocol_error 零上游请求」+ rewrite unit（origin 断言拒绝矩阵） |
+| 回溯越界被拦 | 覆盖 | unit upstream「/../../admin → protocol_error」+ rewrite unit（回溯拒绝）；schema 层 `.`/`..` 段拒绝在 gateway 请求构造 |
 
-## provider（14 Scenario）
+## provider（37 Scenario）
 
 | Scenario | 状态 | 覆盖位置 / 说明 |
 |---|---|---|
-| 服务定义往返 | 部分 | IT:T10（重启后经 Fabric.open 复入 + 全部服务/密钥继续服务，含 T9 新增服务）；store 文件级往返由 unit 覆盖 |
-| 非法正则被拒 | 未覆盖（integration/e2e 未演练 CLI add 非法正则）| unit（store 单测）覆盖保存期编译检查 |
-| 特权上游端口强制显式 | 未覆盖（同上，未演练 443 上游无 --port）| unit（store 单测）覆盖 |
-| 一组多钥独立撤销 | 部分 | IT:T1（同组 R1/R2：撤 R1 后 R2 视图与服务不受影响）；「重连后 AUTH 计入 rejected」子句未断言（rejected 载荷在多钥 AUTH 的 key_invalid 面有 unit 覆盖） |
-| 密钥原文不可再现 | 覆盖 | E2E 步骤 2（key list 仅 keyId/时间/状态，无 sk-aifly- 原文） |
-| 目录随服务变更推送（provider 侧） | 覆盖 | IT:T9 |
-| 越权服务统一拒绝 | 未覆盖（未构造跨组 serviceId 请求）| 与不存在 serviceId 的无差别响应由 unit（engine/auth 单测）覆盖 |
-| detail 披露脱敏 | 覆盖 | IT:T1（AUTH_OK detail：●、无变量名/值） |
-| 重写后命中上游 | 覆盖 | IT:T4（secret 服务：/pfx 前缀追加 + $env 注入 Authorization + 使用方凭据剥离） |
-| 帧内不可指定上游 | 覆盖 | IT:T2（三种注入形态零上游请求） |
-| 上游错误原样透传 | 覆盖 | IT:T4（418 正文/contentType、500 JSON）；E2E 步骤 4 |
-| 并发限额 | 覆盖 | IT:T6（上限 2，第三个请求 429 rate_limited，前两个不受影响） |
-| serve 复入 | 覆盖 | IT:T10（同 dataDir 重启 EndpointId 不变 + 既有密钥续用）；E2E 步骤 9 |
-| share 前置检查 | 未覆盖（未演练空分组 share）| unit（link 单测）覆盖 |
+| 服务定义往返 | 覆盖 | store unit「添加后重启进程完整恢复（v2 标记）」+ cli e2e（同 dataDir 重启续用） |
+| 非法正则被拒 | 覆盖 | store unit「语法非法正则被拒且既有服务不受影响」「灾难性正则接受（无执行面）」 |
+| 特权上游端口强制显式 | 覆盖 | store unit「https 443 未声明 defaultPort → 拒绝 / 显式后接受 / http 80 同 / 高位端口缺省继承」 |
+| 旧版本配置判失效 | 覆盖 | store-legacy unit（legacy 模式全矩阵：NOTICE、逐条移除、重建 v2 空库） |
+| 一组多钥独立撤销 | 覆盖 | engine unit「双钥在线撤一钥：refresh 视图剔除、会话不断」+ store unit（撤钥幂等、重开保留）+ engine unit「混合钥 AUTH：rejected 携带 key_invalid」 |
+| 密钥原文不可再现 | 部分（spec 已漂移）| 现行语义为 Owner 裁决 2026-09-13「key 原文随库可复制」（store unit 钉死），取代旧「仅哈希存储、签发后不可再现」条款；面板/列表面不回显原文仍成立（integration app「分组/密钥管理（issue 原文一次性）」）。spec 文本待后续 spec-sync 修订 |
+| 目录随服务变更推送 | 覆盖 | 同 wire-protocol 同名行（engine unit） |
+| 越权服务统一拒绝 | 覆盖 | engine unit「未授权/未知 serviceId 统一 unknown_service（防枚举）」 |
+| detail 披露脱敏 | 覆盖 | detail unit（auth.secret/script/literal、headers.set 引用、四槽掩码）+ engine unit AUTH_OK（●、无变量名/值） |
+| 断线恢复不重 AUTH | 覆盖 | e2e T2（SSE 中途断线续传：授权延续、在途原序完成——sessionId 内核级稳定）+ engine unit（session 级授权缓存） |
+| provider 重启 | 覆盖 | e2e T3（REQUEST_STATE_LOST → 在途 504 / 新请求 503 → 重建重 AUTH）+ cli e2e 末步（重启自动恢复） |
+| 重写后命中上游 | 覆盖 | unit upstream「GET 200：上游收到重写后 URL 与 Host」「POST：$env 注入 authorization」+ engine unit「授权服务：上游收到重写后请求与 $env 凭据」+ e2e T1 |
+| 帧内不可指定上游 | 覆盖 | unit upstream 路径注入双钉（零上游请求）+ rewrite unit origin 断言；HTTP 投影无上游字段，上游 URL 仅来自服务配置 |
+| 上游错误原样透传 | 覆盖 | unit upstream「上游 404 原样透传（status+正文+contentType）」+ gateway unit + cli e2e（418 步骤） |
+| 转发管线回归 | 覆盖 | hook-stages unit（onRequest 接管/局部覆盖/透传）+ unit upstream（预设模式整段接管族）+ e2e T1 |
+| 并发限额 | 覆盖 | limits unit（并发计数/release 回落/分组独立/零成本拒绝）+ engine unit「并发限额 1：第二在途 rate_limited」 |
+| serve 复入 | 覆盖 | cli e2e（同 dataDir 重启 EndpointId 不变、既有密钥续用） |
+| share 前置检查 | 覆盖 | link unit（分组不存在/空分组/relay 未配置警告） |
+| 面板增删密钥 | 覆盖 | integration app「密钥库往返：set/list/remove；值绝不跨 RPC；文件 0600」 |
+| 密钥解析与缺失 | 覆盖 | secrets unit + engine unit「$secret 全链：命中注入完整头值；删除后 secret_missing（信息不含名字）」+ unit upstream（命中/未命中零 fetch） |
+| 默认最便宜模型测试 | 覆盖 | upstream-test unit「模型缺省：api.json 定位 provider 取 priced chat 最低价 / upstream 主机命中」 |
+| custom 上游探测回退 | 覆盖 | upstream-test unit「清单不可用且未指定模型 → 先探测 /models」「自定义上游探测成功 → 首选便宜档」 |
+| 裸 key 默认可用 | 覆盖 | store unit「bearerPrefix 退役：值为原样存储」+ upstream-test unit「auth 草稿三族 + bearer 开关」 |
+| 有键分组不可删 | 覆盖 | store unit「removeGroup：有未撤销密钥拒绝（conflict），撤销后可删」 |
+| 中转站无 models.dev 条目 | 覆盖 | upstream-test unit「upstream 主机命中 api.json（无显式 api 精确匹配时）」「清单不可用 → 探测回退」 |
+| 阶段按序组装 | 覆盖 | hook-stages unit「STAGE_FN_NAMES 四阶段常量与管线顺序冻结」+ 槽形状矩阵 |
+| 脚本增量胜过声明式 | 覆盖 | hook-stages unit（headers 槽 remove → set → 整段 script 增量组合） |
+| onRequest 接管出站并流式回传 | 覆盖 | hook-stages unit + unit upstream「整体接管：跳过 probeConnect、零原生 fetch；ctx{url,method,headers,body,signal}」+ codex-hook unit ③ |
+| onResponse 改写响应 | 覆盖 | hook-stages unit（response 槽）+ unit upstream「局部覆盖：status/头/流式 body 变换」「{} 返回 = 透传」 |
+| 脚本失效的错误归置 | 覆盖 | unit upstream（③ 构造期失效 → 固定脱敏文案零 probe 零 fetch；流中途失败分族）+ rust-fetch unit（exit≠0/坏 meta/spawn ENOENT 指引/预 abort 宿主存活） |
+| 预设模式整段接管 | 覆盖 | preset-mode unit + unit upstream（整段接管/部分覆盖回退 js-backend-fetch）+ codex-hook unit（①②③ 全生命周期，含 CODEX_HOME 隔离） |
+| 预设模式与逐槽互斥 | 覆盖 | preset-mode unit「互斥：hooks 与 auth / request 同现一律 invalid」 |
+| 顶层键 strict | 覆盖 | hook-stages unit（LIFECYCLE_SLOTS_SCHEMA 未知字段整体拒绝）+ store unit「四槽非法形状拒绝」 |
+| 经 rust-fetch 转发流式请求 | 覆盖 | rust-fetch unit「往返：meta + 体 + 流式回传」+ codex-hook unit ③（stub sidecar 全通） |
+| 二进制缺失或协议失败 | 覆盖 | rust-fetch unit（spawn ENOENT 安装指引 / exit≠0 / 坏 meta / 顶层 null·数组·标量 / meta 形状越界 / abort SIGKILL） |
+| 服务停用目录剔除 | 覆盖 | lifecycle unit + store unit「groupServices 排除停用服务（目录/分享链接视图传导）」+ integration app（setRunning） |
+| 环级开关叠加 | 覆盖 | lifecycle unit + integration app「setProviderRunning 环开关（providers[].enabled + 叠加语义）」+ consumer lifecycle-watch unit（环级停用传导全部监听关；恢复时单服务停用保持） |
 
-## consumer（18 Scenario）
+## consumer（27 Scenario）
 
 | Scenario | 状态 | 覆盖位置 / 说明 |
 |---|---|---|
-| 新设备组合链接一步到位 | 覆盖 | IT before（importLink link0：兑换 + 入环 + 摘要服务/端口）+ IT:T3（端口可用）；E2E 步骤 3（import --run） |
-| 老设备追加分组跳过兑换 | 覆盖 | IT:T11（consumer2 导 secretgrp 链接：redeemed=false、双钥并存、跨组服务并入）；E2E 步骤 7（重复导入同链接） |
-| 裸密钥入环 | 覆盖 | IT before + IT:T3（keyId="" 占位 → AUTH_OK 回填 keyId/group）；E2E 的 CLI 形态受 bug #5 影响（见下） |
-| 裸密钥无法替代入网 | 覆盖 | IT:T11（addKey 未入网 → 指引 join/import）；E2E 步骤 7 宽容断言（bug #5 时命中分发误报分支并标注） |
-| 多提供方并存 | 覆盖 | IT:T13（单 manager 双 ring：P1 下线 P2 映射不受影响） |
-| 签发者离线时导入失败 | 覆盖 | E2E 步骤 9（serve 停机后 import → 失败 + 目录零残留） |
-| 端口冲突自动错开 | 未覆盖（integration 未占位制造冲突）| unit（ports 单测：EADDRINUSE 回退 + NOTICE）覆盖；--strict-ports 面 unit 覆盖 |
-| 不监听外网 | 覆盖 | IT:T15（全部监听对非回环本机地址连接被拒） |
-| 流式对话 | 部分 | IT:T4 / E2E 步骤 4（SSE 内容与块序）；逐块 flush 受 bug #2 退化（同 wire-protocol SSE 条目） |
-| WS 双向中继 | 未覆盖（bug #3）| IT:T5a 自动 skip，断言就位 |
-| 上游错误透传 | 覆盖 | IT:T4（418/500）+ IT:T7（upstream_unreachable → 502） |
-| 慢客户端不拖垮内存 | 覆盖 | IT:T8（buffer_overflow 计数 + 本地连接错误 + 其它请求不受影响 + 上游连接中止） |
-| 服务删除后的收敛 | 覆盖 | IT:T9 |
-| relay 入口在线更新 | 部分 | 同 wire-protocol「relay 入口在线刷新」 |
-| 丢批后连接重建 | 覆盖 | IT:T14（protocol_seq → 终结该请求 → 重建连接 → 恢复 direct → 其余请求自动恢复） |
-| 离线快速失败 | 覆盖 | IT:T10（503 provider_offline + 错误含别名）；E2E 步骤 6/9 |
-| 恢复自动续用 | 覆盖 | IT:T10（重启后不需干预恢复）；E2E 步骤 9（CLI 进程面） |
-| 密钥全被撤销的可见性 | 覆盖 | IT:T12（key_all_invalid 状态 + 503 + 别名 + 新钥入环自动恢复）；E2E 步骤 8（轮换端到端，恢复经 import 新链接——key add CLI 受 bug #5 影响） |
+| 新设备组合链接一步到位 | 覆盖 | join unit（兑换 + 入环 + 服务种子）+ cli e2e 步骤 3（import --run：摘要 + 端口可用） |
+| 老设备追加分组跳过兑换 | 覆盖 | join unit「老设备：零兑换、密钥直接入环（多钥并存）」+ cli e2e 步骤 7 |
+| 裸密钥入环 | 覆盖 | join unit addKey「已入网：入环生效（幂等），keyId/group 留待 AUTH_OK 回填」+ cli e2e 步骤 8（key add 恢复） |
+| 裸密钥无法替代入网 | 覆盖 | join unit addKey「未入网：报错并指引」+ cli e2e 步骤 7（c3 对 bogus provider key add 报错） |
+| 多提供方并存 | 覆盖 | providers unit「ProviderManager：P1 离线不影响 P2 路由」 |
+| 签发者离线时导入失败 | 覆盖 | join unit「兑换失败：整体回收不留半初始化」+ cli e2e 步骤 7（已消费链接 → 失败 + 零残留） |
+| 旧格式链接明确报过期 | 覆盖 | link unit + join unit（v1 形状 → 「分享链接格式已过期」）+ cli e2e（坏链接 exit 1） |
+| 钥环陈旧条目自愈 | 覆盖 | consumer/store unit「陈旧服务条目逐条过滤：部分坏丢弃、其余/密钥/记录保留、原子写回 + applyCatalog 全量重建」 |
+| 端口冲突自动错开 | 覆盖 | ports unit（listenWithFallback 冲突矩阵）+ gateway unit「端口被占自动错开：NOTICE 标注」+ actual-ports unit（监听回写/修剪） |
+| 不监听外网 | 覆盖 | ports unit + gateway unit「仅绑定 127.0.0.1：非回环接口连接被拒」 |
+| 流式对话 | 覆盖 | gateway unit「SSE 逐块顺序还原（含 data: [DONE]）」+ e2e T1（真内核流式）+ cli e2e 步骤 4 |
+| WS 双向中继 | 覆盖 | gateway unit（101 双向 echo CLOSE / 握手失败 404 透传 / accept 自管 key）+ e2e T4/T6（真内核 keepOpen 字节隧道） |
+| 上游错误透传 | 覆盖 | gateway unit「status/正文/contentType 原样透传」+ unit upstream 404 + cli e2e（418） |
+| 慢客户端不拖垮内存 | 部分 | gateway unit 接收侧兜底（本地待消费缓冲达限 → ABORT + 记账 + 连接错误关闭；限额内不误伤）——本地兜底钉死；「内核 journal 反压暂停上游」本体是 opendweb 内核契约（SDK 侧测试），ai-fly 侧不可注入观测 |
+| 脚本失效的本地观感 | 覆盖 | providers unit「hook_failed HTTP 生命周期双分支（pending → 502 脱敏 JSON；流式中 → 本地连接错误终结）」 |
+| SSE 中途断线原序续传 | 覆盖 | e2e T2（真内核：已交付不重复、原序到达、上游不重发——副作用恰好一次）+ sse-soak（门控浸润） |
+| WS 三态 | 覆盖 | e2e T4（keepOpen 隧道三态）+ gateway unit（closeByPeer / abort 分支） |
+| 服务删除后的收敛 | 覆盖 | gateway unit「服务删除：关端口 + 终结在途」 |
+| relay 入口在线更新 | 部分 | relayUrls 传递与落盘：providers unit（createFabricSessionFactory relay 透传）+ gateway unit（AUTH_OK 落盘）；「更换 relay 后重连使用新入口」本体无法在运行期固定 relay 配置上构造（SDK relay 构造期固定）——引擎支持 relay 热切换后补 |
+| 丢批后连接重建 | 部分（机制退役）| 分片序号缺断检测随 envelope 退役（protocol_seq 仅存错误码映射表）；等价语义「流/会话不可信 → 重建连接、其余服务自动恢复」经 e2e T3（REQUEST_STATE_LOST → 重建 → 恢复）+ providers unit（dead → 会话重建重 AUTH）承载 |
+| 离线快速失败 | 覆盖 | gateway unit「503 provider_offline 错误体含别名」+ providers unit + cli e2e 步骤 6 |
+| 恢复自动续用 | 覆盖 | e2e T3 + cli e2e 末步（重启后不需干预自动恢复） |
+| 密钥全被撤销的可见性 | 覆盖 | providers unit（AUTH 403 → key_all_invalid 状态）+ engine unit「仅剩钥也被撤：授权失效 + 断传输」+ cli e2e 步骤 8（轮换端到端 + key add 自动恢复） |
+| 恢复窗口内瞬断不直达 | 覆盖 | providers unit「recovering：状态 offline 但 forward 不快速失败（挂起）」+ e2e T2 |
+| 恢复窗口耗尽 | 覆盖 | providers unit「dead：状态 offline + forward 快速失败 + 会话重建重 AUTH」 |
+| 停用-恢复往返 | 覆盖 | lifecycle-watch unit（外部停用/启用经 watch 传导；停止后不再响应）+ gateway unit「setServiceEnabled 热启停：stop 关端口幂等、start 按端口偏好恢复」+ integration app（setRunning/remove + 停用可复活） |
+| forget 真删 | 未覆盖（无断言）| CLI 面在位（`services rm <provider>` = forget：keyring + fabric 身份移除，src/cli/commands/consumer/services.ts）；无自动化断言——integration 覆盖的是单服务 remove（修剪/可复活），provider 级真删未演练——后续补测项 |
 
-## share-link（8 Scenario）
+## share-link（7 Scenario）
 
 | Scenario | 状态 | 覆盖位置 / 说明 |
 |---|---|---|
-| 链接自包含预览 | 覆盖 | E2E 步骤 2（--preview：别名/分组/服务/默认端口/凭证提示，离线） |
-| 敏感信息不入链 | 覆盖 | IT:T11（payload 无 env 名/值；detail ● 与 AUTH_OK 同规） |
-| 链接二次兑换被拒 | 覆盖 | IT:T11（consumer3 用已消费链接 → 失败 + 零残留）；E2E 步骤 7 |
-| 老设备跳过兑换 | 覆盖 | IT:T11；E2E 步骤 7 |
-| 密钥独立于链接存续 | 部分 | §3 车道裁决：share 每次签发新钥（哈希不可逆），「同组同钥」不可构造；「既有连接与授权不受影响」面由 E2E 步骤 7/8 顺带覆盖（多次 share 期间既有 consumer 服务不中断） |
-| 撤钥不踢人 | 部分 | IT:T1（撤钥后会话/余钥继续，语义等同名册不动）；名册成员身份「未变」未显式断言 |
-| 踢人不撤钥 | 覆盖 | E2E 步骤 6（revoke c1 后 c2 同钥继续可用）；「重新入网后恢复授权」子句未演练（fabric 语义，dweb e2e 覆盖同机制） |
-| （构成/编码面） | 覆盖 | unit（link 单测）+ IT:T11/E2E 解析面 |
+| 链接自包含预览 | 覆盖 | link unit（preview 摘要，零网络）+ cli e2e 步骤 2（--preview）+ integration app（坏链接 → INVALID_INPUT 离线 preview） |
+| 敏感信息不入链 | 覆盖 | link unit「敏感信息不入链：无 env 变量名、无其它分组引用」 |
+| 链接二次兑换被拒 | 覆盖 | cli e2e 步骤 7（consumer3 新设备用已消费链接 → 失败 + 零残留）；fabric 令牌一次性由内核承接 |
+| 老设备跳过兑换 | 覆盖 | join unit + cli e2e 步骤 7（重复导入：零兑换、双钥并存） |
+| 密钥独立于链接存续 | 部分 | link unit「每次 share 签发新钥（原文不可再现；旧钥不受影响）」；「同组同钥」不可构造（签发语义）；既有连接不受多次 share 影响由 cli e2e 步骤 7/8 顺带覆盖 |
+| 撤钥不踢人 | 部分 | engine unit「双钥在线撤一钥：会话不断、余钥视图继续」（语义等同名册不动）；名册成员身份「未变」未显式断言（fabric 层语义） |
+| 踢人不撤钥 | 部分 | cli e2e 步骤 6（revoke 成员 c1 → 重启后 503 provider_offline）；同钥 c2 不受影响经步骤 8 在线状态隐式体现（无显式断言）；「重新入网后恢复授权」未演练（fabric 语义）；已知 #4：跨进程 revoke 不拆既有会话（e2e 标注） |
+
+## 条款级补充覆盖（requirement 文本子句，无独立 Scenario 行）
+
+| 条款 | 状态 | 覆盖位置 |
+|---|---|---|
+| 鉴权按 session_id 缓存；同 peer 异 session 不继承授权 | 覆盖 | engine unit（同 peer 新 session AUTH 前 forward/watch 均 401；自行 AUTH 后独立生效；B 全无效只失效 B；watch 失效/LRU 逐出即刻唤醒）+ e2e T7 |
+| 对端取消 → provider 秒停上游（含预中止） | 覆盖 | engine unit（/stall abort <3s；预中止零上游触达含 TCP 连接计数 + 有界收口）+ e2e T8（gated 上游无头形态）+ consumer providers（abortKey/abortFetch 接线）+ SDK http-lifecycle（opendweb 侧 writer 三态/head 等待期 abort） |
+| 错误码集合稳定（ERROR_CODE 枚举 + HTTP 映射穷举） | 覆盖 | providers unit「错误码 → HTTP 映射」+ src/shared/http-errors.ts Record 穷举（typecheck 锁定） |
+| 发送侧 bufferOverflows 退役（观测面改内核 journalBytes） | 覆盖 | 迁移设计条款；本地兜底面见 consumer「慢客户端」行 |
 
 ## 汇总
 
-- wire-protocol 32：覆盖 24、部分 5、未覆盖 3（超限正文、WS 双向/关闭——引擎 bug #3）
-- provider 14：覆盖 9、部分 3、未覆盖 2（非法正则、特权端口——CLI 演练面；unit 覆盖）+ 越权统一拒绝未覆盖（unit 覆盖）→ 计 3 未覆盖
-- consumer 18：覆盖 13、部分 3（relay 刷新、流式 flush、——）、未覆盖 2（端口冲突——unit；WS——bug #3）
-- share-link 8（含构成面）：覆盖 6、部分 2
-- 合计 72 Scenario：覆盖 52、部分 13、未覆盖 7（其中 3 项被引擎 bug #3 阻塞、4 项由 unit 车道覆盖而 integration/e2e 未演练）
+- wire-protocol 17：覆盖 8、部分 3、未覆盖 6（其中 5 项为帧族机制随内核迁移退役——等价保证由 opendweb 内核契约承接；1 项跨版本目录为机制在位无断言）
+- provider 37：覆盖 36、部分 1（密钥原文条款 spec 已漂移——现行可复制语义为 Owner 裁决）
+- consumer 27：覆盖 23、部分 3（慢客户端内核反压面、relay 热切换不可构造、丢批机制退役）、未覆盖 1（forget 真删——CLI 在位无断言）
+- share-link 7：覆盖 4、部分 3
+- 合计 88 Scenario：覆盖 71、部分 10、未覆盖 7
 
-已知引擎 bug 对覆盖的影响（修复后本套件自动收紧，无需改测试）：
-- #2 → SSE 逐块 flush（现以内容/顺序断言 + 控制台标注）
-- #3 → WS 双向对话/关闭终结（探测 skip，断言就位）
-- #4 → 跨进程 revoke 既有会话不拆（E2E 标注；安全语义经重连拒绝面覆盖）
-- #5 → `key add` CLI（E2E 宽容分支 + 标注；函数面由 integration 覆盖）
+后续补测项（非发布阻塞）：
+
+1. 跨版本目录安全拒绝（providers.ts 二阶段失败回调）补确定性单测
+2. `services rm <provider>`（forget 真删）补 e2e/unit 断言
+3. 踢人不撤钥的「c2 同钥继续可用」显式断言（现隐式）
+4. spec 文本与实现的已漂移条款，下期 spec-sync 修订：密钥原文可复制裁决、wire-protocol 帧族条款重写为内核承载口径

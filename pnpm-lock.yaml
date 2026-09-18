@@ -113,8 +113,8 @@ importers:
         specifier: ^2.1.1
         version: 2.1.1(hono@4.13.7)
       '@jixo/opendweb-client-sdk':
-        specifier: ^0.5.0
-        version: 0.5.0
+        specifier: ^0.6.0
+        version: 0.6.0
       '@opentray/ext-webview':
         specifier: 0.23.0
         version: 0.23.0(opentray@0.23.0(@gaubee/util@0.35.2))
@@ -657,8 +657,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@jixo/opendweb-client-sdk@0.5.0':
-    resolution: {integrity: sha512-l642QVTvBGV1JPwCh972I1WX33YwEKmtQVsI47rrPgh8+Tmc0c5LthUEB+/QOVbdrmxgY1/wDMVeJArD6na2xw==}
+  '@jixo/opendweb-client-sdk@0.6.0':
+    resolution: {integrity: sha512-8gFw0UJp8kl0BnC70gZG7q76LXwQiJdpu/svGjXSJ2dE1NuzMOZpNLIwwE/tjNxRA+KXnRxAIf/a+GXzp8GmLQ==}
 
   '@jixo/opendweb-server-binary@0.3.2':
     resolution: {integrity: sha512-Su2jUNRnGpVLYMq5Rdv49dUdhYwhjW5xe4ikwO0xLEXsuCHIt2QunHRJyXLAq2jhWE6o0+bW0QaR3CYL2ggbxA==}
@@ -3421,7 +3421,7 @@ snapshots:
   '@img/sharp-win32-x64@0.33.5':
     optional: true
 
-  '@jixo/opendweb-client-sdk@0.5.0': {}
+  '@jixo/opendweb-client-sdk@0.6.0': {}
 
   '@jixo/opendweb-server-binary@0.3.2': {}
 

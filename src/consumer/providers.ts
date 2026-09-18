@@ -63,7 +63,12 @@ export interface FetchHttpInitLike {
   keepOpen?: boolean;
   /** 响应头等待上限毫秒（默认 30s——watch 长轮询按需放宽）。 */
   headTimeoutMs?: number;
+  /** head 等待期取消键（SDK 0.6.0 原生面：abortFetch(key) → 即时 RESET）。 */
+  abortKey?: number;
 }
+
+/** fetchHttp head 等待期取消键序号（per 进程单调；abortKey 注册表关联）。 */
+let fetchAbortKeySeq = 0;
 
 /** fetchHttp 响应（SDK HttpClientResponseJs 结构子集；pull-first bodyNext）。 */
 export interface FetchHttpResponseLike {
@@ -94,6 +99,8 @@ export interface SessionHandleLike {
   onState(callback: (state: SessionStateLike) => void): () => void;
   close(): Promise<void>;
   fetchHttp(init: FetchHttpInitLike): Promise<FetchHttpResponseLike>;
+  /** head 等待期取消（SDK 0.6.0；假体可缺省——no-op）。 */
+  abortFetch?(abortKey: number): void;
 }
 
 export interface FabricLike {
@@ -446,6 +453,10 @@ export class ProviderConnection implements ProviderRoute {
     headers.push({ name: AIFLY_SERVICE_HEADER, value: input.serviceId });
     let aborted = false;
     let tunnel: FetchHttpResponseLike | null = null;
+    // 消费端取消（SDK 0.6.0 原生面）：abortKey 注册 + abort 时经
+    // session.abortFetch(key) 即时 RESET（head 等待期对端在途请求不悬挂至
+    // 其自身超时）；head 到达后与 resp.abort() 双保险。
+    const abortKey = ++fetchAbortKeySeq;
     const pump = (async () => {
       try {
         const resp = await session.fetchHttp({
@@ -454,6 +465,7 @@ export class ProviderConnection implements ProviderRoute {
           headers,
           ...(input.body.length > 0 ? { body: [input.body] } : {}),
           ...(input.upgrade ? { keepOpen: true } : {}),
+          abortKey,
         });
         if (aborted) {
           // 竞态收口：等待头期间本地已中止——刚完成的响应必须即刻取消
@@ -529,8 +541,14 @@ export class ProviderConnection implements ProviderRoute {
       abort: () => {
         // 本地中止：停止回调投递 + best-effort 取消内核请求（SDK abort() 为
         // B1/B2 轮补齐面——当前版本缺席时仅本地停泵；到位后取消内核流并使
-        // provider 侧在途 handler 经取消结算收敛）。
+        // provider 侧在途 handler 经取消结算收敛）。0.6.0：signal 先行——
+        // head 等待期也能即时 RESET（tunnel 尚未就位）。
         aborted = true;
+        try {
+          session.abortFetch?.(abortKey);
+        } catch {
+          // 取消面失败不阻断本地中止
+        }
         try {
           tunnel?.abort?.();
         } catch {
