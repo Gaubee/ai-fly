@@ -59,6 +59,27 @@
     if (!currentServes) endpoint = firstEndpointOf(form);
   }
 
+  /** SSE 解析视图（vision P2-5）：bodyExcerpt 为 data: {...} 流时提取增量文本，
+   * 用户读回复不必在原始 JSON 里找内容；解析不出（非 SSE/无 delta）则回原始。 */
+  let rawView = $state(false);
+  function parseSseExcerpt(text: string): string | null {
+    if (!text.includes("data: ")) return null;
+    const parts: string[] = [];
+    for (const line of text.split("\n")) {
+      if (!line.startsWith("data: {")) continue;
+      try {
+        const payload = JSON.parse(line.slice(6));
+        const choice = payload?.choices?.[0];
+        const delta = choice?.delta?.content ?? choice?.text;
+        if (typeof delta === "string" && delta !== "") parts.push(delta);
+      } catch {
+        // 坏行跳过——部分截断的最后一行不致命
+      }
+    }
+    return parts.length > 0 ? parts.join("") : null;
+  }
+  const parsedBody = $derived(result === null ? null : parseSseExcerpt(result.bodyExcerpt ?? ""));
+
   const endpointOptions = $derived.by(() => {
     const options = prefixRoutes.map((route) => {
       const local = route.localPrefix!;
@@ -173,7 +194,25 @@
         </p>
       {/if}
       {#if result.bodyExcerpt !== undefined && result.bodyExcerpt !== ""}
-        <pre class="max-h-64 overflow-auto whitespace-pre-wrap break-all border border-border bg-muted/40 p-3 text-xs">{result.bodyExcerpt}</pre>
+        {#if parsedBody !== null}
+          <span class="flex items-center gap-1.5">
+            <button
+              type="button"
+              class="text-[11px] underline-offset-2 hover:underline {rawView ? "text-muted-foreground" : "text-primary"}"
+              onclick={() => (rawView = false)}
+            >{t("testcard.viewParsed")}</button>
+            <button
+              type="button"
+              class="text-[11px] underline-offset-2 hover:underline {rawView ? "text-primary" : "text-muted-foreground"}"
+              onclick={() => (rawView = true)}
+            >{t("testcard.viewRaw")}</button>
+          </span>
+        {/if}
+        {#if !rawView && parsedBody !== null}
+          <p class="max-h-64 overflow-auto whitespace-pre-wrap break-all border border-border bg-muted/40 p-3 text-sm leading-relaxed">{parsedBody}</p>
+        {:else}
+          <pre class="max-h-64 overflow-auto whitespace-pre-wrap break-all border border-border bg-muted/40 p-3 text-xs">{result.bodyExcerpt}</pre>
+        {/if}
       {/if}
     </div>
   {/if}

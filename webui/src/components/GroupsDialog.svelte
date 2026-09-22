@@ -158,19 +158,19 @@
   }
 
   function limitsLabel(limits: { maxConcurrency?: number; dailyRequests?: number } | undefined): string {
-    if (limits === undefined) return "unlimited";
+    if (limits === undefined) return t("adv.groups.unlimited");
     const parts: string[] = [];
     if (limits.maxConcurrency !== undefined) parts.push(`c=${limits.maxConcurrency}`);
     if (limits.dailyRequests !== undefined) parts.push(`d=${limits.dailyRequests}/day`);
-    return parts.length > 0 ? parts.join(" ") : "unlimited";
+    return parts.length > 0 ? parts.join(" ") : t("adv.groups.unlimited");
   }
 </script>
 
-<Dialog bind:open title="manage groups">
+<Dialog bind:open title={t("groupsdlg.manage")}>
   <div class="flex min-h-40 w-full flex-col gap-3">
       {#if app.groups.length === 0 && app.ready}
         <p class="text-xs leading-relaxed text-muted-foreground">
-          no groups yet - create one below, or pick a preset and share to create it from the wizard.
+          {t("groupsdlg.emptyNote")}
         </p>
       {/if}
       {#each app.groups as group (group.name)}

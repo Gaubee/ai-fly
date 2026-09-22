@@ -84,6 +84,8 @@
   }
 
   const visibleCurated = $derived(orderedCurated.filter(matchesQuery));
+  const visibleLocal = $derived(visibleCurated.filter((p) => isLocalPreset(p)));
+  const visibleCloud = $derived(visibleCurated.filter((p) => !isLocalPreset(p)));
   const visibleLongTail = $derived(presets.modelsDev.filter(matchesQuery));
   /** 搜索时长尾自动展开（命中不应藏在折叠区后面）。 */
   const longTailOpen = $derived(showLongTail || search.trim() !== "");
@@ -115,6 +117,28 @@
   {/if}
 {/snippet}
 
+{#snippet presetCard(preset: Preset)}
+  <!-- 「本地」为分类 tag（outline——与「精选」同族；绿色留给语义状态，P1-6） -->
+  <button
+    type="button"
+    class="flex min-h-24 flex-col gap-1.5 border border-border bg-card p-3.5 text-left shadow-2xs transition-colors hover:border-primary/50"
+    onclick={() => choosePreset(preset)}
+  >
+    <span class="flex flex-wrap items-center gap-1.5">
+      {@render presetIcon(preset)}
+      <span class="font-nav text-xs uppercase tracking-[0.1em]">{preset.label}</span>
+      {#if isLocalPreset(preset)}
+        <Badge variant="outline">{t("share.preset.local")}</Badge>
+      {/if}
+      <Badge variant="outline">{t("share.preset.featured")}</Badge>
+    </span>
+    <span class="font-mono text-[11px] text-muted-foreground">{preset.baseUrl}</span>
+    <span class="mt-auto flex items-center gap-2 text-[11px] text-muted-foreground">
+      port {preset.defaultPort}
+    </span>
+  </button>
+{/snippet}
+
 <div class="mx-auto flex max-w-3xl flex-col gap-4 p-4 md:p-6">
   <header class="flex flex-col gap-2">
     <h1 class="font-nav text-base uppercase tracking-[0.1em]">{t("share.title")}</h1>
@@ -140,40 +164,43 @@
         {presets.error}
       </Alert>
     {:else}
-      <div class="grid gap-3 sm:grid-cols-2" transition:slide={{ duration: 180 }}>
-        {#each visibleCurated as preset (preset.id)}
-          <button
-            type="button"
-            class="flex min-h-24 flex-col gap-1.5 border border-border bg-card p-3.5 text-left shadow-2xs transition-colors hover:border-primary/50"
-            onclick={() => choosePreset(preset)}
-          >
-            <span class="flex flex-wrap items-center gap-1.5">
-              {@render presetIcon(preset)}
-              <span class="font-nav text-xs uppercase tracking-[0.1em]">{preset.label}</span>
-              {#if isLocalPreset(preset)}
-                <Badge variant="tonal" class="jx-hue-success">local</Badge>
-              {/if}
-              <Badge variant="outline">{t("share.preset.featured")}</Badge>
-            </span>
-            <span class="font-mono text-[11px] text-muted-foreground">{preset.baseUrl}</span>
-            <span class="mt-auto flex items-center gap-2 text-[11px] text-muted-foreground">
-              port {preset.defaultPort}
-            </span>
-          </button>
-        {/each}
-
-        <!-- 自定义 URL 卡 -->
-        <button
-          type="button"
-          class="flex min-h-24 flex-col gap-1.5 border border-dashed border-border bg-card/50 p-3.5 text-left transition-colors hover:border-primary/50"
-          onclick={chooseCustom}
-        >
-          <span class="font-nav text-xs uppercase tracking-[0.1em]">{t("share.custom.title")}</span>
-          <span class="text-[11px] leading-relaxed text-muted-foreground">
-            {t("share.custom.body")}
+      <!-- 来源分组（vision 走查 2026-09-18 P1-4）：本地运行时 / 云端服务 两组
+           小 caps 标头，长列表可扫；分组内仍按 label 稳定排序 -->
+      {#if visibleLocal.length > 0}
+        <div class="flex flex-col gap-2" transition:slide={{ duration: 180 }}>
+          <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
+            {t("share.group.local")}
           </span>
-        </button>
-      </div>
+          <div class="grid gap-3 sm:grid-cols-2">
+            {#each visibleLocal as preset (preset.id)}
+              {@render presetCard(preset)}
+            {/each}
+          </div>
+        </div>
+      {/if}
+      {#if visibleCloud.length > 0}
+        <div class="flex flex-col gap-2" transition:slide={{ duration: 180 }}>
+          <span class="font-nav text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
+            {t("share.group.cloud")}
+          </span>
+          <div class="grid gap-3 sm:grid-cols-2">
+            {#each visibleCloud as preset (preset.id)}
+              {@render presetCard(preset)}
+            {/each}
+            <!-- 自定义 URL 卡（云端组尾） -->
+            <button
+              type="button"
+              class="flex min-h-24 flex-col gap-1.5 border border-dashed border-border bg-card/50 p-3.5 text-left transition-colors hover:border-primary/50"
+              onclick={chooseCustom}
+            >
+              <span class="font-nav text-xs uppercase tracking-[0.1em]">{t("share.custom.title")}</span>
+              <span class="text-[11px] leading-relaxed text-muted-foreground">
+                {t("share.custom.body")}
+              </span>
+            </button>
+          </div>
+        </div>
+      {/if}
       {#if search.trim() !== "" && visibleCurated.length === 0 && visibleLongTail.length === 0}
         <p class="text-[11px] text-muted-foreground">
           {t("share.search.none", { query: search.trim() })}

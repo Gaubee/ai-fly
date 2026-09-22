@@ -182,7 +182,8 @@
 </script>
 
 <div class="mx-auto flex max-w-4xl flex-col gap-4 p-4 md:p-6">
-  <header class="flex flex-wrap items-baseline justify-between gap-2">
+  <!-- 标题层级（vision P1-5）：副标题移到主标题正下方，不再同行右置 -->
+  <header class="flex flex-col gap-1">
     <h1 class="font-nav text-base uppercase tracking-[0.1em]">{t("dash.title")}</h1>
     <p class="text-xs text-muted-foreground">{t("dash.subtitle")}</p>
   </header>
@@ -260,7 +261,7 @@
             </div>
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
               <dt class="text-muted-foreground">{t("dash.stat.relay")}</dt>
-              <dd class="font-mono">{provider.running ? provider.relayMode ?? "-" : "-"}</dd>
+              <dd class="font-mono">{provider.running ? provider.relayMode ?? t("dash.stat.relayNone") : t("dash.stat.relayNone")}</dd>
             </div>
           </dl>
           <p class="text-[11px] leading-relaxed text-muted-foreground">

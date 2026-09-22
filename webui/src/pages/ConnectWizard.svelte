@@ -93,7 +93,7 @@
           const port = connectW.ports.find((row) => row.serviceId === service.serviceId)?.port;
           return {
             value: service.serviceId,
-            label: port === undefined ? `${service.name} (port from local gateway)` : `${service.name} (port ${port})`,
+            label: port === undefined ? `${service.name} ${t("connect.test.portFromGateway")}` : `${service.name} ${t("connect.test.portLabel", { port })}`,
           };
         })
       : [],
@@ -189,7 +189,7 @@
             <Skeleton class="h-24" />
           </div>
           {#if applyGuidance !== null}
-            <Alert variant="tonal" class="jx-hue-info" title="cannot reach the provider">
+            <Alert variant="tonal" class="jx-hue-info" title={t("connect.ports.cannotReach")}>
               {applyGuidance}
             </Alert>
           {/if}
@@ -232,7 +232,7 @@
                     </span>
                     {#if row.autoShifted}
                       <span class="block text-[10px] leading-tight text-muted-foreground">
-                        default port {row.defaultPort} was taken - the engine moved it to {row.port}.
+                        {t("connect.ports.autoShiftedNote", { port: row.defaultPort, actual: row.port })}
                       </span>
                     {/if}
                   </td>
@@ -249,7 +249,7 @@
                         loading={connectW.portBusy === row.serviceId}
                         onclick={() => void setServicePort(row.serviceId)}
                       >
-                        set
+                        {t("connect.ports.set")}
                       </PressButton>
                     </span>
                   </td>
@@ -258,7 +258,7 @@
             </tbody>
           </table>
           <p class="text-[11px] text-muted-foreground">
-            port changes persist and apply on the next gateway start.
+            {t("connect.ports.note")}
           </p>
         {/if}
       </div>

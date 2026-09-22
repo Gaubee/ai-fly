@@ -1,5 +1,5 @@
 <!-- 高级设置（B 3.5 + M3 6.x，#/advanced）：Tabs = 服务 / 分组 / 密钥 /
-     密钥库 / 中继与限额 / 设置。net-fly 通用概念（match 全集、rewrite 规则、
+     密钥库 / 中继与限额 / 设置。ai-fly 通用概念（match 全集、rewrite 规则、
      relay 配置）只出现在这里；默认一行一服务，展开 detail（$env:/$secret:
      注入值掩码），行内 test 连通测试（M3 6.3）。keys = 消费者侧 share 密钥
      （issue 一次性原文 dialog + revoke 两步确认）；secrets = provider 侧
@@ -290,7 +290,7 @@
 </script>
 
 <div class="mx-auto flex max-w-4xl flex-col gap-4 p-4 md:p-6">
-  <header class="flex flex-wrap items-baseline justify-between gap-2">
+  <header class="flex flex-col gap-1">
     <h1 class="font-nav text-base uppercase tracking-[0.1em]">{t("adv.title")}</h1>
     <p class="text-xs text-muted-foreground">
       {t("adv.subtitle")}
@@ -310,7 +310,7 @@
     <TabsContent value="services">
       <div class="flex flex-col gap-3">
         <div class="flex items-center justify-between gap-3">
-          <p class="text-xs text-muted-foreground">
+          <p class="text-[11px] text-muted-foreground/70">
             {t("adv.services.hint")}
           </p>
           <span class="flex flex-none items-center gap-1.5">
@@ -700,7 +700,7 @@
 
     <TabsContent value="secrets">
       <div class="flex flex-col gap-3">
-        <Card title="secrets" scroll={false}>
+        <Card title={t("adv.tab.secrets")} scroll={false}>
           <div class="flex flex-col gap-3 p-3">
             <p class="text-xs leading-relaxed text-muted-foreground">
               {t("adv.secrets.hint")}
@@ -880,13 +880,13 @@
     <!-- ── 设置 ─────────────────────────────────────────────── -->
     <TabsContent value="settings">
       <div class="flex flex-col gap-3">
-        <Card title="settings" scroll={false}>
+        <Card title={t("adv.tab.settings")} scroll={false}>
           <div class="flex flex-col gap-4 p-3">
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p class="font-nav text-[11px] uppercase tracking-[0.1em]">{t("adv.settings.theme")}</p>
                 <p class="text-[11px] text-muted-foreground">
-                  light / dark / system - also synced to app settings.
+                  {t("adv.settings.themeNote")}
                 </p>
               </div>
               <!-- 捕获点击后读 localStorage 同步引擎侧偏好 -->
@@ -899,8 +899,7 @@
               <div>
                 <p class="font-nav text-[11px] uppercase tracking-[0.1em]">{t("adv.settings.modelsDev")}</p>
                 <p class="text-[11px] text-muted-foreground">
-                  extend the preset list with models.dev providers (fetched once, cached a week).
-                  off keeps the list curated-only and works offline.
+                  {t("adv.settings.modelsDevNote")}
                 </p>
               </div>
               <Toggle
@@ -958,7 +957,7 @@
 </Dialog>
 
 <!-- hooks 脚本查看 -->
-<Dialog bind:open={hookView.open} title="hooks: {hookView.name}">
+<Dialog bind:open={hookView.open} title={t("adv.hooks.viewTitle", { name: hookView.name })}>
   <div class="flex flex-col gap-2 p-4">
     <p class="text-[11px] text-muted-foreground">
       [{hookView.source}] <code class="font-mono">{hookView.path}</code>
