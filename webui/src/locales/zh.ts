@@ -10,7 +10,7 @@ export const zh: Record<string, string> = {
   "shell.nav.connect": "接入",
   "shell.nav.connect.hint": "使用朋友的链接（3 步）",
   "shell.nav.advanced": "高级",
-  "shell.nav.advanced.hint": "服务、分组、密钥、钩子、中继",
+  "shell.nav.advanced.hint": "服务、密钥、钩子与中继",
   "shell.theme.light": "浅色",
   "shell.theme.dark": "深色",
   "shell.theme.system": "跟随系统",

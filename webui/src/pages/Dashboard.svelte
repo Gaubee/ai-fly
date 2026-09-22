@@ -261,7 +261,7 @@
             </div>
             <div class="flex justify-between gap-2 border-b border-border/60 pb-1">
               <dt class="text-muted-foreground">{t("dash.stat.relay")}</dt>
-              <dd class="font-mono">{provider.running ? provider.relayMode ?? t("dash.stat.relayNone") : t("dash.stat.relayNone")}</dd>
+              <dd class={provider.running && provider.relayMode !== null && provider.relayMode !== undefined ? "font-mono" : "font-mono text-muted-foreground"}>{provider.running ? provider.relayMode ?? t("dash.stat.relayNone") : t("dash.stat.relayNone")}</dd>
             </div>
           </dl>
           <p class="text-[11px] leading-relaxed text-muted-foreground">

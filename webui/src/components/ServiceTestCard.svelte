@@ -159,7 +159,9 @@
     </span>
     <div class="flex flex-wrap items-center gap-2">
       <div class="min-w-48 flex-1">
-        <Input placeholder="hi" value={prompt} onchange={handlePromptChange} onkeydown={handlePromptKeydown} />
+        <!-- icon={null}：聊天式单轮输入关掉 text 默认的 Type 字形（嵌入式
+             opt-out，jixoai Input 语义字形规则）——"T" 在此易误读为内容 -->
+        <Input icon={null} placeholder="hi" value={prompt} onchange={handlePromptChange} onkeydown={handlePromptKeydown} />
       </div>
       <PressButton
         variant="fill"

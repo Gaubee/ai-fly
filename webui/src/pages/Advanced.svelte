@@ -903,7 +903,7 @@
                 </p>
               </div>
               <Toggle
-                label={t("f.modelsDevToggle")}
+                aria-label={t("f.modelsDevToggle")}
                 checked={app.settings?.modelsDevEnabled ?? false}
                 disabled={settingsEdit.modelsDevBusy}
                 onchange={(event) => void setModelsDev(event.currentTarget.checked)}
