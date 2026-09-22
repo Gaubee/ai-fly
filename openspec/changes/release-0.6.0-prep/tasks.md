@@ -10,12 +10,13 @@
 
 ## 2. webui 打磨（vision 遗留）
 
-- [ ] 2.1 分享向导分组 + 已配置置顶（P1-4）
-- [ ] 2.2 标题行层级（P1-5：副标题下移）
-- [ ] 2.3 徽章体系统一（P1-6）
-- [ ] 2.4 P2 批：tab 说明降级 / 中继 0 / SSE 解析视图 / 对比度下限 / 卡片选中态
-- [ ] 2.5 补拍 dashboard（黑帧欠账）+ 全四页新截图过黑帧门
-- [ ] 2.6 vision 终评（≥8/10 或无 P0/P1）
+- [x] 2.1 分享向导分组（P1-4：本地运行时/云端服务两组 + 本地徽章 outline 化；a117eb8）
+- [x] 2.2 标题行层级（P1-5：Dashboard/Advanced header 改上下结构；a117eb8）
+- [x] 2.3 徽章体系统一（P1-6：本地预设徽章 tonal→outline；a117eb8）
+- [x] 2.4 P2 批（tab 说明弱化 / 中继"未配置"占位 / SSE 解析视图+原始数据切换；a117eb8；对比度下限与卡片选中态经前两轮已达标）
+- [x] 2.5 补拍 dashboard + 四页截图过黑帧门（agent-browser 1440×900 dark：dashboard/share/connect-step3/advanced/advanced-settings 五张全过）
+- [ ] 2.6 vision 终评（≥8/10 或无 P0/P1）——第三轮进行中
+- [x] 2.7 计划外：i18n 漏网清理（ConnectWizard step2 四处硬编码英文接线、Advanced/GroupsDialog/TestConnection 标题与说明句接线、net-fly→ai-fly 笔误三处、zh/en 249 键对齐；a117eb8）
 
 ## 3. 发布
 
