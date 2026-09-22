@@ -22,7 +22,8 @@ webui 侧 vite/jixoai-ui 等均有升级；（2）vision 走查两轮（6→7/10
     （dev relay）；webui jixoai-ui 0.4.0→0.5.1 → **终态不随升**（组件为
     vendored 副本 $lib/ui/*，devDep 升级不改变运行时；留专项同步任务）
   - pnpm-workspace minimumReleaseAgeExclude 清单同步到新版本
-  - 不升级：无（typescript 根包已在 7）
+  - 不升级：jixoai-ui 组件库（vendored 副本 $lib/ui/*，devDep 升级不改变
+    运行时——见谨慎层终态说明；typescript 根包已在 7 无需动）
 - webui 打磨（vision 两轮遗留清单）：
   - P1-4 分享向导来源分组（终态两组：本地运行时/云端服务；"已配置置顶"
     经实现收敛裁剪不做——两组已满足扫读目标）；自定义 URL 卡独立渲染
