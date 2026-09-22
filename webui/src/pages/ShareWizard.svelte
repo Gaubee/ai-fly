@@ -134,7 +134,7 @@
     </span>
     <span class="font-mono text-[11px] text-muted-foreground">{preset.baseUrl}</span>
     <span class="mt-auto flex items-center gap-2 text-[11px] text-muted-foreground">
-      port {preset.defaultPort}
+      {t("share.preset.port")} {preset.defaultPort}
     </span>
   </button>
 {/snippet}
@@ -187,20 +187,23 @@
             {#each visibleCloud as preset (preset.id)}
               {@render presetCard(preset)}
             {/each}
-            <!-- 自定义 URL 卡（云端组尾） -->
-            <button
-              type="button"
-              class="flex min-h-24 flex-col gap-1.5 border border-dashed border-border bg-card/50 p-3.5 text-left transition-colors hover:border-primary/50"
-              onclick={chooseCustom}
-            >
-              <span class="font-nav text-xs uppercase tracking-[0.1em]">{t("share.custom.title")}</span>
-              <span class="text-[11px] leading-relaxed text-muted-foreground">
-                {t("share.custom.body")}
-              </span>
-            </button>
           </div>
         </div>
       {/if}
+      <!-- 自定义 URL 卡（codex 终审 P1：独立于分组过滤渲染——搜索只命中本地
+           预设、云端精选为空或无匹配时，自定义入口都必须仍在） -->
+      <div class="grid gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          class="flex min-h-24 flex-col gap-1.5 border border-dashed border-border bg-card/50 p-3.5 text-left transition-colors hover:border-primary/50"
+          onclick={chooseCustom}
+        >
+          <span class="font-nav text-xs uppercase tracking-[0.1em]">{t("share.custom.title")}</span>
+          <span class="text-[11px] leading-relaxed text-muted-foreground">
+            {t("share.custom.body")}
+          </span>
+        </button>
+      </div>
       {#if search.trim() !== "" && visibleCurated.length === 0 && visibleLongTail.length === 0}
         <p class="text-[11px] text-muted-foreground">
           {t("share.search.none", { query: search.trim() })}

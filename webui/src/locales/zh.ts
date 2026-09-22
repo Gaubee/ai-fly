@@ -137,7 +137,6 @@ export const zh: Record<string, string> = {
   "testcard.viewRaw": "原始数据",
   "testcard.response": "响应",
   "testcard.rootPassthrough": "根路径（透传）",
-  "testconn.retryHint": "——检查 api key 与网络后重试。",
   "common.service": "服务",
 
 
@@ -228,6 +227,7 @@ export const zh: Record<string, string> = {
   "gkp.activeKeys": "{count} 个活跃密钥",
   "tc.connectivity": "连通性",
   "tc.failed": "失败：{msg}——请检查密钥与网络后重试。",
+  "tc.failedPlain": "失败——请检查密钥与网络后重试。",
   "groupsdlg.save": "保存",
   "groupsdlg.confirmRemove": "确认移除",
   "groupsdlg.manage": "管理分组",

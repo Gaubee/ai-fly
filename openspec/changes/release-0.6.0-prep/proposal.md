@@ -13,15 +13,20 @@ webui 侧 vite/jixoai-ui 等均有升级；（2）vision 走查两轮（6→7/10
 - 依赖升级（分层）：
   - 安全层：hono/tsx/vitest/svelte/shadcn/tailwind-merge patch；webui
     typescript 5.9→7（对齐根包）；vite 8.2→8.3
-  - 同步层：@orpc/{client,contract,server} 1.14.6→1.15.2（root+webui 四处同步）
+  - 同步层：@orpc/{client,contract,server} 1.14.6→1.15.2 → **终态回退 1.14.6**
+    （1.15.2 的 ws 适配器对畸形帧吞错保连，违反 app/shell spec 的单连接
+    断开语义——guardRpcSocket 被旁路；app 层无法恢复，回退 94bb7ae。
+    升级留待上游 onError 钩子或改用 websocket message()/close() 自管桥）
   - 谨慎层：@opentray/* 0.23.0→0.33.2（app 壳，10 个 minor；app:build +
     app:verify + 无头启动冒烟为门）；@jixo/opendweb-server-binary ^0.3.2→^0.5.0
-    （dev relay）；webui jixoai-ui 0.4.0→0.5.1（设计语言库——本地
-    jixoai.css/jx-pure.css 为 vendored 副本，升级后核对是否有令牌漂移）
+    （dev relay）；webui jixoai-ui 0.4.0→0.5.1 → **终态不随升**（组件为
+    vendored 副本 $lib/ui/*，devDep 升级不改变运行时；留专项同步任务）
   - pnpm-workspace minimumReleaseAgeExclude 清单同步到新版本
   - 不升级：无（typescript 根包已在 7）
 - webui 打磨（vision 两轮遗留清单）：
-  - P1-4 分享向导来源分组（本地/OpenAI 兼容/其它）+ 已配置置顶
+  - P1-4 分享向导来源分组（终态两组：本地运行时/云端服务；"已配置置顶"
+    经实现收敛裁剪不做——两组已满足扫读目标）；自定义 URL 卡独立渲染
+    （codex 终审 P1 修复：不随云端分组过滤消失）
   - P1-5 页面标题行层级（副标题移到主标题下方，不再同行右置）
   - P1-6 状态徽章体系统一（语义/分类/配置态三套语汇）
   - P2-3 Advanced tab 行说明降级；P2-4 中继 "-" 统一 0；P2-5 测试面板 SSE
@@ -37,6 +42,11 @@ webui 侧 vite/jixoai-ui 等均有升级；（2）vision 走查两轮（6→7/10
 ## Success Criteria
 
 - 全门禁绿：vitest 全量 / integration / e2e / tsc（root+webui）/ openspec strict
+  - 口径（codex 终审校准）：integration 11/11、e2e 10 pass + 1 skipped
+    （300s soak 默认关闭）；vitest 646/647（唯一失败 = 8790 用户 dev 实例
+    EADDRINUSE 环境冲突，用例零 diff，tag 后 CI 干净环境复验）。
+    CI（release.yml）门禁为 typecheck+vitest+build（既有设计）；
+    integration/e2e/app:verify 为 tag 前本地收据
 - app:build + app:verify 过；无头启动冒烟（隔离 HOME）
 - vision 终评对四页新截图给 ≥8/10 或确认无 P0/P1 残留
 - npm dist-tags.latest = 0.6.0（CI 发布，不经本地凭据）

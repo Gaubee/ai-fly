@@ -175,7 +175,7 @@ import { t } from "$lib/i18n.svelte.ts";
       </p>
     {:else}
       <p class="break-words text-[11px] leading-relaxed text-[color:var(--warning)]">
-        failed{result.error !== undefined ? `: ${result.error}` : ""}{t("testconn.retryHint")}
+        {result.error !== undefined ? t("tc.failed", { msg: result.error }) : t("tc.failedPlain")}
       </p>
       {#if result.request !== undefined}
         <p class="break-all font-mono text-[11px] text-muted-foreground">

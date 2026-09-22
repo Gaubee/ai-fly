@@ -138,7 +138,6 @@ export const en: Record<string, string> = {
   "testcard.viewRaw": "raw",
   "testcard.response": "response",
   "testcard.rootPassthrough": "root (passthrough)",
-  "testconn.retryHint": " - check the api key and network, then retry.",
   "common.service": "service",
 
 
@@ -229,6 +228,7 @@ export const en: Record<string, string> = {
   "gkp.activeKeys": "{count} active keys",
   "tc.connectivity": "connectivity",
   "tc.failed": "failed: {msg} - check the api key and network, then retry.",
+  "tc.failedPlain": "failed - check the api key and network, then retry.",
   "groupsdlg.save": "save",
   "groupsdlg.confirmRemove": "confirm remove",
   "groupsdlg.manage": "manage groups",
