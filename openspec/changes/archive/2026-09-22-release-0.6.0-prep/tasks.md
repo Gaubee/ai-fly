@@ -24,5 +24,5 @@
 - [x] 3.2 全门禁（口径经 codex 终审校准）：vitest 646/647（唯一失败=8790 用户 dev 实例 EADDRINUSE 环境冲突，用例零 diff，CI 复验）+ integration 11/11 + e2e 10 pass/1 skipped（300s soak 默认关闭）+ tsc root/webui + webui build + openspec strict 8/8；@orpc 回退 94bb7ae
 - [x] 3.3 codex 终审（gpt-5.6-terra xhigh 两轮）→ GO：首轮 7.2/10 NEEDS-WORK（P1×4）→ 修复 1a5b2c3 → 二轮 8.6/10 条件性 GO——自定义卡回归（独立浏览器探针四场景验证关闭）、i18n（371/371 键对齐）、CI 口径三项关闭；文档矛盾（proposal 不升级行 + 本条状态）修正后放行 tag
       - 遗留观察（不阻塞，留后续 change）：release.yml 无 integration/e2e 门（本地收据口径已记入 proposal）；workflow_dispatch 非 tag 分支绕过版本校验直发 alpha；gateway.test.ts delay(30/50) 时序 flaky 根源（改事件等待）
-- [ ] 3.4 tag v0.6.0 → push → CI → npm latest 验证
-- [ ] 3.5 归档 change
+- [x] 3.4 tag v0.6.0 → push → CI 绿（run 35709119322：typecheck + vitest 644 passed/3 skipped 含 8790 用例干净环境 + build + publish）→ registry 直查 latest=0.6.0 确认（npm view 本地缓存滞后勿信）
+- [x] 3.5 归档 change（本提交）
